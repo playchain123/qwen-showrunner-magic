@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useNavigate, Outlet } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Plus, Home, Library, Upload, Sparkles, Film, FileText, Video, Package, X, Heart } from "lucide-react";
+import { ArrowUp, Plus, Home, Library, Upload, Sparkles, Film, FileText, Video, Package, X, Heart, LogOut } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import vid1 from "@/assets/vid-1.mp4.asset.json";
 import vid2 from "@/assets/vid-2.mp4.asset.json";
@@ -8,6 +8,7 @@ import vid3 from "@/assets/vid-3.mp4.asset.json";
 import vid4 from "@/assets/vid-4.mp4.asset.json";
 import vid5 from "@/assets/vid-5.mp4.asset.json";
 import vid6 from "@/assets/vid-6.mp4.asset.json";
+import explainerHero from "@/assets/explainer-hero.mp4.asset.json";
 
 export const Route = createFileRoute("/dashboard")({
   ssr: false,
@@ -41,15 +42,37 @@ export function Sidebar() {
 
 export function TopBar() {
   const [email, setEmail] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? null));
   }, []);
+  async function logout() {
+    await supabase.auth.signOut();
+    navigate({ to: "/auth", search: { mode: "login" } });
+  }
   return (
-    <div className="flex items-center justify-end gap-3 px-6 py-3 border-b border-white/5">
-      <button className="text-xs text-yellow-400 hover:text-yellow-300 flex items-center gap-1">✦ Upgrade</button>
-      <div className="h-8 w-8 rounded-full bg-white/10 flex items-center justify-center text-xs uppercase">
+    <div className="flex items-center justify-end gap-3 px-6 py-3 border-b border-white/5 relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="h-8 w-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-xs uppercase"
+      >
         {email?.[0] ?? "M"}
-      </div>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-4 top-14 z-50 w-56 rounded-xl border border-white/10 bg-[#0d0d0d] shadow-xl overflow-hidden">
+            {email && <div className="px-4 py-3 text-xs text-white/60 border-b border-white/10 truncate">{email}</div>}
+            <button
+              onClick={logout}
+              className="w-full text-left px-4 py-3 text-sm text-white hover:bg-white/5 flex items-center gap-2"
+            >
+              <LogOut className="h-4 w-4" /> Log out
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -58,16 +81,11 @@ const FEATURED = [
   { id: "product-ads", label: "Product Ads", icon: Package, hero: vid1.url, title: "Short ad video", kind: "ad" },
   { id: "ai-shorts", label: "Create AI shorts", icon: Film, hero: vid2.url, title: "AI short film", kind: "short" },
   { id: "use-script", label: "Use my script", icon: FileText, hero: vid3.url, title: "Turn script into video", kind: "script" },
-  { id: "explainer", label: "Make explainer video", icon: Video, hero: vid4.url, title: "Explainer video", kind: "explainer" },
-  { id: "upload", label: "Upload", icon: Upload, hero: vid5.url, title: "Turn footage into cinematic scenes", kind: "upload" },
+  { id: "explainer", label: "Make explainer video", icon: Video, hero: explainerHero.url, title: "Explainer video", kind: "explainer" },
 ] as const;
-
-const GRID_VIDS = [vid1, vid2, vid3, vid4, vid5, vid6];
-const GRID_LABELS = ["Neon Shadows", "The Interview", "Skyline", "Nightwalker", "Aurora", "Silent Room"];
 
 function DashboardHome() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<"agent" | "autopilot">("agent");
   const [prompt, setPrompt] = useState("");
   const [openFeature, setOpenFeature] = useState<null | (typeof FEATURED)[number]>(null);
   const [attach, setAttach] = useState<File | null>(null);
@@ -93,24 +111,7 @@ function DashboardHome() {
         <TopBar />
         <div className="relative z-10 flex-1 overflow-y-auto">
           <div className="max-w-3xl mx-auto pt-10 pb-16 px-6">
-            {/* mode toggle */}
-            <div className="flex justify-center mb-10">
-              <div className="inline-flex bg-white/5 border border-white/10 rounded-full p-1">
-                {(["agent", "autopilot"] as const).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setMode(m)}
-                    className={`px-4 py-1.5 rounded-full text-xs capitalize transition ${
-                      mode === m ? "bg-white text-black" : "text-white/70 hover:text-white"
-                    }`}
-                  >
-                    {m === "agent" ? "Agent mode" : "Autopilot"}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <h1 className="text-center font-serif-display text-4xl md:text-5xl mb-1">
+            <h1 className="text-center font-serif-display text-4xl md:text-5xl mb-1 mt-6">
               Introducing Makers <sup className="text-[10px] tracking-widest text-white/50 align-middle bg-white/5 px-1.5 py-0.5 rounded ml-1">ALPHA</sup>
             </h1>
 
@@ -164,33 +165,6 @@ function DashboardHome() {
                 </button>
               ))}
             </div>
-
-            {/* tabs */}
-            <div className="mt-14 flex items-center gap-6 border-b border-white/5 pb-3 text-xs">
-              <button className="text-white bg-white/10 rounded-full px-3 py-1.5">Agents & models</button>
-              {["Projects", "Trends", "Workflows", "Explore"].map((t) => (
-                <button key={t} className="text-white/50 hover:text-white">{t}</button>
-              ))}
-            </div>
-
-            {/* grid */}
-            <div className="mt-6 grid grid-cols-2 md:grid-cols-3 gap-3">
-              {GRID_VIDS.map((v, i) => (
-                <div key={i} className="relative aspect-video rounded-lg overflow-hidden border border-white/10 bg-black group">
-                  <video
-                    src={v.url}
-                    muted
-                    loop
-                    playsInline
-                    onMouseEnter={(e) => e.currentTarget.play().catch(() => {})}
-                    onMouseLeave={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }}
-                    className="absolute inset-0 h-full w-full object-cover"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
-                  <div className="absolute bottom-2 left-3 text-xs text-white/90">{GRID_LABELS[i]}</div>
-                </div>
-              ))}
-            </div>
           </div>
         </div>
       </div>
@@ -219,15 +193,9 @@ function FeatureModal({
   const [pace, setPace] = useState("fast paced");
   const [platform, setPlatform] = useState("YouTube");
   const [topic, setTopic] = useState("");
-  const [file, setFile] = useState<File | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  const isUpload = feature.kind === "upload";
 
   function proceed() {
-    const seed = isUpload
-      ? `Turn my uploaded ${file?.type.startsWith("video") ? "video" : "image"} "${file?.name ?? "asset"}" into cinematic scenes.`
-      : `Create a ${duration} ${pace} ${feature.label.toLowerCase()} for ${platform} about ${topic || "my topic"}.`;
+    const seed = `Create a ${duration} ${pace} ${feature.label.toLowerCase()} for ${platform} about ${topic || "my topic"}.`;
     onProceed(seed);
   }
 
@@ -248,9 +216,7 @@ function FeatureModal({
           </div>
         </div>
         <div className="p-6">
-          {!isUpload ? (
-            <>
-              <div className="flex flex-wrap items-center gap-2 text-sm text-white/80">
+          <div className="flex flex-wrap items-center gap-2 text-sm text-white/80">
                 <span>Create a</span>
                 <Select value={duration} onChange={setDuration} options={["10 seconds", "15 seconds", "30 seconds", "60 seconds"]} />
                 <Select value={pace} onChange={setPace} options={["fast paced", "cinematic", "dramatic", "calm"]} />
@@ -273,32 +239,11 @@ function FeatureModal({
                   </button>
                 ))}
               </div>
-            </>
-          ) : (
-            <div>
-              <p className="text-sm text-white/70 mb-3">Upload an image or short video. Makers will turn it into cinematic scenes with matching script and edit.</p>
-              <button
-                onClick={() => fileRef.current?.click()}
-                className="w-full border-2 border-dashed border-white/15 rounded-xl py-10 flex flex-col items-center gap-2 hover:bg-white/[0.03]"
-              >
-                <Upload className="h-6 w-6 text-white/60" />
-                <span className="text-sm text-white/80">{file ? file.name : "Click to upload image or video"}</span>
-                <span className="text-[11px] text-white/40">MP4, MOV, PNG, JPG · up to 100MB</span>
-              </button>
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/*,video/*"
-                className="hidden"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              />
-            </div>
-          )}
           <div className="flex items-center justify-end gap-2 mt-8">
             <button onClick={onClose} className="px-5 py-2 rounded-full border border-white/15 text-sm hover:bg-white/5">Back</button>
             <button
               onClick={proceed}
-              disabled={isUpload ? !file : !topic.trim()}
+              disabled={!topic.trim()}
               className="px-5 py-2 rounded-full bg-blue-500 hover:bg-blue-400 text-white text-sm font-medium disabled:opacity-40"
             >
               Proceed
