@@ -108,9 +108,9 @@ function Hero() {
 
       <div className="relative z-10 text-center px-6 max-w-3xl">
         <h1 className="font-serif-display text-3xl md:text-5xl leading-[1.05] tracking-tight">
-          The AI showrunner
+          The platform for creative
           <br />
-          for short drama
+          short drama
         </h1>
         <p className="mt-5 text-xs md:text-sm text-foreground/60 max-w-md mx-auto">
           Don't waste time on AI you have to babysit. Do what you love while
@@ -619,7 +619,7 @@ function Footer() {
             <span className="text-lg font-semibold">makers</span>
           </div>
           <p className="mt-3 text-sm text-foreground/50 max-w-sm">
-            The AI showrunner for short drama. Powered by Qwen Cloud.
+            The platform for creative short drama. Powered by Qwen Cloud.
           </p>
         </div>
         <div className="flex flex-wrap gap-x-10 gap-y-3 text-sm text-foreground/60">
