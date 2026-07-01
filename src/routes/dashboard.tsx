@@ -193,15 +193,9 @@ function FeatureModal({
   const [pace, setPace] = useState("fast paced");
   const [platform, setPlatform] = useState("YouTube");
   const [topic, setTopic] = useState("");
-  const [file, setFile] = useState<File | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  const isUpload = feature.kind === "upload";
 
   function proceed() {
-    const seed = isUpload
-      ? `Turn my uploaded ${file?.type.startsWith("video") ? "video" : "image"} "${file?.name ?? "asset"}" into cinematic scenes.`
-      : `Create a ${duration} ${pace} ${feature.label.toLowerCase()} for ${platform} about ${topic || "my topic"}.`;
+    const seed = `Create a ${duration} ${pace} ${feature.label.toLowerCase()} for ${platform} about ${topic || "my topic"}.`;
     onProceed(seed);
   }
 
@@ -222,9 +216,7 @@ function FeatureModal({
           </div>
         </div>
         <div className="p-6">
-          {!isUpload ? (
-            <>
-              <div className="flex flex-wrap items-center gap-2 text-sm text-white/80">
+          <div className="flex flex-wrap items-center gap-2 text-sm text-white/80">
                 <span>Create a</span>
                 <Select value={duration} onChange={setDuration} options={["10 seconds", "15 seconds", "30 seconds", "60 seconds"]} />
                 <Select value={pace} onChange={setPace} options={["fast paced", "cinematic", "dramatic", "calm"]} />
@@ -247,32 +239,11 @@ function FeatureModal({
                   </button>
                 ))}
               </div>
-            </>
-          ) : (
-            <div>
-              <p className="text-sm text-white/70 mb-3">Upload an image or short video. Makers will turn it into cinematic scenes with matching script and edit.</p>
-              <button
-                onClick={() => fileRef.current?.click()}
-                className="w-full border-2 border-dashed border-white/15 rounded-xl py-10 flex flex-col items-center gap-2 hover:bg-white/[0.03]"
-              >
-                <Upload className="h-6 w-6 text-white/60" />
-                <span className="text-sm text-white/80">{file ? file.name : "Click to upload image or video"}</span>
-                <span className="text-[11px] text-white/40">MP4, MOV, PNG, JPG · up to 100MB</span>
-              </button>
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/*,video/*"
-                className="hidden"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              />
-            </div>
-          )}
           <div className="flex items-center justify-end gap-2 mt-8">
             <button onClick={onClose} className="px-5 py-2 rounded-full border border-white/15 text-sm hover:bg-white/5">Back</button>
             <button
               onClick={proceed}
-              disabled={isUpload ? !file : !topic.trim()}
+              disabled={!topic.trim()}
               className="px-5 py-2 rounded-full bg-blue-500 hover:bg-blue-400 text-white text-sm font-medium disabled:opacity-40"
             >
               Proceed
