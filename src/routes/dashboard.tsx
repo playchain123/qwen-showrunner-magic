@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useNavigate, Outlet } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Plus, Home, Library, Upload, Sparkles, Film, FileText, Video, Package, X, Heart } from "lucide-react";
+import { ArrowUp, Plus, Home, Library, Upload, Sparkles, Film, FileText, Video, Package, X, Heart, LogOut } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import vid1 from "@/assets/vid-1.mp4.asset.json";
 import vid2 from "@/assets/vid-2.mp4.asset.json";
@@ -8,6 +8,7 @@ import vid3 from "@/assets/vid-3.mp4.asset.json";
 import vid4 from "@/assets/vid-4.mp4.asset.json";
 import vid5 from "@/assets/vid-5.mp4.asset.json";
 import vid6 from "@/assets/vid-6.mp4.asset.json";
+import explainerHero from "@/assets/explainer-hero.mp4.asset.json";
 
 export const Route = createFileRoute("/dashboard")({
   ssr: false,
@@ -41,15 +42,37 @@ export function Sidebar() {
 
 export function TopBar() {
   const [email, setEmail] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? null));
   }, []);
+  async function logout() {
+    await supabase.auth.signOut();
+    navigate({ to: "/auth", search: { mode: "login" } });
+  }
   return (
-    <div className="flex items-center justify-end gap-3 px-6 py-3 border-b border-white/5">
-      <button className="text-xs text-yellow-400 hover:text-yellow-300 flex items-center gap-1">✦ Upgrade</button>
-      <div className="h-8 w-8 rounded-full bg-white/10 flex items-center justify-center text-xs uppercase">
+    <div className="flex items-center justify-end gap-3 px-6 py-3 border-b border-white/5 relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="h-8 w-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-xs uppercase"
+      >
         {email?.[0] ?? "M"}
-      </div>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-4 top-14 z-50 w-56 rounded-xl border border-white/10 bg-[#0d0d0d] shadow-xl overflow-hidden">
+            {email && <div className="px-4 py-3 text-xs text-white/60 border-b border-white/10 truncate">{email}</div>}
+            <button
+              onClick={logout}
+              className="w-full text-left px-4 py-3 text-sm text-white hover:bg-white/5 flex items-center gap-2"
+            >
+              <LogOut className="h-4 w-4" /> Log out
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -58,16 +81,11 @@ const FEATURED = [
   { id: "product-ads", label: "Product Ads", icon: Package, hero: vid1.url, title: "Short ad video", kind: "ad" },
   { id: "ai-shorts", label: "Create AI shorts", icon: Film, hero: vid2.url, title: "AI short film", kind: "short" },
   { id: "use-script", label: "Use my script", icon: FileText, hero: vid3.url, title: "Turn script into video", kind: "script" },
-  { id: "explainer", label: "Make explainer video", icon: Video, hero: vid4.url, title: "Explainer video", kind: "explainer" },
-  { id: "upload", label: "Upload", icon: Upload, hero: vid5.url, title: "Turn footage into cinematic scenes", kind: "upload" },
+  { id: "explainer", label: "Make explainer video", icon: Video, hero: explainerHero.url, title: "Explainer video", kind: "explainer" },
 ] as const;
-
-const GRID_VIDS = [vid1, vid2, vid3, vid4, vid5, vid6];
-const GRID_LABELS = ["Neon Shadows", "The Interview", "Skyline", "Nightwalker", "Aurora", "Silent Room"];
 
 function DashboardHome() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<"agent" | "autopilot">("agent");
   const [prompt, setPrompt] = useState("");
   const [openFeature, setOpenFeature] = useState<null | (typeof FEATURED)[number]>(null);
   const [attach, setAttach] = useState<File | null>(null);
@@ -93,24 +111,7 @@ function DashboardHome() {
         <TopBar />
         <div className="relative z-10 flex-1 overflow-y-auto">
           <div className="max-w-3xl mx-auto pt-10 pb-16 px-6">
-            {/* mode toggle */}
-            <div className="flex justify-center mb-10">
-              <div className="inline-flex bg-white/5 border border-white/10 rounded-full p-1">
-                {(["agent", "autopilot"] as const).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setMode(m)}
-                    className={`px-4 py-1.5 rounded-full text-xs capitalize transition ${
-                      mode === m ? "bg-white text-black" : "text-white/70 hover:text-white"
-                    }`}
-                  >
-                    {m === "agent" ? "Agent mode" : "Autopilot"}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <h1 className="text-center font-serif-display text-4xl md:text-5xl mb-1">
+            <h1 className="text-center font-serif-display text-4xl md:text-5xl mb-1 mt-6">
               Introducing Makers <sup className="text-[10px] tracking-widest text-white/50 align-middle bg-white/5 px-1.5 py-0.5 rounded ml-1">ALPHA</sup>
             </h1>
 
@@ -162,33 +163,6 @@ function DashboardHome() {
                 >
                   <f.icon className="h-3.5 w-3.5" /> {f.label}
                 </button>
-              ))}
-            </div>
-
-            {/* tabs */}
-            <div className="mt-14 flex items-center gap-6 border-b border-white/5 pb-3 text-xs">
-              <button className="text-white bg-white/10 rounded-full px-3 py-1.5">Agents & models</button>
-              {["Projects", "Trends", "Workflows", "Explore"].map((t) => (
-                <button key={t} className="text-white/50 hover:text-white">{t}</button>
-              ))}
-            </div>
-
-            {/* grid */}
-            <div className="mt-6 grid grid-cols-2 md:grid-cols-3 gap-3">
-              {GRID_VIDS.map((v, i) => (
-                <div key={i} className="relative aspect-video rounded-lg overflow-hidden border border-white/10 bg-black group">
-                  <video
-                    src={v.url}
-                    muted
-                    loop
-                    playsInline
-                    onMouseEnter={(e) => e.currentTarget.play().catch(() => {})}
-                    onMouseLeave={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }}
-                    className="absolute inset-0 h-full w-full object-cover"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
-                  <div className="absolute bottom-2 left-3 text-xs text-white/90">{GRID_LABELS[i]}</div>
-                </div>
               ))}
             </div>
           </div>
