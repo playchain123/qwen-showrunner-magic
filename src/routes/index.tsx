@@ -98,8 +98,8 @@ function Nav() {
 function Hero() {
   return (
     <section className="relative min-h-screen w-full flex items-center justify-center overflow-hidden">
-      <div className="absolute inset-0 grid-bg opacity-50" />
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_40%,var(--background)_90%)]" />
+      <div className="absolute inset-0 grid-bg" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_55%,var(--background)_95%)]" />
 
       <CursorTag name="You" color="#ffffff" style={{ top: "18%", left: "12%" }} />
       <CursorTag name="Andrew" color="#e5e5e5" style={{ top: "16%", right: "14%" }} />
