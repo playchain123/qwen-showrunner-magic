@@ -23,6 +23,10 @@ import vid3 from "@/assets/vid-3.mp4.asset.json";
 import vid4 from "@/assets/vid-4.mp4.asset.json";
 import vid5 from "@/assets/vid-5.mp4.asset.json";
 import vid6 from "@/assets/vid-6.mp4.asset.json";
+import mwm1 from "@/assets/mwm-1.mp4.asset.json";
+import mwm2 from "@/assets/mwm-2.mp4.asset.json";
+import mwm3 from "@/assets/mwm-3.mp4.asset.json";
+import mwm4 from "@/assets/mwm-4.mp4.asset.json";
 
 export const Route = createFileRoute("/")({
   component: Index,
@@ -513,42 +517,83 @@ function IntroducingMakers() {
 }
 
 function MadeWithMakers() {
-  const items = [
-    { poster: slide1, vid: vid4.url, title: "Frontier", caption: "Sci-fi drama · 45s" },
-    { poster: slide2, vid: vid6.url, title: "The Fall", caption: "Nature vignette · 30s" },
-    { poster: slide3, vid: vid2.url, title: "Nightline", caption: "Cyberpunk short · 60s" },
-    { poster: slide4, vid: vid5.url, title: "Ronin", caption: "Period piece · 50s" },
+  const tiles = [
+    { vid: mwm2.url, title: "Nightline", caption: "Cyberpunk short" },
+    { vid: mwm3.url, title: "Ronin", caption: "Period piece" },
+    { vid: mwm4.url, title: "Horizon", caption: "Aerial vignette" },
+  ];
+  const categories = [
+    "MAKERS ORIGINALS",
+    "FILM & DRAMA",
+    "BRAND & COMMERCE",
+    "MUSIC VIDEOS",
   ];
   return (
-    <section className="relative py-24 md:py-32 px-6">
-      <div className="max-w-6xl mx-auto flex items-end justify-between mb-10">
-        <h2 className="font-serif-display text-4xl md:text-6xl leading-[1.05] max-w-2xl">
-          Made with Makers
-        </h2>
-        <p className="text-foreground/60 max-w-sm text-sm md:text-base hidden md:block">
-          A handful of shorts written, storyboarded, and rendered end-to-end by
-          our agents. Hover to play.
-        </p>
-      </div>
-      <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-5">
-        {items.map((it) => (
-          <HoverVideo
-            key={it.title}
-            poster={it.poster}
-            src={it.vid}
-            className="aspect-video rounded-xl border border-white/10"
-          >
-            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none" />
-            <div className="absolute bottom-5 left-5 right-5 pointer-events-none">
-              <p className="text-[10px] uppercase tracking-[0.3em] text-white/70 mb-1">
-                {it.caption}
-              </p>
-              <h3 className="font-serif-display text-3xl md:text-4xl text-white">
-                {it.title}
-              </h3>
+    <section className="relative py-16 md:py-24 px-6">
+      <div className="max-w-6xl mx-auto">
+        {/* Hero autoplay video */}
+        <div className="relative aspect-[16/9] w-full rounded-2xl overflow-hidden bg-black">
+          <video
+            src={mwm1.url}
+            autoPlay
+            muted
+            loop
+            playsInline
+            className="absolute inset-0 h-full w-full object-cover"
+          />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
+
+          {/* Bottom-left title + CTA */}
+          <div className="absolute bottom-8 left-8 md:bottom-12 md:left-12 right-8 flex flex-col md:flex-row md:items-end md:justify-between gap-6">
+            <div>
+              <h2 className="font-serif-display text-4xl md:text-6xl text-white leading-[1.05]">
+                Made with Makers
+                <br />
+                <span className="text-white/80">Building the next wave of drama</span>
+              </h2>
+              <Link
+                to="/auth"
+                search={{ mode: "signup" }}
+                className="mt-6 inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-white text-black text-sm font-medium hover:bg-white/90 transition"
+              >
+                Get Started <ArrowRight className="h-4 w-4" />
+              </Link>
             </div>
-          </HoverVideo>
-        ))}
+            <ul className="text-white text-sm md:text-base space-y-2 md:text-right">
+              {categories.map((c) => (
+                <li key={c} className="tracking-wide font-medium">
+                  {c}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+
+        {/* Row of autoplay tiles */}
+        <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-5">
+          {tiles.map((t) => (
+            <div
+              key={t.title}
+              className="relative aspect-video rounded-xl overflow-hidden bg-black border border-white/10"
+            >
+              <video
+                src={t.vid}
+                autoPlay
+                muted
+                loop
+                playsInline
+                className="absolute inset-0 h-full w-full object-cover"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
+              <div className="absolute bottom-4 left-4 right-4">
+                <p className="text-[10px] uppercase tracking-[0.3em] text-white/70 mb-1">
+                  {t.caption}
+                </p>
+                <h3 className="font-serif-display text-2xl text-white">{t.title}</h3>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </section>
   );

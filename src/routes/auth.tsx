@@ -4,10 +4,7 @@ import { z } from "zod";
 import { Eye, EyeOff, ArrowRight } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import logo from "@/assets/makers-logo.png";
-import vid1 from "@/assets/vid-1.mp4.asset.json";
-import vid2 from "@/assets/vid-2.mp4.asset.json";
-import vid4 from "@/assets/vid-4.mp4.asset.json";
-import vid5 from "@/assets/vid-5.mp4.asset.json";
+import authReel from "@/assets/auth-reel.mp4.asset.json";
 
 const searchSchema = z.object({
   mode: z.enum(["login", "signup"]).catch("signup"),
@@ -24,7 +21,7 @@ export const Route = createFileRoute("/auth")({
   }),
 });
 
-const clips = [vid1.url, vid2.url, vid4.url, vid5.url];
+const clips = [authReel.url];
 
 function AuthPage() {
   const { mode } = Route.useSearch();
