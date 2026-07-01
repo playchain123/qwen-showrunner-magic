@@ -92,6 +92,12 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:title", content: "Makers — The AI showrunner for short drama" },
+      { name: "description", content: "Makers is an AI agent that autonomously creates short dramas from script to video." },
+      { property: "og:description", content: "Makers is an AI agent that autonomously creates short dramas from script to video." },
+      { name: "twitter:description", content: "Makers is an AI agent that autonomously creates short dramas from script to video." },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/8f139b3a-ff71-4509-8569-f86f0b105b2c/id-preview-eb3f4fab--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app-1782944335852.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/8f139b3a-ff71-4509-8569-f86f0b105b2c/id-preview-eb3f4fab--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app-1782944335852.png" },
     ],
     links: [
       {
