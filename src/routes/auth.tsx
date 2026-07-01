@@ -92,11 +92,11 @@ function AuthPage() {
         });
         if (error) throw error;
         setMsg("Account created. Redirecting…");
-        setTimeout(() => navigate({ to: "/" }), 800);
+        setTimeout(() => navigate({ to: "/dashboard" }), 800);
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        navigate({ to: "/" });
+        navigate({ to: "/dashboard" });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
