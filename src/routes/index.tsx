@@ -23,6 +23,10 @@ import vid3 from "@/assets/vid-3.mp4.asset.json";
 import vid4 from "@/assets/vid-4.mp4.asset.json";
 import vid5 from "@/assets/vid-5.mp4.asset.json";
 import vid6 from "@/assets/vid-6.mp4.asset.json";
+import mwm1 from "@/assets/mwm-1.mp4.asset.json";
+import mwm2 from "@/assets/mwm-2.mp4.asset.json";
+import mwm3 from "@/assets/mwm-3.mp4.asset.json";
+import mwm4 from "@/assets/mwm-4.mp4.asset.json";
 
 export const Route = createFileRoute("/")({
   component: Index,
