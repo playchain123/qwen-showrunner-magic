@@ -1,10 +1,21 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useState, useRef, type FormEvent } from "react";
+import { useState, useRef, useEffect, type FormEvent } from "react";
 import { z } from "zod";
 import { Eye, EyeOff, ArrowRight } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import logo from "@/assets/makers-logo.png";
 import authReel from "@/assets/auth-reel.mp4.asset.json";
+import auth2 from "@/assets/auth-2.mp4.asset.json";
+import auth3 from "@/assets/auth-3.mp4.asset.json";
+import auth4 from "@/assets/auth-4.mp4.asset.json";
+
+function Mark({ className = "h-6 w-6" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 32 32" className={className} aria-label="Makers" role="img" fill="none">
+      <rect x="1" y="1" width="30" height="30" rx="7" fill="#ffffff" />
+      <path d="M8 23 V9 L16 19 L24 9 V23" stroke="#000000" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </svg>
+  );
+}
 
 const searchSchema = z.object({
   mode: z.enum(["login", "signup"]).catch("signup"),
@@ -21,7 +32,12 @@ export const Route = createFileRoute("/auth")({
   }),
 });
 
-const clips = [authReel.url];
+const reels = [
+  { url: authReel.url, title: "Who am I?", tag: "Cinematic short" },
+  { url: auth2.url, title: "The Interview", tag: "Portrait drama" },
+  { url: auth3.url, title: "Nightwalker", tag: "Cyberpunk teaser" },
+  { url: auth4.url, title: "Skyline", tag: "Epic wide shot" },
+];
 
 function AuthPage() {
   const { mode } = Route.useSearch();
@@ -37,6 +53,11 @@ function AuthPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [clipIdx, setClipIdx] = useState(0);
   const vidRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const t = setInterval(() => setClipIdx((i) => (i + 1) % reels.length), 6000);
+    return () => clearInterval(t);
+  }, []);
 
   const schema = isSignup
     ? z.object({
@@ -89,12 +110,12 @@ function AuthPage() {
       {/* LEFT — form */}
       <div className="flex flex-col justify-center px-8 md:px-16 py-12 relative">
         <Link to="/" className="absolute top-6 left-6 md:left-10 flex items-center gap-2 text-sm text-foreground/70 hover:text-foreground">
-          <img src={logo} alt="Makers" className="h-6 w-6" style={{ filter: "brightness(0) invert(1)" }} />
+          <Mark className="h-6 w-6" />
           <span className="font-medium">makers</span>
         </Link>
         <div className="max-w-sm mx-auto w-full">
           <div className="flex justify-center mb-4">
-            <img src={logo} alt="Makers" className="h-10 w-10" style={{ filter: "brightness(0) invert(1)" }} />
+            <Mark className="h-10 w-10" />
           </div>
           <h1 className="text-center text-2xl font-semibold mb-8">
             {isSignup ? "Create your Makers account" : "Welcome back to Makers"}
@@ -174,25 +195,58 @@ function AuthPage() {
         </div>
       </div>
 
-      {/* RIGHT — cinematic video */}
-      <div className="hidden md:flex flex-col items-center justify-center bg-[#0a0a0a] border-l border-white/10 p-10">
-        <h2 className="font-serif-display text-4xl mb-2">Introducing Makers</h2>
-        <p className="text-sm text-foreground/60 mb-8">Go back and forth with an agent to create your dream drama.</p>
-        <div className="relative w-full max-w-xl aspect-video rounded-xl overflow-hidden border border-white/10 bg-black">
-          <video
-            ref={vidRef}
-            key={clipIdx}
-            src={clips[clipIdx]}
-            autoPlay
-            muted
-            playsInline
-            onEnded={() => setClipIdx((i) => (i + 1) % clips.length)}
-            className="absolute inset-0 h-full w-full object-cover"
-          />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
-          <div className="absolute bottom-4 left-4 flex items-center gap-2">
-            <img src={logo} alt="" className="h-6 w-6" style={{ filter: "brightness(0) invert(1)" }} />
-            <span className="text-xs uppercase tracking-widest text-white/80">Made with Makers</span>
+      {/* RIGHT — cinematic showcase */}
+      <div className="hidden md:flex flex-col items-center justify-center bg-[#0a0a0a] border-l border-white/10 p-10 relative overflow-hidden">
+        <div className="absolute inset-0 grid-bg opacity-40 pointer-events-none" />
+        <div className="relative z-10 w-full max-w-xl">
+          <h2 className="font-serif-display text-4xl md:text-5xl text-center mb-2">
+            {reels[clipIdx].title}
+          </h2>
+          <p className="text-center text-sm text-foreground/60 mb-8">
+            A new way to make cinematic video with Makers.
+          </p>
+
+          {/* Featured video */}
+          <div className="relative aspect-video rounded-xl overflow-hidden border border-white/10 bg-black shadow-2xl">
+            <video
+              ref={vidRef}
+              key={clipIdx}
+              src={reels[clipIdx].url}
+              autoPlay
+              muted
+              loop
+              playsInline
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
+            <div className="absolute top-3 left-3 flex items-center gap-2 rounded-full bg-black/50 backdrop-blur px-2.5 py-1">
+              <Mark className="h-4 w-4" />
+              <span className="text-[10px] uppercase tracking-widest text-white/80">Made with Makers</span>
+            </div>
+            <div className="absolute bottom-3 left-4 right-4 flex items-end justify-between">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.3em] text-white/60">{reels[clipIdx].tag}</p>
+                <p className="text-lg font-medium text-white">{reels[clipIdx].title}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Thumbnail strip */}
+          <div className="mt-4 grid grid-cols-4 gap-2">
+            {reels.map((r, i) => (
+              <button
+                key={r.url}
+                onClick={() => setClipIdx(i)}
+                className={`relative aspect-video rounded-md overflow-hidden border transition ${
+                  i === clipIdx ? "border-white" : "border-white/10 opacity-60 hover:opacity-100"
+                }`}
+              >
+                <video src={r.url} muted playsInline preload="metadata" className="absolute inset-0 h-full w-full object-cover" />
+                <span className="absolute bottom-1 left-1 right-1 truncate text-[9px] text-white/90 text-left">
+                  {r.title}
+                </span>
+              </button>
+            ))}
           </div>
         </div>
       </div>

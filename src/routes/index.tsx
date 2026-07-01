@@ -16,7 +16,6 @@ import slide1 from "@/assets/slide-1.jpg";
 import slide2 from "@/assets/slide-2.jpg";
 import slide3 from "@/assets/slide-3.jpg";
 import slide4 from "@/assets/slide-4.jpg";
-import logo from "@/assets/makers-logo.png";
 import vid1 from "@/assets/vid-1.mp4.asset.json";
 import vid2 from "@/assets/vid-2.mp4.asset.json";
 import vid3 from "@/assets/vid-3.mp4.asset.json";
@@ -49,12 +48,23 @@ function Index() {
 
 function MakersMark({ className = "h-7 w-7" }: { className?: string }) {
   return (
-    <img
-      src={logo}
-      alt="Makers"
+    <svg
+      viewBox="0 0 32 32"
       className={className}
-      style={{ filter: "brightness(0) invert(1)" }}
-    />
+      aria-label="Makers"
+      role="img"
+      fill="none"
+    >
+      <rect x="1" y="1" width="30" height="30" rx="7" fill="#ffffff" />
+      <path
+        d="M8 23 V9 L16 19 L24 9 V23"
+        stroke="#000000"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+    </svg>
   );
 }
 
@@ -88,8 +98,8 @@ function Nav() {
 function Hero() {
   return (
     <section className="relative min-h-screen w-full flex items-center justify-center overflow-hidden">
-      <div className="absolute inset-0 grid-bg opacity-50" />
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_40%,var(--background)_90%)]" />
+      <div className="absolute inset-0 grid-bg" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_55%,var(--background)_95%)]" />
 
       <CursorTag name="You" color="#ffffff" style={{ top: "18%", left: "12%" }} />
       <CursorTag name="Andrew" color="#e5e5e5" style={{ top: "16%", right: "14%" }} />
