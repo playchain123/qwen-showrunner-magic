@@ -5,7 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice } from "@/lib/qwen.functions";
 
-export const Route = createFileRoute("/dashboard/agent/$id")({
+export const Route = createFileRoute("/dashboard_/agent/$id")({
   ssr: false,
   component: AgentWorkspace,
 });
