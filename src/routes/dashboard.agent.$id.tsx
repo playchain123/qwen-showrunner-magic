@@ -3,9 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Plus, Play, ChevronDown, Sparkles, Check, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
-import vid1 from "@/assets/vid-1.mp4.asset.json";
-import vid2 from "@/assets/vid-2.mp4.asset.json";
-import vid3 from "@/assets/vid-3.mp4.asset.json";
+import { generateStoryboard, submitVideo, pollVideo } from "@/lib/qwen.functions";
 
 export const Route = createFileRoute("/dashboard/agent/$id")({
   ssr: false,
@@ -15,47 +13,16 @@ export const Route = createFileRoute("/dashboard/agent/$id")({
 type ChatMsg = { role: "user" | "agent"; text: string; skills?: string[]; task?: string };
 type StoryCard = { title: string; progress: number; done: boolean; videoUrl?: string; caption: string };
 
-const SCRIPTED_STEPS: {
-  reply: ChatMsg;
-  card?: Omit<StoryCard, "progress" | "done">;
-  question?: string;
-}[] = [
-  {
-    reply: { role: "agent", text: "Got it. Let's shape the world first — what's the emotional tone you want? (e.g. gritty, hopeful, tragic)" },
-  },
-  {
-    reply: {
-      role: "agent",
-      text: "Locked in. Reading 3 skills. Dispatching Kofi — Character Master Sheet. I'll build his visual identity first, then we move to the storyboard.",
-      skills: ["Character Bible", "Scene Planner", "Shot List"],
-      task: "Establish Kofi's visual identity (Character Master Sheet)",
-    },
-    card: {
-      title: "#1 Kofi — Character Master Sheet",
-      caption: "Create a Character Master Sheet for Kofi. He is a mid-30s protagonist…",
-      videoUrl: vid1.url,
-    },
-  },
-  {
-    reply: { role: "agent", text: "Kofi is locked. Next: 3-beat storyboard for act one. Want a cold open, or start on the inciting incident?" },
-    card: { title: "#2 Storyboard — Act I", caption: "Beat 1: cold open on the neon-lit alley. Beat 2: the offer. Beat 3: the choice.", videoUrl: vid2.url },
-  },
-  {
-    reply: { role: "agent", text: "Rendering final cinematic edit with score and grade. This becomes your master cut." },
-    card: { title: "#3 Final Cinematic Cut", caption: "Full edit assembled — 45s master with score, grade, and captions.", videoUrl: vid3.url },
-  },
-];
-
 function AgentWorkspace() {
   const { id } = Route.useParams();
   const navigate = useNavigate();
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [cards, setCards] = useState<StoryCard[]>([]);
   const [tasks, setTasks] = useState<{ text: string; done: boolean }[]>([]);
-  const [step, setStep] = useState(0);
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const startedRef = useRef(false);
 
   // auth + seed
   useEffect(() => {
@@ -63,10 +30,11 @@ function AgentWorkspace() {
       if (!data.user) navigate({ to: "/auth", search: { mode: "login" } });
     });
     const raw = sessionStorage.getItem(`makers:agent:${id}`);
-    if (raw) {
+    if (raw && !startedRef.current) {
+      startedRef.current = true;
       const { prompt } = JSON.parse(raw);
       setMessages([{ role: "user", text: prompt }]);
-      runStep(0, [{ role: "user", text: prompt }]);
+      void runPipeline(prompt);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -75,39 +43,80 @@ function AgentWorkspace() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, thinking]);
 
-  function runStep(idx: number, history: ChatMsg[]) {
-    const s = SCRIPTED_STEPS[idx];
-    if (!s) return;
+  async function runPipeline(prompt: string) {
     setThinking(true);
-    setTimeout(() => {
-      setMessages([...history, s.reply]);
+    try {
+      // 1. Storyboard via Qwen
+      const story = await generateStoryboard({ data: { prompt, sceneCount: 3 } });
       setThinking(false);
-      if (s.reply.task) setTasks((t) => [...t, { text: s.reply.task!, done: false }]);
-      if (s.card) {
-        const newCard: StoryCard = { ...s.card, progress: 0, done: false };
-        setCards((c) => [...c, newCard]);
-        // simulate progress
-        let p = 0;
-        const iv = setInterval(() => {
-          p += 12;
-          setCards((c) => c.map((card, i) => (i === c.length - 1 ? { ...card, progress: Math.min(p, 100) } : card)));
-          if (p >= 100) {
-            clearInterval(iv);
-            setCards((c) => c.map((card, i) => (i === c.length - 1 ? { ...card, done: true } : card)));
-            setTasks((t) => t.map((task, i) => (i === t.length - 1 ? { ...task, done: true } : task)));
+      setMessages((m) => [
+        ...m,
+        {
+          role: "agent",
+          text: `Locked. Storyboard "${story.title}" — ${story.tone}. Dispatching ${story.scenes.length} scenes to HappyHorse T2V on Qwen Cloud.`,
+          skills: ["Script Agent", "Storyboard Agent", "HappyHorse T2V"],
+          task: `Render ${story.scenes.length} cinematic scenes`,
+        },
+      ]);
+      setTasks([{ text: `Render ${story.scenes.length} cinematic scenes`, done: false }]);
+
+      // 2. Add cards + submit videos in parallel
+      const scenes = story.scenes;
+      setCards(
+        scenes.map((s, i) => ({
+          title: `#${i + 1} ${s.title}`,
+          caption: `${s.dialogue} — ${s.visual}`,
+          progress: 5,
+          done: false,
+        })),
+      );
+
+      await Promise.all(
+        scenes.map(async (s, idx) => {
+          try {
+            const { task_id } = await submitVideo({ data: { prompt: s.video_prompt } });
+            // poll
+            let attempts = 0;
+            while (attempts < 90) {
+              await new Promise((r) => setTimeout(r, 5000));
+              attempts++;
+              const p = Math.min(10 + attempts * 2, 90);
+              setCards((c) => c.map((card, i) => (i === idx ? { ...card, progress: p } : card)));
+              const status = await pollVideo({ data: { task_id } });
+              if (status.status === "SUCCEEDED" && status.video_url) {
+                setCards((c) =>
+                  c.map((card, i) => (i === idx ? { ...card, progress: 100, done: true, videoUrl: status.video_url } : card)),
+                );
+                return;
+              }
+              if (status.status === "FAILED") throw new Error(status.error || "Task failed");
+            }
+            throw new Error("Timed out waiting for video");
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            setCards((c) => c.map((card, i) => (i === idx ? { ...card, caption: `${card.caption}\n⚠ ${msg}` } : card)));
           }
-        }, 400);
-      }
-      setStep(idx + 1);
-    }, 1200);
+        }),
+      );
+
+      setTasks((t) => t.map((task) => ({ ...task, done: true })));
+      setMessages((m) => [
+        ...m,
+        { role: "agent", text: `All ${scenes.length} scenes rendered. Master cut ready to assemble.` },
+      ]);
+    } catch (err: unknown) {
+      setThinking(false);
+      const msg = err instanceof Error ? err.message : String(err);
+      setMessages((m) => [...m, { role: "agent", text: `Pipeline error: ${msg}` }]);
+    }
   }
 
   function send() {
     if (!input.trim()) return;
-    const next = [...messages, { role: "user" as const, text: input.trim() }];
-    setMessages(next);
+    const text = input.trim();
+    setMessages((m) => [...m, { role: "user", text }]);
     setInput("");
-    runStep(step, next);
+    void runPipeline(text);
   }
 
   return (
