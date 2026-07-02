@@ -25,28 +25,25 @@ type Storyboard = {
 /** Generate a full short-drama storyboard from a logline using Qwen3.7-Max. */
 export const generateStoryboard = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
-    z.object({ prompt: z.string().min(1), sceneCount: z.number().int().min(1).max(6).default(3) }).parse(input),
+    z.object({ prompt: z.string().min(1), sceneCount: z.number().int().min(1).max(12).default(8) }).parse(input),
   )
   .handler(async ({ data }): Promise<Storyboard> => {
     const key = process.env.DASHSCOPE_API_KEY;
     if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
 
-    const system = `You are Makers, an AI showrunner. Given a logline, produce a cinematic short-drama storyboard totaling ~50 seconds across ${data.sceneCount} scenes. Each scene must include at least one line of spoken character dialogue.
-Return ONLY strict JSON matching this TypeScript type — no markdown, no commentary:
-{
-  "title": string,
-  "logline": string,
-  "tone": string,
-  "scenes": Array<{
-    "title": string,           // short scene name
-    "visual": string,          // 1-2 sentence visual description
-    "dialogue": string,        // one spoken line "Character: line"
-    "character": string,       // character name only
-    "spoken_line": string,     // the exact spoken words WITHOUT the "Character:" prefix — this is what TTS will read
-    "caption": string,         // <= 60 chars, screen caption shown during the scene
-    "video_prompt": string     // detailed cinematic prompt for text-to-video (camera, lighting, subject, mood, ~40 words)
-  }>
-}`;
+    const system = [
+      `You are Makers, an AI showrunner + screenwriter. Given a logline, produce a FULL cinematic short film script and shot-list of EXACTLY ${data.sceneCount} scenes (~5-7 seconds each) totaling ~60 seconds.`,
+      `HARD RULES:`,
+      `- Real short FILM, not narrated slideshow. NEVER use a narrator or voice-over. Every spoken line is an in-world character speaking on screen (no "Narrator:" ever).`,
+      `- Reuse the same 2-3 named characters across scenes so the audience follows them.`,
+      `- Vary shot types: wide establishing, medium, close-up, insert, action, reaction. No two consecutive scenes use the same shot_type.`,
+      `- video_prompt is a cinematic shot description (~50 words): camera movement (dolly in / tracking / handheld / crane / static close-up), lens & lighting, subject action, mood, environment ambience (wind, birds, rain, crowd, footsteps, distant thunder). End every video_prompt with: "cinematic, film grain, shallow depth of field, 35mm, dramatic lighting, high detail".`,
+      `- spoken_line: 5-15 words, natural dialogue that fits ~6 seconds.`,
+      `- Long rich logline (3-4 sentences) and detailed tone.`,
+      ``,
+      `Return ONLY strict JSON — no markdown:`,
+      `{"title":string,"logline":string,"tone":string,"scenes":Array<{"title":string,"visual":string,"dialogue":string,"character":string,"spoken_line":string,"caption":string,"video_prompt":string,"shot_type":string}>}`,
+    ].join("\n");
 
     const res = await fetch(CHAT_URL, {
       method: "POST",
