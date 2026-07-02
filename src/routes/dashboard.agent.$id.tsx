@@ -1,9 +1,9 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Plus, Play, ChevronDown, Sparkles, Check, X } from "lucide-react";
+import { ArrowUp, Plus, Play, ChevronDown, Sparkles, Check, Film } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
-import { generateStoryboard, submitVideo, pollVideo } from "@/lib/qwen.functions";
+import { generateStoryboard, submitVideo, pollVideo, generateVoice } from "@/lib/qwen.functions";
 
 export const Route = createFileRoute("/dashboard/agent/$id")({
   ssr: false,
@@ -11,7 +11,16 @@ export const Route = createFileRoute("/dashboard/agent/$id")({
 });
 
 type ChatMsg = { role: "user" | "agent"; text: string; skills?: string[]; task?: string };
-type StoryCard = { title: string; progress: number; done: boolean; videoUrl?: string; caption: string };
+type StoryCard = {
+  title: string;
+  progress: number;
+  done: boolean;
+  videoUrl?: string;
+  audioUrl?: string;
+  caption: string;
+  spokenLine: string;
+  character: string;
+};
 
 function AgentWorkspace() {
   const { id } = Route.useParams();
@@ -21,6 +30,8 @@ function AgentWorkspace() {
   const [tasks, setTasks] = useState<{ text: string; done: boolean }[]>([]);
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
+  const [playingFilm, setPlayingFilm] = useState(false);
+  const [filmIdx, setFilmIdx] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const startedRef = useRef(false);
 
@@ -65,7 +76,9 @@ function AgentWorkspace() {
       setCards(
         scenes.map((s, i) => ({
           title: `#${i + 1} ${s.title}`,
-          caption: `${s.dialogue} — ${s.visual}`,
+          caption: s.caption || s.spoken_line || s.dialogue,
+          spokenLine: s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, ""),
+          character: s.character || "",
           progress: 5,
           done: false,
         })),
@@ -74,6 +87,14 @@ function AgentWorkspace() {
       await Promise.all(
         scenes.map(async (s, idx) => {
           try {
+            // kick off voice + video in parallel
+            const voiceP = generateVoice({
+              data: { text: s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, "") },
+            })
+              .then((v) => {
+                setCards((c) => c.map((card, i) => (i === idx ? { ...card, audioUrl: v.audio_url } : card)));
+              })
+              .catch(() => {});
             const { task_id } = await submitVideo({ data: { prompt: s.video_prompt } });
             // poll
             let attempts = 0;
@@ -84,6 +105,7 @@ function AgentWorkspace() {
               setCards((c) => c.map((card, i) => (i === idx ? { ...card, progress: p } : card)));
               const status = await pollVideo({ data: { task_id } });
               if (status.status === "SUCCEEDED" && status.video_url) {
+                await voiceP;
                 setCards((c) =>
                   c.map((card, i) => (i === idx ? { ...card, progress: 100, done: true, videoUrl: status.video_url } : card)),
                 );
@@ -102,7 +124,7 @@ function AgentWorkspace() {
       setTasks((t) => t.map((task) => ({ ...task, done: true })));
       setMessages((m) => [
         ...m,
-        { role: "agent", text: `All ${scenes.length} scenes rendered. Master cut ready to assemble.` },
+        { role: "agent", text: `All ${scenes.length} scenes rendered with dialogue. Master cut ready — hit ▶ Play Film.` },
       ]);
     } catch (err: unknown) {
       setThinking(false);
@@ -177,6 +199,14 @@ function AgentWorkspace() {
               <span className="text-white/40">·</span>
               <button className="text-white/60 hover:text-white">Context</button>
               <button className="text-white bg-white/10 rounded px-2 py-0.5">Page 1</button>
+              {cards.length > 0 && cards.every((c) => c.done) && (
+                <button
+                  onClick={() => { setFilmIdx(0); setPlayingFilm(true); }}
+                  className="ml-auto flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium hover:bg-white/90"
+                >
+                  <Film className="h-3 w-3" /> Play Film
+                </button>
+              )}
             </div>
             <div className="flex-1 overflow-y-auto px-6 py-6 space-y-4">
               {cards.length === 0 ? (
@@ -213,6 +243,17 @@ function AgentWorkspace() {
           </div>
         </div>
       </div>
+      {playingFilm && (
+        <FilmPlayer
+          cards={cards}
+          index={filmIdx}
+          onNext={() => {
+            if (filmIdx + 1 < cards.length) setFilmIdx(filmIdx + 1);
+            else setPlayingFilm(false);
+          }}
+          onClose={() => setPlayingFilm(false)}
+        />
+      )}
     </div>
   );
 }
@@ -251,10 +292,18 @@ function StoryboardCard({ card }: { card: StoryCard }) {
       <div className="flex items-center gap-2 px-4 py-2 text-sm border-b border-white/10">
         <MakersMark className="h-4 w-4" />
         <span className="font-medium">{card.title}</span>
+        {card.audioUrl && <span className="ml-auto text-[10px] text-emerald-400">● voice</span>}
       </div>
       <div className="relative aspect-video bg-black">
         {card.videoUrl && card.done ? (
-          <video src={card.videoUrl} autoPlay muted loop playsInline className="absolute inset-0 h-full w-full object-cover" />
+          <>
+            <video src={card.videoUrl} autoPlay muted loop playsInline className="absolute inset-0 h-full w-full object-cover" />
+            <div className="absolute bottom-3 inset-x-3 text-center">
+              <span className="inline-block bg-black/70 text-white text-xs px-3 py-1 rounded backdrop-blur">
+                {card.caption.split("\n")[0]}
+              </span>
+            </div>
+          </>
         ) : (
           <div className="absolute inset-0 flex flex-col items-center justify-center">
             <div className="relative h-16 w-16">
@@ -267,14 +316,63 @@ function StoryboardCard({ card }: { card: StoryCard }) {
               </svg>
               <span className="absolute inset-0 flex items-center justify-center text-xs">{card.progress}</span>
             </div>
-            <span className="text-xs text-white/60 mt-2">Generating with Nano Banana 2</span>
+            <span className="text-xs text-white/60 mt-2">HappyHorse T2V · CosyVoice</span>
           </div>
         )}
       </div>
       <div className="px-4 py-3 text-xs text-white/70 flex items-center gap-2">
-        <span className="truncate flex-1">{card.caption}</span>
-        <span className="px-2 py-0.5 rounded bg-white/5 text-[10px]">No edits</span>
-        <span className="px-2 py-0.5 rounded bg-white/5 text-[10px]">Nano Banana 2</span>
+        <span className="truncate flex-1">
+          {card.character && <b className="text-white/90">{card.character}: </b>}
+          {card.spokenLine}
+        </span>
+        <span className="px-2 py-0.5 rounded bg-white/5 text-[10px]">HappyHorse</span>
+        <span className="px-2 py-0.5 rounded bg-white/5 text-[10px]">CosyVoice</span>
+      </div>
+    </div>
+  );
+}
+
+function FilmPlayer({
+  cards,
+  index,
+  onNext,
+  onClose,
+}: {
+  cards: StoryCard[];
+  index: number;
+  onNext: () => void;
+  onClose: () => void;
+}) {
+  const card = cards[index];
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  useEffect(() => {
+    videoRef.current?.play().catch(() => {});
+    audioRef.current?.play().catch(() => {});
+  }, [index]);
+  if (!card) return null;
+  return (
+    <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center">
+      <button onClick={onClose} className="absolute top-4 right-4 text-white/60 hover:text-white text-sm">Close ✕</button>
+      <div className="relative w-full max-w-5xl aspect-video">
+        <video
+          ref={videoRef}
+          src={card.videoUrl}
+          autoPlay
+          playsInline
+          onEnded={onNext}
+          className="absolute inset-0 h-full w-full object-contain bg-black"
+        />
+        {card.audioUrl && <audio ref={audioRef} src={card.audioUrl} autoPlay onEnded={onNext} />}
+        <div className="absolute bottom-6 inset-x-0 text-center">
+          <div className="inline-block bg-black/70 text-white text-lg px-5 py-2 rounded-lg backdrop-blur max-w-[80%]">
+            {card.character && <b className="mr-2">{card.character}:</b>}
+            {card.spokenLine}
+          </div>
+        </div>
+        <div className="absolute top-4 left-4 text-white/70 text-xs">
+          Scene {index + 1} / {cards.length} · {card.title}
+        </div>
       </div>
     </div>
   );
