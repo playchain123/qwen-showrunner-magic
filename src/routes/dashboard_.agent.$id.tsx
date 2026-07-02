@@ -339,7 +339,7 @@ function StoryboardCard({ card }: { card: StoryCard }) {
               </svg>
               <span className="absolute inset-0 flex items-center justify-center text-xs">{card.progress}</span>
             </div>
-            <span className="text-xs text-white/60 mt-2">HappyHorse T2V · CosyVoice</span>
+            <span className="text-xs text-white/60 mt-2">Rendering scene…</span>
           </div>
         )}
       </div>
@@ -348,8 +348,6 @@ function StoryboardCard({ card }: { card: StoryCard }) {
           {card.character && <b className="text-white/90">{card.character}: </b>}
           {card.spokenLine}
         </span>
-        <span className="px-2 py-0.5 rounded bg-white/5 text-[10px]">HappyHorse</span>
-        <span className="px-2 py-0.5 rounded bg-white/5 text-[10px]">CosyVoice</span>
       </div>
     </div>
   );
