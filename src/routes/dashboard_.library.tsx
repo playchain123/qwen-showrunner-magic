@@ -17,7 +17,7 @@ type Scene = {
   spokenLine: string;
   character: string;
 };
-type Film = {
+type FilmDoc = {
   id: string;
   title: string;
   tone?: string;
@@ -27,8 +27,8 @@ type Film = {
 
 function LibraryPage() {
   const navigate = useNavigate();
-  const [films, setFilms] = useState<Film[]>([]);
-  const [playing, setPlaying] = useState<{ film: Film; idx: number } | null>(null);
+  const [films, setFilms] = useState<FilmDoc[]>([]);
+  const [playing, setPlaying] = useState<{ film: FilmDoc; idx: number } | null>(null);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -109,7 +109,7 @@ function LibraryPage() {
 
 function LibraryFilmPlayer({
   film, index, onNext, onClose,
-}: { film: Film; index: number; onNext: () => void; onClose: () => void }) {
+}: { film: FilmDoc; index: number; onNext: () => void; onClose: () => void }) {
   const scene = film.scenes[index];
   if (!scene) return null;
   return (
