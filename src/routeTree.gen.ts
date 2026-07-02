@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as DashboardLibraryRouteImport } from './routes/dashboard_.library'
 import { Route as DashboardAgentIdRouteImport } from './routes/dashboard_.agent.$id'
 
 const DashboardRoute = DashboardRouteImport.update({
@@ -29,6 +30,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DashboardLibraryRoute = DashboardLibraryRouteImport.update({
+  id: '/dashboard_/library',
+  path: '/dashboard/library',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DashboardAgentIdRoute = DashboardAgentIdRouteImport.update({
   id: '/dashboard_/agent/$id',
   path: '/dashboard/agent/$id',
@@ -39,12 +45,14 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
   '/dashboard': typeof DashboardRoute
+  '/dashboard/library': typeof DashboardLibraryRoute
   '/dashboard/agent/$id': typeof DashboardAgentIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
   '/dashboard': typeof DashboardRoute
+  '/dashboard/library': typeof DashboardLibraryRoute
   '/dashboard/agent/$id': typeof DashboardAgentIdRoute
 }
 export interface FileRoutesById {
@@ -52,20 +60,38 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
   '/dashboard': typeof DashboardRoute
+  '/dashboard_/library': typeof DashboardLibraryRoute
   '/dashboard_/agent/$id': typeof DashboardAgentIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/auth' | '/dashboard' | '/dashboard/agent/$id'
+  fullPaths:
+    | '/'
+    | '/auth'
+    | '/dashboard'
+    | '/dashboard/library'
+    | '/dashboard/agent/$id'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/auth' | '/dashboard' | '/dashboard/agent/$id'
-  id: '__root__' | '/' | '/auth' | '/dashboard' | '/dashboard_/agent/$id'
+  to:
+    | '/'
+    | '/auth'
+    | '/dashboard'
+    | '/dashboard/library'
+    | '/dashboard/agent/$id'
+  id:
+    | '__root__'
+    | '/'
+    | '/auth'
+    | '/dashboard'
+    | '/dashboard_/library'
+    | '/dashboard_/agent/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthRoute: typeof AuthRoute
   DashboardRoute: typeof DashboardRoute
+  DashboardLibraryRoute: typeof DashboardLibraryRoute
   DashboardAgentIdRoute: typeof DashboardAgentIdRoute
 }
 
@@ -92,6 +118,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/dashboard_/library': {
+      id: '/dashboard_/library'
+      path: '/dashboard/library'
+      fullPath: '/dashboard/library'
+      preLoaderRoute: typeof DashboardLibraryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/dashboard_/agent/$id': {
       id: '/dashboard_/agent/$id'
       path: '/dashboard/agent/$id'
@@ -106,6 +139,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthRoute: AuthRoute,
   DashboardRoute: DashboardRoute,
+  DashboardLibraryRoute: DashboardLibraryRoute,
   DashboardAgentIdRoute: DashboardAgentIdRoute,
 }
 export const routeTree = rootRouteImport
