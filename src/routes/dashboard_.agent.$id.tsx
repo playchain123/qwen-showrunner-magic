@@ -64,8 +64,8 @@ function AgentWorkspace() {
         ...m,
         {
           role: "agent",
-          text: `Locked. Storyboard "${story.title}" — ${story.tone}. Dispatching ${story.scenes.length} scenes to HappyHorse T2V on Qwen Cloud.`,
-          skills: ["Script Agent", "Storyboard Agent", "HappyHorse T2V"],
+          text: `Locked. Storyboard "${story.title}" — ${story.tone}. Rendering ${story.scenes.length} cinematic scenes.`,
+          skills: ["Script Agent", "Storyboard Agent", "Video Agent"],
           task: `Render ${story.scenes.length} cinematic scenes`,
         },
       ]);
@@ -124,8 +124,31 @@ function AgentWorkspace() {
       setTasks((t) => t.map((task) => ({ ...task, done: true })));
       setMessages((m) => [
         ...m,
-        { role: "agent", text: `All ${scenes.length} scenes rendered with dialogue. Master cut ready — hit ▶ Play Film.` },
+        { role: "agent", text: `Final cut is ready. Press ▶ Play Film to watch your short drama.` },
       ]);
+      // Save to library
+      try {
+        const key = "makers:library";
+        const existing = JSON.parse(localStorage.getItem(key) || "[]") as Array<Record<string, unknown>>;
+        const finalCards = await new Promise<StoryCard[]>((resolve) => {
+          setCards((c) => { resolve(c); return c; });
+        });
+        existing.unshift({
+          id,
+          title: story.title,
+          tone: story.tone,
+          createdAt: Date.now(),
+          scenes: finalCards.map((c) => ({
+            title: c.title,
+            videoUrl: c.videoUrl,
+            audioUrl: c.audioUrl,
+            caption: c.caption,
+            spokenLine: c.spokenLine,
+            character: c.character,
+          })),
+        });
+        localStorage.setItem(key, JSON.stringify(existing.slice(0, 30)));
+      } catch { /* ignore */ }
     } catch (err: unknown) {
       setThinking(false);
       const msg = err instanceof Error ? err.message : String(err);
