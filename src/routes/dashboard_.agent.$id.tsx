@@ -367,25 +367,45 @@ function FilmPlayer({
   const card = cards[index];
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const advancedRef = useRef(false);
+
   useEffect(() => {
-    videoRef.current?.play().catch(() => {});
-    audioRef.current?.play().catch(() => {});
+    advancedRef.current = false;
+    const v = videoRef.current;
+    const a = audioRef.current;
+    if (v) { v.currentTime = 0; v.play().catch(() => {}); }
+    if (a) { a.currentTime = 0; a.play().catch(() => {}); }
   }, [index]);
+
+  function advance() {
+    if (advancedRef.current) return;
+    advancedRef.current = true;
+    onNext();
+  }
+
   if (!card) return null;
+  const next = cards[index + 1];
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center">
-      <button onClick={onClose} className="absolute top-4 right-4 text-white/60 hover:text-white text-sm">Close ✕</button>
+      <button onClick={onClose} className="absolute top-4 right-4 text-white/60 hover:text-white text-sm z-10">Close ✕</button>
       <div className="relative w-full max-w-5xl aspect-video">
         <video
           ref={videoRef}
+          key={card.videoUrl}
           src={card.videoUrl}
           autoPlay
           playsInline
-          onEnded={onNext}
+          muted
+          onEnded={advance}
           className="absolute inset-0 h-full w-full object-contain bg-black"
         />
-        {card.audioUrl && <audio ref={audioRef} src={card.audioUrl} autoPlay onEnded={onNext} />}
-        <div className="absolute bottom-6 inset-x-0 text-center">
+        {card.audioUrl && (
+          <audio ref={audioRef} key={card.audioUrl} src={card.audioUrl} autoPlay />
+        )}
+        {next?.videoUrl && (
+          <video src={next.videoUrl} preload="auto" className="hidden" />
+        )}
+        <div className="absolute bottom-6 inset-x-0 text-center px-6">
           <div className="inline-block bg-black/70 text-white text-lg px-5 py-2 rounded-lg backdrop-blur max-w-[80%]">
             {card.character && <b className="mr-2">{card.character}:</b>}
             {card.spokenLine}
