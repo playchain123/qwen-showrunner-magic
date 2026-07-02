@@ -11,6 +11,9 @@ type Scene = {
   visual: string;
   dialogue: string;
   video_prompt: string;
+  character?: string;
+  spoken_line?: string;
+  caption?: string;
 };
 type Storyboard = {
   title: string;
@@ -38,6 +41,9 @@ Return ONLY strict JSON matching this TypeScript type — no markdown, no commen
     "title": string,           // short scene name
     "visual": string,          // 1-2 sentence visual description
     "dialogue": string,        // one spoken line "Character: line"
+    "character": string,       // character name only
+    "spoken_line": string,     // the exact spoken words WITHOUT the "Character:" prefix — this is what TTS will read
+    "caption": string,         // <= 60 chars, screen caption shown during the scene
     "video_prompt": string     // detailed cinematic prompt for text-to-video (camera, lighting, subject, mood, ~40 words)
   }>
 }`;
@@ -75,7 +81,13 @@ Return ONLY strict JSON matching this TypeScript type — no markdown, no commen
 /** Submit a video-gen task to HappyHorse T2V (async). Returns task_id. */
 export const submitVideo = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
-    z.object({ prompt: z.string().min(3), size: z.string().default("1280*720") }).parse(input),
+    z
+      .object({
+        prompt: z.string().min(3),
+        size: z.string().default("1280*720"),
+        model: z.enum(["happyhorse-1.1-t2v", "wan2.2-t2v-plus"]).default("happyhorse-1.1-t2v"),
+      })
+      .parse(input),
   )
   .handler(async ({ data }): Promise<{ task_id: string }> => {
     const key = process.env.DASHSCOPE_API_KEY;
@@ -89,7 +101,7 @@ export const submitVideo = createServerFn({ method: "POST" })
         "X-DashScope-Async": "enable",
       },
       body: JSON.stringify({
-        model: "happyhorse-1.1-t2v",
+        model: data.model,
         input: { prompt: data.prompt },
         parameters: { size: data.size },
       }),
