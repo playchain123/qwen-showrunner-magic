@@ -137,60 +137,52 @@ export const pollVideo = createServerFn({ method: "POST" })
   });
 
 /** Generate character voiceover for a dialogue line.
- * Tries CosyVoice-v2 on DashScope first; falls back to Lovable AI Gateway TTS
- * so the pipeline never blocks. Returns a base64 mp3 data URL playable in <audio>. */
+ * Uses Qwen3-TTS-Flash (per Qwen Cloud docs) with a per-character voice so
+ * each actor sounds distinct. Falls back to Lovable AI Gateway TTS if the
+ * DashScope call fails so the pipeline never blocks.
+ * Returns a data URL (or hosted URL) playable in <audio>. */
 export const generateVoice = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
     z
       .object({
         text: z.string().min(1).max(1000),
-        voice: z.string().default("longxiaochun"), // CosyVoice voice id
+        voice: z.string().default("Cherry"), // Qwen3-TTS voice id (Cherry, Ethan, Serena, Chelsie, Dylan, Jada, Sunny…)
+        language: z.string().default("English"),
       })
       .parse(input),
   )
   .handler(async ({ data }): Promise<{ audio_url: string; provider: string }> => {
-    // 1) Try CosyVoice-v2 on DashScope (async task pattern)
     const dashKey = process.env.DASHSCOPE_API_KEY;
     if (dashKey) {
       try {
-        const submit = await fetch(
-          `${DASHSCOPE_BASE}/api/v1/services/audio/tts`,
+        // Qwen3-TTS-Flash via MultiModal Generation (synchronous)
+        const res = await fetch(
+          `${DASHSCOPE_BASE}/api/v1/services/aigc/multimodal-generation/generation`,
           {
             method: "POST",
             headers: {
               Authorization: `Bearer ${dashKey}`,
               "Content-Type": "application/json",
-              "X-DashScope-Async": "enable",
             },
             body: JSON.stringify({
-              model: "cosyvoice-v2",
-              input: { text: data.text, voice: data.voice },
-              parameters: { format: "mp3", sample_rate: 22050 },
+              model: "qwen3-tts-flash",
+              input: {
+                text: data.text,
+                voice: data.voice,
+                language_type: data.language,
+              },
+              parameters: { stream: false },
             }),
           },
         );
-        if (submit.ok) {
-          const j = (await submit.json()) as { output?: { task_id?: string; audio?: { url?: string } } };
+        if (res.ok) {
+          const j = (await res.json()) as {
+            output?: { audio?: { url?: string; data?: string } };
+          };
           const url = j.output?.audio?.url;
-          if (url) return { audio_url: url, provider: "cosyvoice-v2" };
-          const taskId = j.output?.task_id;
-          if (taskId) {
-            for (let i = 0; i < 30; i++) {
-              await new Promise((r) => setTimeout(r, 2000));
-              const p = await fetch(TASK_URL(taskId), {
-                headers: { Authorization: `Bearer ${dashKey}` },
-              });
-              const pj = (await p.json()) as {
-                output?: { task_status?: string; audio?: { url?: string }; results?: Array<{ url?: string }> };
-              };
-              if (pj.output?.task_status === "SUCCEEDED") {
-                const u = pj.output.audio?.url || pj.output.results?.[0]?.url;
-                if (u) return { audio_url: u, provider: "cosyvoice-v2" };
-                break;
-              }
-              if (pj.output?.task_status === "FAILED") break;
-            }
-          }
+          if (url) return { audio_url: url, provider: "qwen3-tts-flash" };
+          const b64 = j.output?.audio?.data;
+          if (b64) return { audio_url: `data:audio/mpeg;base64,${b64}`, provider: "qwen3-tts-flash" };
         }
       } catch {
         // fall through to gateway
