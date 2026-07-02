@@ -87,9 +87,18 @@ function AgentWorkspace() {
       await Promise.all(
         scenes.map(async (s, idx) => {
           try {
+            // Assign a distinct Qwen3-TTS voice per character so actors sound different
+            const voicePool = ["Cherry", "Ethan", "Serena", "Dylan", "Chelsie", "Jada", "Sunny"];
+            const charKey = (s.character || `char-${idx}`).toLowerCase();
+            let hash = 0;
+            for (let i = 0; i < charKey.length; i++) hash = (hash * 31 + charKey.charCodeAt(i)) >>> 0;
+            const chosenVoice = voicePool[hash % voicePool.length];
             // kick off voice + video in parallel
             const voiceP = generateVoice({
-              data: { text: s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, "") },
+              data: {
+                text: s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, ""),
+                voice: chosenVoice,
+              },
             })
               .then((v) => {
                 setCards((c) => c.map((card, i) => (i === idx ? { ...card, audioUrl: v.audio_url } : card)));
