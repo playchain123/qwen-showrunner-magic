@@ -245,27 +245,91 @@ function AgentWorkspace() {
           {/* RIGHT — canvas */}
           <div className="flex flex-col min-h-0">
             <div className="flex items-center gap-3 px-6 py-3 border-b border-white/10 text-xs">
-              <span className="font-medium text-white">workspace</span>
+              <span className="font-medium text-white">Film Preview</span>
               <span className="text-white/40">·</span>
-              <button className="text-white/60 hover:text-white">Context</button>
-              <button className="text-white bg-white/10 rounded px-2 py-0.5">Page 1</button>
-              {cards.length > 0 && cards.every((c) => c.done) && (
+              <span className="text-white/60 truncate">{filmTitle || "Untitled"}</span>
+              {allDone && (
                 <button
-                  onClick={() => { setFilmIdx(0); setPlayingFilm(true); }}
+                  onClick={() => setPlayingFilm(true)}
                   className="ml-auto flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium hover:bg-white/90"
                 >
                   <Film className="h-3 w-3" /> Play Film
                 </button>
               )}
             </div>
-            <div className="flex-1 overflow-y-auto px-6 py-6 space-y-4">
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
               {cards.length === 0 ? (
                 <div className="h-full min-h-[300px] flex flex-col items-center justify-center text-center text-white/40">
                   <Sparkles className="h-10 w-10 mb-3 opacity-40" />
-                  <p className="text-sm">No items to display</p>
+                  <p className="text-sm">Your short film preview will appear here</p>
                 </div>
               ) : (
-                cards.map((c, i) => <StoryboardCard key={i} card={c} />)
+                <>
+                  {/* Big stage */}
+                  <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-neutral-950 border border-white/10">
+                    {allDone ? (
+                      <button
+                        onClick={() => setPlayingFilm(true)}
+                        className="group absolute inset-0"
+                      >
+                        <video
+                          src={cards[0].videoUrl}
+                          muted
+                          playsInline
+                          autoPlay
+                          loop
+                          className="absolute inset-0 h-full w-full object-cover opacity-70 group-hover:opacity-90 transition"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40" />
+                        <div className="absolute inset-0 flex flex-col items-center justify-center">
+                          <div className="h-16 w-16 rounded-full bg-white text-black flex items-center justify-center shadow-2xl group-hover:scale-105 transition">
+                            <Play className="h-6 w-6 ml-1" fill="currentColor" />
+                          </div>
+                          <div className="mt-4 text-white text-lg font-medium drop-shadow">{filmTitle}</div>
+                          <div className="mt-1 text-white/70 text-xs">~{cards.length * 6}s · {cards.length} shots · dialogue + score</div>
+                        </div>
+                      </button>
+                    ) : (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
+                        <div className="relative h-20 w-20">
+                          <svg viewBox="0 0 36 36" className="h-20 w-20 -rotate-90">
+                            <circle cx="18" cy="18" r="16" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+                            <circle
+                              cx="18" cy="18" r="16" fill="none" stroke="#fff" strokeWidth="2"
+                              strokeDasharray={`${totalProgress} 100`}
+                            />
+                          </svg>
+                          <span className="absolute inset-0 flex items-center justify-center text-sm">{totalProgress}%</span>
+                        </div>
+                        <div className="text-sm text-white/70">Assembling cinematic edit…</div>
+                        <div className="text-[11px] text-white/40">Rendering shots · casting voices · scoring music</div>
+                      </div>
+                    )}
+                  </div>
+
+                  {logline && (
+                    <p className="text-sm text-white/70 leading-relaxed italic border-l-2 border-white/20 pl-3">
+                      {logline}
+                    </p>
+                  )}
+
+                  {/* Shot filmstrip */}
+                  <div>
+                    <div className="text-[11px] uppercase tracking-wider text-white/40 mb-2">Shot list · {cards.filter(c=>c.done).length}/{cards.length}</div>
+                    <div className="grid grid-cols-4 gap-2">
+                      {cards.map((c, i) => (
+                        <div key={i} className="relative aspect-video rounded-md overflow-hidden bg-neutral-900 border border-white/5">
+                          {c.videoUrl && c.done ? (
+                            <video src={c.videoUrl} muted playsInline className="absolute inset-0 h-full w-full object-cover" />
+                          ) : (
+                            <div className="absolute inset-0 flex items-center justify-center text-[10px] text-white/40">{c.progress}%</div>
+                          )}
+                          <div className="absolute bottom-1 left-1 text-[9px] text-white/80 bg-black/60 px-1 rounded">#{i + 1}{c.shotType ? ` · ${c.shotType}` : ""}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
               )}
             </div>
             {tasks.length > 0 && (
@@ -284,25 +348,13 @@ function AgentWorkspace() {
                     </div>
                   ))}
                 </div>
-                <div className="mt-3 flex items-center gap-2 text-xs text-white/60">
-                  <MakersMark className="h-4 w-4" /> Pre-production
-                  <ChevronDown className="h-3 w-3 ml-auto" />
-                </div>
               </div>
             )}
           </div>
         </div>
       </div>
       {playingFilm && (
-        <FilmPlayer
-          cards={cards}
-          index={filmIdx}
-          onNext={() => {
-            if (filmIdx + 1 < cards.length) setFilmIdx(filmIdx + 1);
-            else setPlayingFilm(false);
-          }}
-          onClose={() => setPlayingFilm(false)}
-        />
+        <FilmPlayer cards={cards} title={filmTitle} onClose={() => setPlayingFilm(false)} />
       )}
     </div>
   );
