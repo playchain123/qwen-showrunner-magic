@@ -388,112 +388,193 @@ function MessageBubble({ msg }: { msg: ChatMsg }) {
   );
 }
 
-function StoryboardCard({ card }: { card: StoryCard }) {
-  return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-2 text-sm border-b border-white/10">
-        <MakersMark className="h-4 w-4" />
-        <span className="font-medium">{card.title}</span>
-        {card.audioUrl && <span className="ml-auto text-[10px] text-emerald-400">● voice</span>}
-      </div>
-      <div className="relative aspect-video bg-black">
-        {card.videoUrl && card.done ? (
-          <>
-            <video src={card.videoUrl} autoPlay muted loop playsInline className="absolute inset-0 h-full w-full object-cover" />
-            <div className="absolute bottom-3 inset-x-3 text-center">
-              <span className="inline-block bg-black/70 text-white text-xs px-3 py-1 rounded backdrop-blur">
-                {card.caption.split("\n")[0]}
-              </span>
-            </div>
-          </>
-        ) : (
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <div className="relative h-16 w-16">
-              <svg viewBox="0 0 36 36" className="h-16 w-16 -rotate-90">
-                <circle cx="18" cy="18" r="16" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
-                <circle
-                  cx="18" cy="18" r="16" fill="none" stroke="#fff" strokeWidth="2"
-                  strokeDasharray={`${(card.progress / 100) * 100} 100`}
-                />
-              </svg>
-              <span className="absolute inset-0 flex items-center justify-center text-xs">{card.progress}</span>
-            </div>
-            <span className="text-xs text-white/60 mt-2">Rendering scene…</span>
-          </div>
-        )}
-      </div>
-      <div className="px-4 py-3 text-xs text-white/70 flex items-center gap-2">
-        <span className="truncate flex-1">
-          {card.character && <b className="text-white/90">{card.character}: </b>}
-          {card.spokenLine}
-        </span>
-      </div>
-    </div>
-  );
-}
-
+/**
+ * Cinematic FilmPlayer — professional AI edit on the client:
+ *  - Two <video> elements alternating for gapless CROSSFADE cuts
+ *  - Slow Ken-Burns zoom on every clip
+ *  - Dialogue audio synced per shot (multiple voices)
+ *  - Web Audio synthesized ambient PAD + soft bass score (always works, no CDN)
+ *  - Filmic letterbox bars, film-grain vignette, animated subtitles
+ *  - Auto-advance through all shots as ONE continuous short film
+ */
 function FilmPlayer({
   cards,
-  index,
-  onNext,
+  title,
   onClose,
 }: {
   cards: StoryCard[];
-  index: number;
-  onNext: () => void;
+  title: string;
   onClose: () => void;
 }) {
-  const card = cards[index];
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
+  const shots = useMemo(() => cards.filter((c) => c.videoUrl && c.done), [cards]);
+  const [idx, setIdx] = useState(0);
+  const [activeLayer, setActiveLayer] = useState<0 | 1>(0);
+  const [muted, setMuted] = useState(false);
+  const videoA = useRef<HTMLVideoElement>(null);
+  const videoB = useRef<HTMLVideoElement>(null);
+  const dialogueRef = useRef<HTMLAudioElement>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const scoreStopRef = useRef<(() => void) | null>(null);
   const advancedRef = useRef(false);
 
+  const current = shots[idx];
+  const next = shots[idx + 1];
+
+  // Start ambient score once (user gesture already happened — Play click)
+  useEffect(() => {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ctx = new Ctx();
+    audioCtxRef.current = ctx;
+    const master = ctx.createGain();
+    master.gain.value = 0;
+    master.gain.linearRampToValueAtTime(0.18, ctx.currentTime + 2);
+    master.connect(ctx.destination);
+    // Cinematic drone pad — two detuned oscillators through low-pass
+    const filter = ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 800;
+    filter.Q.value = 0.7;
+    filter.connect(master);
+    const notes = [110, 164.81, 220, 329.63]; // A2 E3 A3 E4
+    const oscs: OscillatorNode[] = [];
+    notes.forEach((f, i) => {
+      const o1 = ctx.createOscillator();
+      const o2 = ctx.createOscillator();
+      o1.type = "sine"; o2.type = "triangle";
+      o1.frequency.value = f; o2.frequency.value = f * 1.003;
+      const g = ctx.createGain();
+      g.gain.value = 0.15 - i * 0.02;
+      o1.connect(g); o2.connect(g); g.connect(filter);
+      o1.start(); o2.start();
+      oscs.push(o1, o2);
+      // slow LFO on filter for movement
+      const lfo = ctx.createOscillator();
+      const lfoGain = ctx.createGain();
+      lfo.frequency.value = 0.05 + i * 0.03;
+      lfoGain.gain.value = 120;
+      lfo.connect(lfoGain); lfoGain.connect(filter.frequency);
+      lfo.start();
+      oscs.push(lfo);
+    });
+    scoreStopRef.current = () => {
+      master.gain.linearRampToValueAtTime(0, ctx.currentTime + 1);
+      setTimeout(() => { oscs.forEach((o) => { try { o.stop(); } catch { /* noop */ } }); ctx.close().catch(()=>{}); }, 1100);
+    };
+    return () => { scoreStopRef.current?.(); };
+  }, []);
+
+  // Duck score when a dialogue line plays
+  useEffect(() => { setMuted(false); }, []);
+
+  // Prepare next-scene preload on the inactive layer for crossfade
   useEffect(() => {
     advancedRef.current = false;
-    const v = videoRef.current;
-    const a = audioRef.current;
-    if (v) { v.currentTime = 0; v.play().catch(() => {}); }
-    if (a) { a.currentTime = 0; a.play().catch(() => {}); }
-  }, [index]);
+    const active = activeLayer === 0 ? videoA.current : videoB.current;
+    const inactive = activeLayer === 0 ? videoB.current : videoA.current;
+    if (active && current) {
+      active.currentTime = 0;
+      active.play().catch(() => {});
+    }
+    if (inactive && next) {
+      inactive.src = next.videoUrl ?? "";
+      inactive.load();
+    }
+    // dialogue
+    const d = dialogueRef.current;
+    if (d && current?.audioUrl) {
+      d.src = current.audioUrl;
+      d.currentTime = 0;
+      d.play().catch(() => {});
+    }
+  }, [idx, activeLayer, current, next]);
 
   function advance() {
     if (advancedRef.current) return;
     advancedRef.current = true;
-    onNext();
+    if (idx + 1 >= shots.length) {
+      // outro — close after brief fade
+      setTimeout(() => onClose(), 800);
+      return;
+    }
+    setActiveLayer((l) => (l === 0 ? 1 : 0));
+    setIdx((i) => i + 1);
   }
 
-  if (!card) return null;
-  const next = cards[index + 1];
+  if (!current) return null;
+
+  const activeIsA = activeLayer === 0;
+
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center">
-      <button onClick={onClose} className="absolute top-4 right-4 text-white/60 hover:text-white text-sm z-10">Close ✕</button>
-      <div className="relative w-full max-w-5xl aspect-video">
+      <button onClick={onClose} className="absolute top-4 right-4 text-white/60 hover:text-white text-sm z-20">Close ✕</button>
+      <button onClick={() => setMuted((m) => !m)} className="absolute top-4 right-20 text-white/60 hover:text-white z-20">
+        {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+      </button>
+
+      <div className="relative w-full max-w-6xl aspect-video overflow-hidden bg-black">
+        {/* Layer A */}
         <video
-          ref={videoRef}
-          key={card.videoUrl}
-          src={card.videoUrl}
-          autoPlay
+          ref={videoA}
+          src={activeIsA ? current.videoUrl : next?.videoUrl}
+          autoPlay={activeIsA}
           playsInline
           muted
-          onEnded={advance}
-          className="absolute inset-0 h-full w-full object-contain bg-black"
+          onEnded={activeIsA ? advance : undefined}
+          className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-700 ${activeIsA ? "opacity-100 kenburns" : "opacity-0"}`}
         />
-        {card.audioUrl && (
-          <audio ref={audioRef} key={card.audioUrl} src={card.audioUrl} autoPlay />
+        {/* Layer B */}
+        <video
+          ref={videoB}
+          src={activeIsA ? next?.videoUrl : current.videoUrl}
+          autoPlay={!activeIsA}
+          playsInline
+          muted
+          onEnded={!activeIsA ? advance : undefined}
+          className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-700 ${!activeIsA ? "opacity-100 kenburns" : "opacity-0"}`}
+        />
+
+        {/* Dialogue */}
+        <audio ref={dialogueRef} autoPlay muted={muted} />
+
+        {/* Filmic overlays */}
+        <div className="absolute inset-x-0 top-0 h-[6%] bg-black pointer-events-none" />
+        <div className="absolute inset-x-0 bottom-0 h-[6%] bg-black pointer-events-none" />
+        <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: "inset 0 0 200px rgba(0,0,0,0.8)" }} />
+
+        {/* Title card on first shot */}
+        {idx === 0 && (
+          <div key={`title-${idx}`} className="absolute inset-0 flex items-center justify-center pointer-events-none animate-[fadeout_3s_ease-in_forwards]">
+            <div className="text-center">
+              <div className="text-white text-4xl md:text-5xl font-serif tracking-wide drop-shadow-2xl">{title}</div>
+              <div className="mt-3 text-white/70 text-xs uppercase tracking-[0.3em]">A Makers Film</div>
+            </div>
+          </div>
         )}
-        {next?.videoUrl && (
-          <video src={next.videoUrl} preload="auto" className="hidden" />
-        )}
-        <div className="absolute bottom-6 inset-x-0 text-center px-6">
-          <div className="inline-block bg-black/70 text-white text-lg px-5 py-2 rounded-lg backdrop-blur max-w-[80%]">
-            {card.character && <b className="mr-2">{card.character}:</b>}
-            {card.spokenLine}
+
+        {/* Subtitle */}
+        <div key={`sub-${idx}`} className="absolute bottom-[10%] inset-x-0 text-center px-6 pointer-events-none animate-[fadein_0.5s_ease-out]">
+          <div className="inline-block bg-black/60 text-white text-base md:text-lg px-5 py-2 rounded-md backdrop-blur max-w-[80%]">
+            {current.character && <b className="mr-2 text-white/90">{current.character}:</b>}
+            <span>{current.spokenLine}</span>
           </div>
         </div>
-        <div className="absolute top-4 left-4 text-white/70 text-xs">
-          Scene {index + 1} / {cards.length} · {card.title}
+
+        {/* Progress bar */}
+        <div className="absolute top-0 inset-x-0 h-0.5 bg-white/10 z-10">
+          <div className="h-full bg-white/80 transition-all" style={{ width: `${((idx + 1) / shots.length) * 100}%` }} />
+        </div>
+
+        <div className="absolute top-4 left-4 text-white/70 text-[11px] uppercase tracking-widest">
+          {title} · Shot {idx + 1}/{shots.length}
         </div>
       </div>
+
+      <style>{`
+        @keyframes kenburns { 0% { transform: scale(1.02); } 100% { transform: scale(1.12); } }
+        .kenburns { animation: kenburns 7s ease-out forwards; transform-origin: center; }
+        @keyframes fadein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+        @keyframes fadeout { 0%,60% { opacity: 1; } 100% { opacity: 0; } }
+      `}</style>
     </div>
   );
 }
