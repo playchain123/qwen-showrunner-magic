@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Plus, Play, ChevronDown, Sparkles, Check, Film } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice } from "@/lib/qwen.functions";
@@ -20,6 +20,7 @@ type StoryCard = {
   caption: string;
   spokenLine: string;
   character: string;
+  shotType?: string;
 };
 
 function AgentWorkspace() {
@@ -31,9 +32,15 @@ function AgentWorkspace() {
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
   const [playingFilm, setPlayingFilm] = useState(false);
-  const [filmIdx, setFilmIdx] = useState(0);
+  const [filmTitle, setFilmTitle] = useState<string>("");
+  const [logline, setLogline] = useState<string>("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const startedRef = useRef(false);
+
+  const totalProgress = cards.length
+    ? Math.round(cards.reduce((s, c) => s + c.progress, 0) / cards.length)
+    : 0;
+  const allDone = cards.length > 0 && cards.every((c) => c.done);
 
   // auth + seed
   useEffect(() => {
@@ -57,19 +64,25 @@ function AgentWorkspace() {
   async function runPipeline(prompt: string) {
     setThinking(true);
     try {
-      // 1. Storyboard via Qwen
-      const story = await generateStoryboard({ data: { prompt, sceneCount: 3 } });
+      // 1. Storyboard via Qwen (8 scenes for a real ~60s short film)
+      const story = await generateStoryboard({ data: { prompt, sceneCount: 8 } });
       setThinking(false);
+      setFilmTitle(story.title);
+      setLogline(story.logline);
       setMessages((m) => [
         ...m,
         {
           role: "agent",
-          text: `Locked. Storyboard "${story.title}" — ${story.tone}. Rendering ${story.scenes.length} cinematic scenes.`,
-          skills: ["Script Agent", "Storyboard Agent", "Video Agent"],
-          task: `Render ${story.scenes.length} cinematic scenes`,
+          text: `🎬 "${story.title}"\n${story.logline}\n\nTone: ${story.tone}\n\nRolling ${story.scenes.length} cinematic shots — editing dialogue, ambient sound and score into one continuous film.`,
+          skills: ["Script Agent", "Shot-list Agent", "Casting & Voice Agent", "Cinematography Agent", "Editorial / Score Agent"],
+          task: `Cut ${story.scenes.length} shots into a short film`,
         },
       ]);
-      setTasks([{ text: `Render ${story.scenes.length} cinematic scenes`, done: false }]);
+      setTasks([
+        { text: `Render ${story.scenes.length} cinematic shots`, done: false },
+        { text: `Cast voices per character`, done: false },
+        { text: `Assemble edit: cuts, crossfades, score`, done: false },
+      ]);
 
       // 2. Add cards + submit videos in parallel
       const scenes = story.scenes;
@@ -79,6 +92,7 @@ function AgentWorkspace() {
           caption: s.caption || s.spoken_line || s.dialogue,
           spokenLine: s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, ""),
           character: s.character || "",
+          shotType: (s as { shot_type?: string }).shot_type,
           progress: 5,
           done: false,
         })),
@@ -133,8 +147,10 @@ function AgentWorkspace() {
       setTasks((t) => t.map((task) => ({ ...task, done: true })));
       setMessages((m) => [
         ...m,
-        { role: "agent", text: `Final cut is ready. Press ▶ Play Film to watch your short drama.` },
+        { role: "agent", text: `Final cut is locked — ~${story.scenes.length * 6}s short film with dialogue, ambient sound and score. Press ▶ Play Film.` },
       ]);
+      // Auto-play once ready
+      setTimeout(() => setPlayingFilm(true), 400);
       // Save to library
       try {
         const key = "makers:library";
@@ -146,6 +162,7 @@ function AgentWorkspace() {
           id,
           title: story.title,
           tone: story.tone,
+          logline: story.logline,
           createdAt: Date.now(),
           scenes: finalCards.map((c) => ({
             title: c.title,
@@ -154,6 +171,7 @@ function AgentWorkspace() {
             caption: c.caption,
             spokenLine: c.spokenLine,
             character: c.character,
+            shotType: c.shotType,
           })),
         });
         localStorage.setItem(key, JSON.stringify(existing.slice(0, 30)));
