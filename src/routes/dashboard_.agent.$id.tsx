@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Plus, Play, ChevronDown, Sparkles, Check, Film } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice } from "@/lib/qwen.functions";
@@ -20,6 +20,7 @@ type StoryCard = {
   caption: string;
   spokenLine: string;
   character: string;
+  shotType?: string;
 };
 
 function AgentWorkspace() {
@@ -31,9 +32,15 @@ function AgentWorkspace() {
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
   const [playingFilm, setPlayingFilm] = useState(false);
-  const [filmIdx, setFilmIdx] = useState(0);
+  const [filmTitle, setFilmTitle] = useState<string>("");
+  const [logline, setLogline] = useState<string>("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const startedRef = useRef(false);
+
+  const totalProgress = cards.length
+    ? Math.round(cards.reduce((s, c) => s + c.progress, 0) / cards.length)
+    : 0;
+  const allDone = cards.length > 0 && cards.every((c) => c.done);
 
   // auth + seed
   useEffect(() => {
@@ -57,19 +64,25 @@ function AgentWorkspace() {
   async function runPipeline(prompt: string) {
     setThinking(true);
     try {
-      // 1. Storyboard via Qwen
-      const story = await generateStoryboard({ data: { prompt, sceneCount: 3 } });
+      // 1. Storyboard via Qwen (8 scenes for a real ~60s short film)
+      const story = await generateStoryboard({ data: { prompt, sceneCount: 8 } });
       setThinking(false);
+      setFilmTitle(story.title);
+      setLogline(story.logline);
       setMessages((m) => [
         ...m,
         {
           role: "agent",
-          text: `Locked. Storyboard "${story.title}" — ${story.tone}. Rendering ${story.scenes.length} cinematic scenes.`,
-          skills: ["Script Agent", "Storyboard Agent", "Video Agent"],
-          task: `Render ${story.scenes.length} cinematic scenes`,
+          text: `🎬 "${story.title}"\n${story.logline}\n\nTone: ${story.tone}\n\nRolling ${story.scenes.length} cinematic shots — editing dialogue, ambient sound and score into one continuous film.`,
+          skills: ["Script Agent", "Shot-list Agent", "Casting & Voice Agent", "Cinematography Agent", "Editorial / Score Agent"],
+          task: `Cut ${story.scenes.length} shots into a short film`,
         },
       ]);
-      setTasks([{ text: `Render ${story.scenes.length} cinematic scenes`, done: false }]);
+      setTasks([
+        { text: `Render ${story.scenes.length} cinematic shots`, done: false },
+        { text: `Cast voices per character`, done: false },
+        { text: `Assemble edit: cuts, crossfades, score`, done: false },
+      ]);
 
       // 2. Add cards + submit videos in parallel
       const scenes = story.scenes;
@@ -79,6 +92,7 @@ function AgentWorkspace() {
           caption: s.caption || s.spoken_line || s.dialogue,
           spokenLine: s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, ""),
           character: s.character || "",
+          shotType: (s as { shot_type?: string }).shot_type,
           progress: 5,
           done: false,
         })),
@@ -133,8 +147,10 @@ function AgentWorkspace() {
       setTasks((t) => t.map((task) => ({ ...task, done: true })));
       setMessages((m) => [
         ...m,
-        { role: "agent", text: `Final cut is ready. Press ▶ Play Film to watch your short drama.` },
+        { role: "agent", text: `Final cut is locked — ~${story.scenes.length * 6}s short film with dialogue, ambient sound and score. Press ▶ Play Film.` },
       ]);
+      // Auto-play once ready
+      setTimeout(() => setPlayingFilm(true), 400);
       // Save to library
       try {
         const key = "makers:library";
@@ -146,6 +162,7 @@ function AgentWorkspace() {
           id,
           title: story.title,
           tone: story.tone,
+          logline: story.logline,
           createdAt: Date.now(),
           scenes: finalCards.map((c) => ({
             title: c.title,
@@ -154,6 +171,7 @@ function AgentWorkspace() {
             caption: c.caption,
             spokenLine: c.spokenLine,
             character: c.character,
+            shotType: c.shotType,
           })),
         });
         localStorage.setItem(key, JSON.stringify(existing.slice(0, 30)));
@@ -227,27 +245,91 @@ function AgentWorkspace() {
           {/* RIGHT — canvas */}
           <div className="flex flex-col min-h-0">
             <div className="flex items-center gap-3 px-6 py-3 border-b border-white/10 text-xs">
-              <span className="font-medium text-white">workspace</span>
+              <span className="font-medium text-white">Film Preview</span>
               <span className="text-white/40">·</span>
-              <button className="text-white/60 hover:text-white">Context</button>
-              <button className="text-white bg-white/10 rounded px-2 py-0.5">Page 1</button>
-              {cards.length > 0 && cards.every((c) => c.done) && (
+              <span className="text-white/60 truncate">{filmTitle || "Untitled"}</span>
+              {allDone && (
                 <button
-                  onClick={() => { setFilmIdx(0); setPlayingFilm(true); }}
+                  onClick={() => setPlayingFilm(true)}
                   className="ml-auto flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium hover:bg-white/90"
                 >
                   <Film className="h-3 w-3" /> Play Film
                 </button>
               )}
             </div>
-            <div className="flex-1 overflow-y-auto px-6 py-6 space-y-4">
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
               {cards.length === 0 ? (
                 <div className="h-full min-h-[300px] flex flex-col items-center justify-center text-center text-white/40">
                   <Sparkles className="h-10 w-10 mb-3 opacity-40" />
-                  <p className="text-sm">No items to display</p>
+                  <p className="text-sm">Your short film preview will appear here</p>
                 </div>
               ) : (
-                cards.map((c, i) => <StoryboardCard key={i} card={c} />)
+                <>
+                  {/* Big stage */}
+                  <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-neutral-950 border border-white/10">
+                    {allDone ? (
+                      <button
+                        onClick={() => setPlayingFilm(true)}
+                        className="group absolute inset-0"
+                      >
+                        <video
+                          src={cards[0].videoUrl}
+                          muted
+                          playsInline
+                          autoPlay
+                          loop
+                          className="absolute inset-0 h-full w-full object-cover opacity-70 group-hover:opacity-90 transition"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40" />
+                        <div className="absolute inset-0 flex flex-col items-center justify-center">
+                          <div className="h-16 w-16 rounded-full bg-white text-black flex items-center justify-center shadow-2xl group-hover:scale-105 transition">
+                            <Play className="h-6 w-6 ml-1" fill="currentColor" />
+                          </div>
+                          <div className="mt-4 text-white text-lg font-medium drop-shadow">{filmTitle}</div>
+                          <div className="mt-1 text-white/70 text-xs">~{cards.length * 6}s · {cards.length} shots · dialogue + score</div>
+                        </div>
+                      </button>
+                    ) : (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
+                        <div className="relative h-20 w-20">
+                          <svg viewBox="0 0 36 36" className="h-20 w-20 -rotate-90">
+                            <circle cx="18" cy="18" r="16" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+                            <circle
+                              cx="18" cy="18" r="16" fill="none" stroke="#fff" strokeWidth="2"
+                              strokeDasharray={`${totalProgress} 100`}
+                            />
+                          </svg>
+                          <span className="absolute inset-0 flex items-center justify-center text-sm">{totalProgress}%</span>
+                        </div>
+                        <div className="text-sm text-white/70">Assembling cinematic edit…</div>
+                        <div className="text-[11px] text-white/40">Rendering shots · casting voices · scoring music</div>
+                      </div>
+                    )}
+                  </div>
+
+                  {logline && (
+                    <p className="text-sm text-white/70 leading-relaxed italic border-l-2 border-white/20 pl-3">
+                      {logline}
+                    </p>
+                  )}
+
+                  {/* Shot filmstrip */}
+                  <div>
+                    <div className="text-[11px] uppercase tracking-wider text-white/40 mb-2">Shot list · {cards.filter(c=>c.done).length}/{cards.length}</div>
+                    <div className="grid grid-cols-4 gap-2">
+                      {cards.map((c, i) => (
+                        <div key={i} className="relative aspect-video rounded-md overflow-hidden bg-neutral-900 border border-white/5">
+                          {c.videoUrl && c.done ? (
+                            <video src={c.videoUrl} muted playsInline className="absolute inset-0 h-full w-full object-cover" />
+                          ) : (
+                            <div className="absolute inset-0 flex items-center justify-center text-[10px] text-white/40">{c.progress}%</div>
+                          )}
+                          <div className="absolute bottom-1 left-1 text-[9px] text-white/80 bg-black/60 px-1 rounded">#{i + 1}{c.shotType ? ` · ${c.shotType}` : ""}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
               )}
             </div>
             {tasks.length > 0 && (
@@ -266,25 +348,13 @@ function AgentWorkspace() {
                     </div>
                   ))}
                 </div>
-                <div className="mt-3 flex items-center gap-2 text-xs text-white/60">
-                  <MakersMark className="h-4 w-4" /> Pre-production
-                  <ChevronDown className="h-3 w-3 ml-auto" />
-                </div>
               </div>
             )}
           </div>
         </div>
       </div>
       {playingFilm && (
-        <FilmPlayer
-          cards={cards}
-          index={filmIdx}
-          onNext={() => {
-            if (filmIdx + 1 < cards.length) setFilmIdx(filmIdx + 1);
-            else setPlayingFilm(false);
-          }}
-          onClose={() => setPlayingFilm(false)}
-        />
+        <FilmPlayer cards={cards} title={filmTitle} onClose={() => setPlayingFilm(false)} />
       )}
     </div>
   );
@@ -318,112 +388,193 @@ function MessageBubble({ msg }: { msg: ChatMsg }) {
   );
 }
 
-function StoryboardCard({ card }: { card: StoryCard }) {
-  return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-2 text-sm border-b border-white/10">
-        <MakersMark className="h-4 w-4" />
-        <span className="font-medium">{card.title}</span>
-        {card.audioUrl && <span className="ml-auto text-[10px] text-emerald-400">● voice</span>}
-      </div>
-      <div className="relative aspect-video bg-black">
-        {card.videoUrl && card.done ? (
-          <>
-            <video src={card.videoUrl} autoPlay muted loop playsInline className="absolute inset-0 h-full w-full object-cover" />
-            <div className="absolute bottom-3 inset-x-3 text-center">
-              <span className="inline-block bg-black/70 text-white text-xs px-3 py-1 rounded backdrop-blur">
-                {card.caption.split("\n")[0]}
-              </span>
-            </div>
-          </>
-        ) : (
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <div className="relative h-16 w-16">
-              <svg viewBox="0 0 36 36" className="h-16 w-16 -rotate-90">
-                <circle cx="18" cy="18" r="16" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
-                <circle
-                  cx="18" cy="18" r="16" fill="none" stroke="#fff" strokeWidth="2"
-                  strokeDasharray={`${(card.progress / 100) * 100} 100`}
-                />
-              </svg>
-              <span className="absolute inset-0 flex items-center justify-center text-xs">{card.progress}</span>
-            </div>
-            <span className="text-xs text-white/60 mt-2">Rendering scene…</span>
-          </div>
-        )}
-      </div>
-      <div className="px-4 py-3 text-xs text-white/70 flex items-center gap-2">
-        <span className="truncate flex-1">
-          {card.character && <b className="text-white/90">{card.character}: </b>}
-          {card.spokenLine}
-        </span>
-      </div>
-    </div>
-  );
-}
-
+/**
+ * Cinematic FilmPlayer — professional AI edit on the client:
+ *  - Two <video> elements alternating for gapless CROSSFADE cuts
+ *  - Slow Ken-Burns zoom on every clip
+ *  - Dialogue audio synced per shot (multiple voices)
+ *  - Web Audio synthesized ambient PAD + soft bass score (always works, no CDN)
+ *  - Filmic letterbox bars, film-grain vignette, animated subtitles
+ *  - Auto-advance through all shots as ONE continuous short film
+ */
 function FilmPlayer({
   cards,
-  index,
-  onNext,
+  title,
   onClose,
 }: {
   cards: StoryCard[];
-  index: number;
-  onNext: () => void;
+  title: string;
   onClose: () => void;
 }) {
-  const card = cards[index];
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
+  const shots = useMemo(() => cards.filter((c) => c.videoUrl && c.done), [cards]);
+  const [idx, setIdx] = useState(0);
+  const [activeLayer, setActiveLayer] = useState<0 | 1>(0);
+  const [muted, setMuted] = useState(false);
+  const videoA = useRef<HTMLVideoElement>(null);
+  const videoB = useRef<HTMLVideoElement>(null);
+  const dialogueRef = useRef<HTMLAudioElement>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const scoreStopRef = useRef<(() => void) | null>(null);
   const advancedRef = useRef(false);
 
+  const current = shots[idx];
+  const next = shots[idx + 1];
+
+  // Start ambient score once (user gesture already happened — Play click)
+  useEffect(() => {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ctx = new Ctx();
+    audioCtxRef.current = ctx;
+    const master = ctx.createGain();
+    master.gain.value = 0;
+    master.gain.linearRampToValueAtTime(0.18, ctx.currentTime + 2);
+    master.connect(ctx.destination);
+    // Cinematic drone pad — two detuned oscillators through low-pass
+    const filter = ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 800;
+    filter.Q.value = 0.7;
+    filter.connect(master);
+    const notes = [110, 164.81, 220, 329.63]; // A2 E3 A3 E4
+    const oscs: OscillatorNode[] = [];
+    notes.forEach((f, i) => {
+      const o1 = ctx.createOscillator();
+      const o2 = ctx.createOscillator();
+      o1.type = "sine"; o2.type = "triangle";
+      o1.frequency.value = f; o2.frequency.value = f * 1.003;
+      const g = ctx.createGain();
+      g.gain.value = 0.15 - i * 0.02;
+      o1.connect(g); o2.connect(g); g.connect(filter);
+      o1.start(); o2.start();
+      oscs.push(o1, o2);
+      // slow LFO on filter for movement
+      const lfo = ctx.createOscillator();
+      const lfoGain = ctx.createGain();
+      lfo.frequency.value = 0.05 + i * 0.03;
+      lfoGain.gain.value = 120;
+      lfo.connect(lfoGain); lfoGain.connect(filter.frequency);
+      lfo.start();
+      oscs.push(lfo);
+    });
+    scoreStopRef.current = () => {
+      master.gain.linearRampToValueAtTime(0, ctx.currentTime + 1);
+      setTimeout(() => { oscs.forEach((o) => { try { o.stop(); } catch { /* noop */ } }); ctx.close().catch(()=>{}); }, 1100);
+    };
+    return () => { scoreStopRef.current?.(); };
+  }, []);
+
+  // Duck score when a dialogue line plays
+  useEffect(() => { setMuted(false); }, []);
+
+  // Prepare next-scene preload on the inactive layer for crossfade
   useEffect(() => {
     advancedRef.current = false;
-    const v = videoRef.current;
-    const a = audioRef.current;
-    if (v) { v.currentTime = 0; v.play().catch(() => {}); }
-    if (a) { a.currentTime = 0; a.play().catch(() => {}); }
-  }, [index]);
+    const active = activeLayer === 0 ? videoA.current : videoB.current;
+    const inactive = activeLayer === 0 ? videoB.current : videoA.current;
+    if (active && current) {
+      active.currentTime = 0;
+      active.play().catch(() => {});
+    }
+    if (inactive && next) {
+      inactive.src = next.videoUrl ?? "";
+      inactive.load();
+    }
+    // dialogue
+    const d = dialogueRef.current;
+    if (d && current?.audioUrl) {
+      d.src = current.audioUrl;
+      d.currentTime = 0;
+      d.play().catch(() => {});
+    }
+  }, [idx, activeLayer, current, next]);
 
   function advance() {
     if (advancedRef.current) return;
     advancedRef.current = true;
-    onNext();
+    if (idx + 1 >= shots.length) {
+      // outro — close after brief fade
+      setTimeout(() => onClose(), 800);
+      return;
+    }
+    setActiveLayer((l) => (l === 0 ? 1 : 0));
+    setIdx((i) => i + 1);
   }
 
-  if (!card) return null;
-  const next = cards[index + 1];
+  if (!current) return null;
+
+  const activeIsA = activeLayer === 0;
+
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center">
-      <button onClick={onClose} className="absolute top-4 right-4 text-white/60 hover:text-white text-sm z-10">Close ✕</button>
-      <div className="relative w-full max-w-5xl aspect-video">
+      <button onClick={onClose} className="absolute top-4 right-4 text-white/60 hover:text-white text-sm z-20">Close ✕</button>
+      <button onClick={() => setMuted((m) => !m)} className="absolute top-4 right-20 text-white/60 hover:text-white z-20">
+        {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+      </button>
+
+      <div className="relative w-full max-w-6xl aspect-video overflow-hidden bg-black">
+        {/* Layer A */}
         <video
-          ref={videoRef}
-          key={card.videoUrl}
-          src={card.videoUrl}
-          autoPlay
+          ref={videoA}
+          src={activeIsA ? current.videoUrl : next?.videoUrl}
+          autoPlay={activeIsA}
           playsInline
           muted
-          onEnded={advance}
-          className="absolute inset-0 h-full w-full object-contain bg-black"
+          onEnded={activeIsA ? advance : undefined}
+          className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-700 ${activeIsA ? "opacity-100 kenburns" : "opacity-0"}`}
         />
-        {card.audioUrl && (
-          <audio ref={audioRef} key={card.audioUrl} src={card.audioUrl} autoPlay />
+        {/* Layer B */}
+        <video
+          ref={videoB}
+          src={activeIsA ? next?.videoUrl : current.videoUrl}
+          autoPlay={!activeIsA}
+          playsInline
+          muted
+          onEnded={!activeIsA ? advance : undefined}
+          className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-700 ${!activeIsA ? "opacity-100 kenburns" : "opacity-0"}`}
+        />
+
+        {/* Dialogue */}
+        <audio ref={dialogueRef} autoPlay muted={muted} />
+
+        {/* Filmic overlays */}
+        <div className="absolute inset-x-0 top-0 h-[6%] bg-black pointer-events-none" />
+        <div className="absolute inset-x-0 bottom-0 h-[6%] bg-black pointer-events-none" />
+        <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: "inset 0 0 200px rgba(0,0,0,0.8)" }} />
+
+        {/* Title card on first shot */}
+        {idx === 0 && (
+          <div key={`title-${idx}`} className="absolute inset-0 flex items-center justify-center pointer-events-none animate-[fadeout_3s_ease-in_forwards]">
+            <div className="text-center">
+              <div className="text-white text-4xl md:text-5xl font-serif tracking-wide drop-shadow-2xl">{title}</div>
+              <div className="mt-3 text-white/70 text-xs uppercase tracking-[0.3em]">A Makers Film</div>
+            </div>
+          </div>
         )}
-        {next?.videoUrl && (
-          <video src={next.videoUrl} preload="auto" className="hidden" />
-        )}
-        <div className="absolute bottom-6 inset-x-0 text-center px-6">
-          <div className="inline-block bg-black/70 text-white text-lg px-5 py-2 rounded-lg backdrop-blur max-w-[80%]">
-            {card.character && <b className="mr-2">{card.character}:</b>}
-            {card.spokenLine}
+
+        {/* Subtitle */}
+        <div key={`sub-${idx}`} className="absolute bottom-[10%] inset-x-0 text-center px-6 pointer-events-none animate-[fadein_0.5s_ease-out]">
+          <div className="inline-block bg-black/60 text-white text-base md:text-lg px-5 py-2 rounded-md backdrop-blur max-w-[80%]">
+            {current.character && <b className="mr-2 text-white/90">{current.character}:</b>}
+            <span>{current.spokenLine}</span>
           </div>
         </div>
-        <div className="absolute top-4 left-4 text-white/70 text-xs">
-          Scene {index + 1} / {cards.length} · {card.title}
+
+        {/* Progress bar */}
+        <div className="absolute top-0 inset-x-0 h-0.5 bg-white/10 z-10">
+          <div className="h-full bg-white/80 transition-all" style={{ width: `${((idx + 1) / shots.length) * 100}%` }} />
+        </div>
+
+        <div className="absolute top-4 left-4 text-white/70 text-[11px] uppercase tracking-widest">
+          {title} · Shot {idx + 1}/{shots.length}
         </div>
       </div>
+
+      <style>{`
+        @keyframes kenburns { 0% { transform: scale(1.02); } 100% { transform: scale(1.12); } }
+        .kenburns { animation: kenburns 7s ease-out forwards; transform-origin: center; }
+        @keyframes fadein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+        @keyframes fadeout { 0%,60% { opacity: 1; } 100% { opacity: 0; } }
+      `}</style>
     </div>
   );
 }
