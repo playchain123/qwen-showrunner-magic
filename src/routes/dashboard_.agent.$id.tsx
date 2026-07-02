@@ -64,8 +64,8 @@ function AgentWorkspace() {
         ...m,
         {
           role: "agent",
-          text: `Locked. Storyboard "${story.title}" — ${story.tone}. Dispatching ${story.scenes.length} scenes to HappyHorse T2V on Qwen Cloud.`,
-          skills: ["Script Agent", "Storyboard Agent", "HappyHorse T2V"],
+          text: `Locked. Storyboard "${story.title}" — ${story.tone}. Rendering ${story.scenes.length} cinematic scenes.`,
+          skills: ["Script Agent", "Storyboard Agent", "Video Agent"],
           task: `Render ${story.scenes.length} cinematic scenes`,
         },
       ]);
@@ -124,8 +124,31 @@ function AgentWorkspace() {
       setTasks((t) => t.map((task) => ({ ...task, done: true })));
       setMessages((m) => [
         ...m,
-        { role: "agent", text: `All ${scenes.length} scenes rendered with dialogue. Master cut ready — hit ▶ Play Film.` },
+        { role: "agent", text: `Final cut is ready. Press ▶ Play Film to watch your short drama.` },
       ]);
+      // Save to library
+      try {
+        const key = "makers:library";
+        const existing = JSON.parse(localStorage.getItem(key) || "[]") as Array<Record<string, unknown>>;
+        const finalCards = await new Promise<StoryCard[]>((resolve) => {
+          setCards((c) => { resolve(c); return c; });
+        });
+        existing.unshift({
+          id,
+          title: story.title,
+          tone: story.tone,
+          createdAt: Date.now(),
+          scenes: finalCards.map((c) => ({
+            title: c.title,
+            videoUrl: c.videoUrl,
+            audioUrl: c.audioUrl,
+            caption: c.caption,
+            spokenLine: c.spokenLine,
+            character: c.character,
+          })),
+        });
+        localStorage.setItem(key, JSON.stringify(existing.slice(0, 30)));
+      } catch { /* ignore */ }
     } catch (err: unknown) {
       setThinking(false);
       const msg = err instanceof Error ? err.message : String(err);
@@ -316,7 +339,7 @@ function StoryboardCard({ card }: { card: StoryCard }) {
               </svg>
               <span className="absolute inset-0 flex items-center justify-center text-xs">{card.progress}</span>
             </div>
-            <span className="text-xs text-white/60 mt-2">HappyHorse T2V · CosyVoice</span>
+            <span className="text-xs text-white/60 mt-2">Rendering scene…</span>
           </div>
         )}
       </div>
@@ -325,8 +348,6 @@ function StoryboardCard({ card }: { card: StoryCard }) {
           {card.character && <b className="text-white/90">{card.character}: </b>}
           {card.spokenLine}
         </span>
-        <span className="px-2 py-0.5 rounded bg-white/5 text-[10px]">HappyHorse</span>
-        <span className="px-2 py-0.5 rounded bg-white/5 text-[10px]">CosyVoice</span>
       </div>
     </div>
   );
@@ -346,25 +367,45 @@ function FilmPlayer({
   const card = cards[index];
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const advancedRef = useRef(false);
+
   useEffect(() => {
-    videoRef.current?.play().catch(() => {});
-    audioRef.current?.play().catch(() => {});
+    advancedRef.current = false;
+    const v = videoRef.current;
+    const a = audioRef.current;
+    if (v) { v.currentTime = 0; v.play().catch(() => {}); }
+    if (a) { a.currentTime = 0; a.play().catch(() => {}); }
   }, [index]);
+
+  function advance() {
+    if (advancedRef.current) return;
+    advancedRef.current = true;
+    onNext();
+  }
+
   if (!card) return null;
+  const next = cards[index + 1];
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center">
-      <button onClick={onClose} className="absolute top-4 right-4 text-white/60 hover:text-white text-sm">Close ✕</button>
+      <button onClick={onClose} className="absolute top-4 right-4 text-white/60 hover:text-white text-sm z-10">Close ✕</button>
       <div className="relative w-full max-w-5xl aspect-video">
         <video
           ref={videoRef}
+          key={card.videoUrl}
           src={card.videoUrl}
           autoPlay
           playsInline
-          onEnded={onNext}
+          muted
+          onEnded={advance}
           className="absolute inset-0 h-full w-full object-contain bg-black"
         />
-        {card.audioUrl && <audio ref={audioRef} src={card.audioUrl} autoPlay onEnded={onNext} />}
-        <div className="absolute bottom-6 inset-x-0 text-center">
+        {card.audioUrl && (
+          <audio ref={audioRef} key={card.audioUrl} src={card.audioUrl} autoPlay />
+        )}
+        {next?.videoUrl && (
+          <video src={next.videoUrl} preload="auto" className="hidden" />
+        )}
+        <div className="absolute bottom-6 inset-x-0 text-center px-6">
           <div className="inline-block bg-black/70 text-white text-lg px-5 py-2 rounded-lg backdrop-blur max-w-[80%]">
             {card.character && <b className="mr-2">{card.character}:</b>}
             {card.spokenLine}

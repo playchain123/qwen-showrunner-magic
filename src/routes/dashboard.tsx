@@ -32,9 +32,9 @@ export function Sidebar() {
         <Link to="/dashboard" className="flex flex-col items-center gap-1 hover:text-white">
           <Home className="h-4 w-4" /><span>Home</span>
         </Link>
-        <button className="flex flex-col items-center gap-1 hover:text-white">
+        <Link to="/dashboard/library" className="flex flex-col items-center gap-1 hover:text-white">
           <Library className="h-4 w-4" /><span>Library</span>
-        </button>
+        </Link>
       </nav>
     </aside>
   );
