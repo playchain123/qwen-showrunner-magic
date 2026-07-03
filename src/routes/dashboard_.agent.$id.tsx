@@ -472,7 +472,7 @@ function AgentWorkspace() {
                     )}
                   </div>
 
-                  <VideoTimeline cards={cards} activeIndex={Math.max(0, cards.findIndex((c) => c.videoUrl))} />
+                  <VideoTimeline cards={cards} activeIndex={Math.max(0, readyCount - 1)} />
 
                   {referenceImages.length > 0 && (
                     <div>
