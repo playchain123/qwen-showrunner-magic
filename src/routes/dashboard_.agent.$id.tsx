@@ -1053,9 +1053,18 @@ function FilmPlayer({
       </button>
 
       <div className="relative w-screen h-screen overflow-hidden bg-black">
+        {/* Persistent poster underlay — kills the black flash between clips */}
+        {current.posterUrl && (
+          <img
+            src={current.posterUrl}
+            alt=""
+            aria-hidden
+            className="absolute inset-0 h-full w-full object-cover"
+            style={{ filter: filterForGrade(current.colorGrade) }}
+          />
+        )}
         <video
           ref={videoRef}
-          key={idx}
           autoPlay
           playsInline
           muted
@@ -1064,7 +1073,8 @@ function FilmPlayer({
           onStalled={() => {
             if (!waitingNext) setTimeout(() => videoRef.current?.play().catch(() => advance()), 900);
           }}
-          className="absolute inset-0 h-full w-full object-cover kenburns"
+          poster={current.posterUrl}
+          className="absolute inset-0 h-full w-full object-cover kenburns transition-opacity duration-500"
           style={{
             animationDuration: `${Math.max(6, current.durationSeconds || 7)}s`,
             filter: filterForGrade(current.colorGrade),
