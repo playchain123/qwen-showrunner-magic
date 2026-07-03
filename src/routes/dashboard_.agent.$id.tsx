@@ -64,8 +64,8 @@ function AgentWorkspace() {
   async function runPipeline(prompt: string) {
     setThinking(true);
     try {
-      // 1. Storyboard via Qwen (8 scenes for a real ~60s short film)
-      const story = await generateStoryboard({ data: { prompt, sceneCount: 8 } });
+      // 1. Storyboard via Qwen (5 scenes ~ 30s — faster, still cinematic)
+      const story = await generateStoryboard({ data: { prompt, sceneCount: 5 } });
       setThinking(false);
       setFilmTitle(story.title);
       setLogline(story.logline);
@@ -118,13 +118,15 @@ function AgentWorkspace() {
                 setCards((c) => c.map((card, i) => (i === idx ? { ...card, audioUrl: v.audio_url } : card)));
               })
               .catch(() => {});
-            const { task_id } = await submitVideo({ data: { prompt: s.video_prompt } });
+            const { task_id } = await submitVideo({
+              data: { prompt: s.video_prompt, model: "wan2.2-t2v-plus", size: "832*480" },
+            });
             // poll
             let attempts = 0;
-            while (attempts < 90) {
-              await new Promise((r) => setTimeout(r, 5000));
+            while (attempts < 180) {
+              await new Promise((r) => setTimeout(r, 2000));
               attempts++;
-              const p = Math.min(10 + attempts * 2, 90);
+              const p = Math.min(10 + attempts * 3, 92);
               setCards((c) => c.map((card, i) => (i === idx ? { ...card, progress: p } : card)));
               const status = await pollVideo({ data: { task_id } });
               if (status.status === "SUCCEEDED" && status.video_url) {
