@@ -4,6 +4,7 @@ import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX, Download,
 import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateSceneImage } from "@/lib/qwen.functions";
+import { pickBgm } from "@/lib/free-sounds";
 
 export const Route = createFileRoute("/dashboard_/agent/$id")({
   ssr: false,
@@ -12,6 +13,14 @@ export const Route = createFileRoute("/dashboard_/agent/$id")({
 
 type ChatMsg = { role: "user" | "agent"; text: string; skills?: string[]; task?: string };
 type ReferenceImage = { name: string; dataUrl: string; description?: string };
+type CharacterBible = {
+  name: string;
+  descriptor: string;
+  skin: string;
+  hair: string;
+  eyes: string;
+  wardrobe: string;
+};
 type StoryCard = {
   title: string;
   progress: number;
@@ -50,6 +59,8 @@ function AgentWorkspace() {
   const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
   const [refWeight, setRefWeight] = useState<number>(0.75);
   const [openScene, setOpenScene] = useState<number | null>(null);
+  const [bibleOpen, setBibleOpen] = useState(false);
+  const [bibleBusy, setBibleBusy] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
   const startedRef = useRef(false);
@@ -331,6 +342,30 @@ function AgentWorkspace() {
     setReferenceImages((prev) => [...prev, ...loaded].slice(0, 8));
   }
 
+  async function buildCharacterBible(b: CharacterBible) {
+    setBibleBusy(true);
+    try {
+      const lockedPrompt = [
+        `Cinematic character reference sheet, 35mm film still, plain neutral studio backdrop.`,
+        `Character: ${b.name}. ${b.descriptor}.`,
+        `Skin tone: ${b.skin}. Hair: ${b.hair}. Eye color: ${b.eyes}. Wardrobe: ${b.wardrobe}.`,
+        `Show THREE full-body views side-by-side: front, three-quarter, profile. Same identical face, wardrobe and lighting in all three. Professional lookbook.`,
+      ].join(" ");
+      const img = await generateSceneImage({ data: { prompt: lockedPrompt, referenceImages: [], referenceWeight: 1 } });
+      const bibleRef: ReferenceImage = {
+        name: `bible-${b.name.replace(/\s+/g, "-").toLowerCase() || "hero"}.png`,
+        dataUrl: img.image_url,
+        description: `Locked character bible for ${b.name || "hero"}: ${b.descriptor}. Match face, wardrobe and colors EXACTLY in every scene.`,
+      };
+      setReferenceImages((prev) => [bibleRef, ...prev].slice(0, 8));
+      setBibleOpen(false);
+    } catch (err) {
+      alert("Character bible failed: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setBibleBusy(false);
+    }
+  }
+
   function exportProject() {
     downloadText(
       `${slugify(filmTitle || "makers-film")}-project.json`,
@@ -406,6 +441,9 @@ function AgentWorkspace() {
                   />
                   <button onClick={() => uploadRef.current?.click()} className="h-7 w-7 rounded-full border border-white/10 hover:bg-white/10 flex items-center justify-center" title="Add character reference images">
                     <Plus className="h-3.5 w-3.5" />
+                  </button>
+                  <button onClick={() => setBibleOpen(true)} className="h-7 rounded-full border border-white/10 hover:bg-white/10 px-2 text-[11px] text-white/80" title="Build a locked character bible">
+                    ✦ Character
                   </button>
                   {referenceImages.length > 0 && <span className="text-[11px] text-white/50">{referenceImages.length} refs</span>}
                   <div className="flex items-center gap-2">
@@ -592,7 +630,54 @@ function AgentWorkspace() {
       {openScene !== null && cards[openScene] && (
         <SceneDetail card={cards[openScene]} index={openScene} total={cards.length} onClose={() => setOpenScene(null)} />
       )}
+      {bibleOpen && (
+        <CharacterBibleModal busy={bibleBusy} onClose={() => setBibleOpen(false)} onBuild={buildCharacterBible} />
+      )}
     </div>
+  );
+}
+
+function CharacterBibleModal({ busy, onClose, onBuild }: { busy: boolean; onClose: () => void; onBuild: (b: CharacterBible) => void }) {
+  const [b, setB] = useState<CharacterBible>({
+    name: "",
+    descriptor: "Weathered detective, early 50s, stoic",
+    skin: "#c9a888",
+    hair: "#2b2b2b",
+    eyes: "#3a2a1c",
+    wardrobe: "#4a2f1e",
+  });
+  return (
+    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-6" onClick={onClose}>
+      <div className="max-w-lg w-full rounded-2xl border border-white/10 bg-neutral-950 p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-xs text-white/50 uppercase tracking-widest">Character Bible</div>
+            <div className="text-lg font-medium text-white">Lock your hero's look</div>
+          </div>
+          <button onClick={onClose} className="text-white/60 hover:text-white text-sm">Close ✕</button>
+        </div>
+        <p className="text-xs text-white/60 leading-relaxed">Generates a reference sheet (front / three-quarter / profile) and injects it as a locked reference into every scene render — the biggest lever for character consistency.</p>
+        <input value={b.name} onChange={(e) => setB({ ...b, name: e.target.value })} placeholder="Character name (e.g. Silas)" className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white outline-none focus:border-white/30" />
+        <textarea value={b.descriptor} onChange={(e) => setB({ ...b, descriptor: e.target.value })} rows={2} placeholder="Free-text description (age, build, ethnicity, energy)" className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm text-white outline-none focus:border-white/30" />
+        <div className="grid grid-cols-4 gap-2 text-[11px] text-white/70">
+          <ColorField label="Skin" value={b.skin} onChange={(v) => setB({ ...b, skin: v })} />
+          <ColorField label="Hair" value={b.hair} onChange={(v) => setB({ ...b, hair: v })} />
+          <ColorField label="Eyes" value={b.eyes} onChange={(v) => setB({ ...b, eyes: v })} />
+          <ColorField label="Wardrobe" value={b.wardrobe} onChange={(v) => setB({ ...b, wardrobe: v })} />
+        </div>
+        <button disabled={busy} onClick={() => onBuild(b)} className="w-full h-10 rounded-md bg-white text-black text-sm font-medium disabled:opacity-60">
+          {busy ? "Generating character sheet…" : "Generate & lock character"}
+        </button>
+      </div>
+    </div>
+  );
+}
+function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span>{label}</span>
+      <input type="color" value={value} onChange={(e) => onChange(e.target.value)} className="h-8 w-full rounded border border-white/10 bg-transparent cursor-pointer" />
+    </label>
   );
 }
 
