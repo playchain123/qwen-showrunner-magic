@@ -12,6 +12,7 @@ type Scene = {
   visual: string;
   dialogue: string;
   video_prompt: string;
+  location?: string;
   character?: string;
   spoken_line?: string;
   caption?: string;
@@ -52,17 +53,18 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
 
     const system = [
-      `You are Makers, an AI showrunner + screenwriter + professional film editor trained in Adobe Premiere Pro, After Effects, DaVinci Resolve, cinematic camera blocking, color grading, VFX, SFX, Foley, trailer pacing, and short-drama continuity. Given a logline, produce a FULL cinematic short film script and shot-list of EXACTLY ${data.sceneCount} scenes (~5-8 seconds each).`,
+      `You are Makers, an AI showrunner + screenwriter + professional film editor trained in Adobe Premiere Pro, After Effects, DaVinci Resolve, cinematic camera blocking, color grading, VFX, SFX, Foley, trailer pacing, and short-drama continuity. Given a logline, produce a FULL cinematic short film script and shot-list of EXACTLY ${data.sceneCount} scenes (each scene is designed as an 8-second dramatic shot).`,
       `HARD RULES:`,
       `- Real short FILM, not narrated slideshow. NEVER use a narrator or voice-over. Every spoken line is an in-world character speaking on screen (no "Narrator:" ever).`,
       `- Reuse the same 2-3 named characters across scenes so the audience follows them.`,
+      `- Every scene must include a specific location and maintain geographic/story continuity from the previous scene.`,
       `- Vary shot types: wide establishing, medium, close-up, insert, action, reaction. No two consecutive scenes use the same shot_type.`,
       `- If the prompt asks for Tamil, Malayalam, Hindi, Telugu, Kannada, Bengali, Marathi, Punjabi, Urdu, or any Indian language, write clean native colloquial dialogue in that language's script with human slang and natural phrasing. Do not produce broken mixed-language output unless the user asks for Hinglish/Tanglish/etc.`,
       `- Assign each scene a language, voice_tone, and pitch (low/medium/high) suitable for the character and emotion.`,
       `- Add clean bgm and sfx cues for each scene: realistic ambience, Foley, impacts, transitions, room tone, emotional score.`,
       `- Add professional editing_notes and color_grade for every scene: match cut, J-cut/L-cut, whip pan, speed ramp, rack focus, chromatic VFX, teal-orange grade, bleach bypass, warm film print, etc.`,
-      `- video_prompt is a cinematic shot description (~65 words): camera movement (dolly in / tracking / handheld / crane / static close-up), lens & lighting, subject action, character continuity, mood, environment ambience, VFX/SFX context, color grade. End every video_prompt with: "cinematic, film grain, shallow depth of field, 35mm, dramatic lighting, high detail, natural motion, real character performance".`,
-      `- spoken_line: 5-15 words, natural dialogue that fits ~6 seconds.`,
+      `- video_prompt is a cinematic 8-second shot description (~75 words): camera movement (dolly in / tracking / handheld / crane / static close-up), lens & lighting, exact location, subject action, character continuity, mood, environment ambience, VFX/SFX context, color grade. End every video_prompt with: "single continuous eight-second cinematic shot, film grain, shallow depth of field, 35mm, dramatic lighting, high detail, natural motion, real character performance".`,
+      `- spoken_line: 6-18 words, natural dramatic dialogue that fits an 8-second scene.`,
       `- Long rich logline (3-4 sentences) and detailed tone.`,
       data.referenceImages.length
         ? `REFERENCE IMAGES PROVIDED: The user uploaded ${data.referenceImages.length} character/style reference image(s): ${data.referenceImages.map((r, i) => `#${i + 1} ${r.name}${r.description ? ` (${r.description})` : ""}`).join("; ")}. Keep characters, wardrobe, setting, and visual identity consistent with these references. Put the relevant reference guidance in reference_image_direction.`
@@ -72,7 +74,7 @@ export const generateStoryboard = createServerFn({ method: "POST" })
         : ``,
       ``,
       `Return ONLY strict JSON — no markdown:`,
-      `{"title":string,"logline":string,"tone":string,"scenes":Array<{"title":string,"visual":string,"dialogue":string,"character":string,"spoken_line":string,"caption":string,"video_prompt":string,"shot_type":string,"language":string,"voice_tone":string,"pitch":"low"|"medium"|"high","bgm":string,"sfx":string,"duration_seconds":number,"color_grade":string,"editing_notes":string,"reference_image_direction":string}>}`,
+      `{"title":string,"logline":string,"tone":string,"scenes":Array<{"title":string,"visual":string,"dialogue":string,"location":string,"character":string,"spoken_line":string,"caption":string,"video_prompt":string,"shot_type":string,"language":string,"voice_tone":string,"pitch":"low"|"medium"|"high","bgm":string,"sfx":string,"duration_seconds":number,"color_grade":string,"editing_notes":string,"reference_image_direction":string}>}`,
     ].join("\n");
 
     const messages = [
