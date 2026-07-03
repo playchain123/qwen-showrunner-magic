@@ -442,9 +442,6 @@ function AgentWorkspace() {
                   <button onClick={() => uploadRef.current?.click()} className="h-7 w-7 rounded-full border border-white/10 hover:bg-white/10 flex items-center justify-center" title="Add character reference images">
                     <Plus className="h-3.5 w-3.5" />
                   </button>
-                  <button onClick={() => setBibleOpen(true)} className="h-7 rounded-full border border-white/10 hover:bg-white/10 px-2 text-[11px] text-white/80" title="Build a locked character bible">
-                    ✦ Character
-                  </button>
                   {referenceImages.length > 0 && <span className="text-[11px] text-white/50">{referenceImages.length} refs</span>}
                   <div className="flex items-center gap-2">
                     <span className="text-[11px] text-white/50">Makers lite ▾</span>
