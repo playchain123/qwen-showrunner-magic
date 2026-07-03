@@ -812,7 +812,11 @@ function VideoTimeline({ cards, activeIndex, onScene }: { cards: StoryCard[]; ac
 function getSequentialReadyCards(cards: StoryCard[]) {
   const ready: StoryCard[] = [];
   for (const card of cards) {
-    if (!card.done || !card.videoUrl) break;
+    // Play every scene that has SOMETHING to show. A scene with only a
+    // poster (video still rendering) plays as a still with dialogue + BGM
+    // for its duration, then advances — so the full film is watchable
+    // end-to-end instead of stopping at the first un-rendered shot.
+    if (!card.videoUrl && !card.posterUrl) break;
     ready.push(card);
   }
   return ready;
