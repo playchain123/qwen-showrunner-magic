@@ -185,8 +185,23 @@ function DashboardHome() {
 
 function fileToReferenceImage(file: File) {
   return new Promise<{ name: string; dataUrl: string; description: string }>((resolve, reject) => {
+    const img = new Image();
     const reader = new FileReader();
-    reader.onload = () => resolve({ name: file.name, dataUrl: String(reader.result), description: "character/style reference" });
+    reader.onload = () => {
+      img.onload = () => {
+        const max = 720;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return reject(new Error("Could not process image"));
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve({ name: file.name, dataUrl: canvas.toDataURL("image/jpeg", 0.72), description: "character/style reference" });
+      };
+      img.onerror = reject;
+      img.src = String(reader.result);
+    };
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
