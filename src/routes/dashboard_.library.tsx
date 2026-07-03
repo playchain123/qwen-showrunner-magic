@@ -182,7 +182,7 @@ function LibraryFilmPlayer({
         <div className="absolute inset-x-0 top-0 h-[5%] bg-black pointer-events-none" />
         <div className="absolute inset-x-0 bottom-0 h-[5%] bg-black pointer-events-none" />
         <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: "inset 0 0 200px rgba(0,0,0,0.75)" }} />
-        <div className="absolute bottom-[10%] inset-x-0 text-center px-6">
+        <div className="absolute bottom-[20%] inset-x-0 text-center px-6">
           <div className="inline-block bg-black/70 text-white text-lg px-5 py-2 rounded-lg backdrop-blur max-w-[80%]">
             {scene.character && <b className="mr-2">{scene.character}:</b>}
             {scene.spokenLine}
