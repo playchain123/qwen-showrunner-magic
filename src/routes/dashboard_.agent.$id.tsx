@@ -497,7 +497,7 @@ function AgentWorkspace() {
                 <>
                   {/* Big stage */}
                   <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-neutral-950 border border-white/10">
-                    {firstReady ? (
+                    {allDone && firstReady ? (
                       <button
                         onClick={() => setPlayingFilm(true)}
                         className="group absolute inset-0"
@@ -516,7 +516,7 @@ function AgentWorkspace() {
                             <Play className="h-6 w-6 ml-1" fill="currentColor" />
                           </div>
                           <div className="mt-4 text-white text-lg font-medium drop-shadow">{filmTitle}</div>
-                          <div className="mt-1 text-white/70 text-xs">{allDone ? "Final cut ready" : `Progressive playback ready · ${readyCount}/${cards.length} shots`} · dialogue + score</div>
+                          <div className="mt-1 text-white/70 text-xs">Final cut ready · all {cards.length} scenes rendered · dialogue + score</div>
                         </div>
                       </button>
                     ) : (
@@ -539,13 +539,13 @@ function AgentWorkspace() {
                           </svg>
                           <span className="absolute inset-0 flex items-center justify-center text-sm">{totalProgress}%</span>
                         </div>
-                        <div className="relative text-sm text-white/80">Building first playable shot…</div>
-                        <div className="relative text-[11px] text-white/50">Storyboard posters appear first · then video renders in</div>
+                        <div className="relative text-sm text-white/80">Rendering the full film before playback…</div>
+                        <div className="relative text-[11px] text-white/50">{renderedCount}/{cards.length} videos finished · play unlocks only when every scene is ready</div>
                       </div>
                     )}
                   </div>
 
-                  <VideoTimeline cards={cards} activeIndex={Math.max(0, readyCount - 1)} onScene={setOpenScene} />
+                  <ContextPanel cards={cards} title={filmTitle} logline={logline} onScene={setOpenScene} />
 
                   {referenceImages.length > 0 && (
                     <div>
@@ -577,34 +577,6 @@ function AgentWorkspace() {
                     </p>
                   )}
 
-                  {/* Shot filmstrip */}
-                  <div>
-                    <div className="text-[11px] uppercase tracking-wider text-white/40 mb-2">Timeline slides · {cards.filter(c=>c.done).length}/{cards.length}</div>
-                    <div className="grid grid-cols-4 gap-2">
-                      {cards.map((c, i) => (
-                        <button key={i} onClick={() => setOpenScene(i)} className="relative aspect-video rounded-md overflow-hidden bg-neutral-900 border border-white/5 hover:border-white/30 transition text-left">
-                          {c.videoUrl && c.done ? (
-                            <video src={c.videoUrl} muted playsInline className="absolute inset-0 h-full w-full object-cover" />
-                          ) : c.posterUrl ? (
-                            <img src={c.posterUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
-                          ) : (
-                            <div className="absolute inset-0 flex items-center justify-center text-[10px] text-white/40">{c.progress}%</div>
-                          )}
-                          {!c.done && (
-                            <div className="absolute inset-x-0 bottom-0 h-0.5 bg-white/10">
-                              <div className="h-full bg-emerald-400 transition-all" style={{ width: `${c.progress}%` }} />
-                            </div>
-                          )}
-                          <div className="absolute top-1 right-1 flex gap-1">
-                            {c.audioUrl && <span className="text-[9px] bg-black/70 text-white/80 px-1 rounded">🎙</span>}
-                            {c.bgm && <span className="text-[9px] bg-black/70 text-white/80 px-1 rounded">♪</span>}
-                          </div>
-                          <div className="absolute bottom-1 left-1 text-[9px] text-white/80 bg-black/60 px-1 rounded">#{i + 1}{c.shotType ? ` · ${c.shotType}` : ""}</div>
-                          <div className="absolute top-1 left-1 text-[9px] text-white/70 bg-black/60 px-1 rounded">{c.language || "dialogue"}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
                 </>
               )}
             </div>
