@@ -894,3 +894,25 @@ function formatTime(seconds: number) {
   const s = safe % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
 }
+
+function playSceneAccent(ctx: AudioContext | null, cue: string) {
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.05, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
+    gain.connect(ctx.destination);
+    const osc = ctx.createOscillator();
+    const lowerCue = cue.toLowerCase();
+    osc.type = lowerCue.includes("rain") || lowerCue.includes("wind") ? "sine" : "triangle";
+    osc.frequency.setValueAtTime(lowerCue.includes("impact") || lowerCue.includes("hit") ? 72 : 146, now);
+    osc.frequency.exponentialRampToValueAtTime(lowerCue.includes("rise") ? 220 : 54, now + 0.5);
+    osc.connect(gain);
+    osc.start(now);
+    osc.stop(now + 0.7);
+  } catch {
+    // audio accent is optional
+  }
+}
