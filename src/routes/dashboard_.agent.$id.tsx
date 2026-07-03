@@ -1089,7 +1089,6 @@ function FilmPlayer({
           ref={videoRef}
           autoPlay
           playsInline
-          muted
           onEnded={advance}
           onError={advance}
           onStalled={() => {
