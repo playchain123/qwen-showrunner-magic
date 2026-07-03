@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX, Download, ImagePlus, Scissors } from "lucide-react";
+import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX, Download, ImagePlus, BookOpen } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateSceneImage } from "@/lib/qwen.functions";
@@ -29,6 +29,7 @@ type StoryCard = {
   audioUrl?: string;
   posterUrl?: string;
   visual?: string;
+  location?: string;
   caption: string;
   spokenLine: string;
   character: string;
@@ -68,10 +69,10 @@ function AgentWorkspace() {
   const totalProgress = cards.length
     ? Math.round(cards.reduce((s, c) => s + c.progress, 0) / cards.length)
     : 0;
-  const allDone = cards.length > 0 && cards.every((c) => c.done);
-  const playableCards = getSequentialReadyCards(cards);
-  const readyCount = playableCards.length;
-  const canPlay = readyCount >= 1;
+  const renderedCount = cards.filter((c) => c.done && c.videoUrl).length;
+  const allDone = cards.length > 0 && renderedCount === cards.length;
+  const playableCards = getRenderedCards(cards);
+  const canPlay = allDone;
   const firstReady = playableCards[0];
 
   // auth + seed
@@ -162,7 +163,7 @@ function AgentWorkspace() {
         ...m,
         {
           role: "agent",
-          text: `🎬 "${story.title}"\n${story.logline}\n\nTone: ${story.tone}\n\nRolling ${story.scenes.length} cinematic shots into a timeline — dialogue, Foley, score, color grade, VFX cues and clean scene continuity are saved to this session.`,
+          text: `🎬 "${story.title}"\n${story.logline}\n\nTone: ${story.tone}\n\nRendering all ${story.scenes.length} cinematic shots together — playback stays locked until every scene video, dialogue, Foley, score, color grade, VFX cue and continuity note is complete.`,
           skills: ["Script Agent", "Shot-list Agent", "Casting & Voice Agent", "Cinematography Agent", "Premiere Pro Edit Agent", "After Effects VFX Agent", "DaVinci Color Agent", "SFX / Foley Agent", "Learning Memory Agent"],
           task: `Cut ${story.scenes.length} shots into a short film`,
         },
@@ -170,7 +171,7 @@ function AgentWorkspace() {
       setTasks([
         { text: `Render ${story.scenes.length} cinematic shots`, done: false },
         { text: `Cast clean human dialogue voices`, done: false },
-        { text: `Build timeline: cuts, J/L-cuts, VFX, score, SFX`, done: false },
+        { text: `Build context: storyline, shots, locations, dialogue, edit notes`, done: false },
       ]);
 
       // 2. Add cards + submit videos in parallel
@@ -179,6 +180,7 @@ function AgentWorkspace() {
         scenes.map((s, i) => ({
           title: `#${i + 1} ${s.title}`,
           visual: s.visual,
+          location: (s as { location?: string }).location,
           caption: s.caption || s.spoken_line || s.dialogue,
           spokenLine: s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, ""),
           character: s.character || "",
@@ -188,7 +190,7 @@ function AgentWorkspace() {
           pitch: s.pitch,
           bgm: s.bgm,
           sfx: s.sfx,
-          durationSeconds: s.duration_seconds || 7,
+          durationSeconds: s.duration_seconds || 8,
           colorGrade: s.color_grade,
           editingNotes: s.editing_notes,
           referenceImageDirection: s.reference_image_direction,
@@ -239,15 +241,16 @@ function AgentWorkspace() {
             })
               .then((v) => {
                 setCards((c) => c.map((card, i) => (i === idx ? { ...card, audioUrl: v.audio_url } : card)));
-                setTasks((t) => t.map((task, taskIndex) => (taskIndex === 1 ? { ...task, done: true } : task)));
               })
               .catch(() => {});
             const fullPrompt = [
               s.video_prompt,
+              (s as { location?: string }).location ? `Exact location continuity: ${(s as { location?: string }).location}` : "",
               s.reference_image_direction ? `Character/style reference: ${s.reference_image_direction}` : "",
               s.editing_notes ? `Professional edit intent: ${s.editing_notes}` : "",
               s.color_grade ? `Color grade: ${s.color_grade}` : "",
               s.sfx ? `On-screen action must support these clean SFX cues: ${s.sfx}` : "",
+              `This is scene ${idx + 1} of ${scenes.length} in the same short film. Preserve the same characters, wardrobe, lighting mood, location geography, emotional continuity and storyline from the surrounding scenes. Render as one continuous 8-second cinematic shot.`,
             ].filter(Boolean).join("\n");
             const { task_id } = await submitVideo({
               data: { prompt: fullPrompt, size: "832*480", model: "wan2.2-t2v-plus" },
@@ -265,7 +268,6 @@ function AgentWorkspace() {
                 setCards((c) =>
                   c.map((card, i) => (i === idx ? { ...card, progress: 100, done: true, videoUrl: status.video_url } : card)),
                 );
-                setTasks((t) => t.map((task, taskIndex) => (taskIndex === 0 ? { ...task, done: true } : task)));
                 return;
               }
               if (status.status === "FAILED") throw new Error(status.error || "Task failed");
@@ -274,6 +276,7 @@ function AgentWorkspace() {
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
             setCards((c) => c.map((card, i) => (i === idx ? { ...card, caption: `${card.caption}\n⚠ ${msg}` } : card)));
+            throw new Error(`Scene ${idx + 1} failed: ${msg}`);
           }
         }),
       );
@@ -281,7 +284,7 @@ function AgentWorkspace() {
       setTasks((t) => t.map((task) => ({ ...task, done: true })));
       setMessages((m) => [
         ...m,
-        { role: "agent", text: `Final cut is locked — ~${story.scenes.length * 6}s short film with dialogue, ambient sound and score. Press ▶ Play Film.` },
+        { role: "agent", text: `Final cut is locked — ~${story.scenes.length * 8}s full film with every video scene rendered, dialogue mixed, ambient sound and score ready. Press ▶ Play Film.` },
       ]);
       // Auto-play once ready
       setTimeout(() => setPlayingFilm(true), 400);
@@ -303,6 +306,7 @@ function AgentWorkspace() {
             videoUrl: c.videoUrl,
             audioUrl: c.audioUrl,
             visual: c.visual,
+            location: c.location,
             caption: c.caption,
             spokenLine: c.spokenLine,
             character: c.character,
@@ -374,14 +378,16 @@ function AgentWorkspace() {
     );
   }
 
-  function exportTimeline() {
-    const timeline = cards.map((c, i) => {
-      const start = cards.slice(0, i).reduce((sum, s) => sum + (s.durationSeconds || 7), 0);
-      const end = start + (c.durationSeconds || 7);
+  function exportContext() {
+    const context = cards.map((c, i) => {
+      const start = cards.slice(0, i).reduce((sum, s) => sum + (s.durationSeconds || 8), 0);
+      const end = start + (c.durationSeconds || 8);
       return [
         `SCENE ${i + 1}: ${c.title.replace(/^#\d+\s*/, "")}`,
         `TIME: ${formatTime(start)} - ${formatTime(end)}`,
+        `LOCATION: ${c.location || "story location"}`,
         `SHOT: ${c.shotType || "cinematic"}`,
+        `STORYLINE: ${c.visual || c.caption}`,
         `DIALOGUE: ${c.character ? `${c.character}: ` : ""}${c.spokenLine}`,
         `VOICE: ${c.language || "English"}, ${c.voiceTone || "natural"}, ${c.pitch || "medium"} pitch`,
         `BGM: ${c.bgm || "cinematic score"}`,
@@ -391,7 +397,7 @@ function AgentWorkspace() {
         `VIDEO: ${c.videoUrl || "rendering"}`,
       ].join("\n");
     }).join("\n\n---\n\n");
-    downloadText(`${slugify(filmTitle || "makers-film")}-timeline.txt`, `${filmTitle}\n${logline}\n\n${timeline}`, "text/plain");
+    downloadText(`${slugify(filmTitle || "makers-film")}-context.txt`, `${filmTitle}\n${logline}\n\n${context}`, "text/plain");
   }
 
   return (
@@ -462,8 +468,8 @@ function AgentWorkspace() {
               <span className="text-white/60 truncate">{filmTitle || "Untitled"}</span>
               {cards.length > 0 && (
                 <div className="ml-auto flex items-center gap-2">
-                  <button onClick={exportTimeline} className="flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1 text-[11px] text-white/75 hover:bg-white/10">
-                    <Scissors className="h-3 w-3" /> Timeline
+                  <button onClick={exportContext} className="flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1 text-[11px] text-white/75 hover:bg-white/10">
+                    <BookOpen className="h-3 w-3" /> Context
                   </button>
                   <button onClick={exportProject} className="flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1 text-[11px] text-white/75 hover:bg-white/10">
                     <Download className="h-3 w-3" /> Export
@@ -475,7 +481,7 @@ function AgentWorkspace() {
                   onClick={() => setPlayingFilm(true)}
                   className="flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium hover:bg-white/90"
                 >
-                  <Film className="h-3 w-3" /> {allDone ? "Play Film" : `Play (${readyCount}/${cards.length})`}
+                  <Film className="h-3 w-3" /> Play Full Film
                 </button>
               )}
             </div>
@@ -489,7 +495,7 @@ function AgentWorkspace() {
                 <>
                   {/* Big stage */}
                   <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-neutral-950 border border-white/10">
-                    {firstReady ? (
+                    {allDone && firstReady ? (
                       <button
                         onClick={() => setPlayingFilm(true)}
                         className="group absolute inset-0"
@@ -508,7 +514,7 @@ function AgentWorkspace() {
                             <Play className="h-6 w-6 ml-1" fill="currentColor" />
                           </div>
                           <div className="mt-4 text-white text-lg font-medium drop-shadow">{filmTitle}</div>
-                          <div className="mt-1 text-white/70 text-xs">{allDone ? "Final cut ready" : `Progressive playback ready · ${readyCount}/${cards.length} shots`} · dialogue + score</div>
+                          <div className="mt-1 text-white/70 text-xs">Final cut ready · all {cards.length} scenes rendered · dialogue + score</div>
                         </div>
                       </button>
                     ) : (
@@ -531,13 +537,13 @@ function AgentWorkspace() {
                           </svg>
                           <span className="absolute inset-0 flex items-center justify-center text-sm">{totalProgress}%</span>
                         </div>
-                        <div className="relative text-sm text-white/80">Building first playable shot…</div>
-                        <div className="relative text-[11px] text-white/50">Storyboard posters appear first · then video renders in</div>
+                        <div className="relative text-sm text-white/80">Rendering the full film before playback…</div>
+                        <div className="relative text-[11px] text-white/50">{renderedCount}/{cards.length} videos finished · play unlocks only when every scene is ready</div>
                       </div>
                     )}
                   </div>
 
-                  <VideoTimeline cards={cards} activeIndex={Math.max(0, readyCount - 1)} onScene={setOpenScene} />
+                  <ContextPanel cards={cards} title={filmTitle} logline={logline} onScene={setOpenScene} />
 
                   {referenceImages.length > 0 && (
                     <div>
@@ -569,34 +575,6 @@ function AgentWorkspace() {
                     </p>
                   )}
 
-                  {/* Shot filmstrip */}
-                  <div>
-                    <div className="text-[11px] uppercase tracking-wider text-white/40 mb-2">Timeline slides · {cards.filter(c=>c.done).length}/{cards.length}</div>
-                    <div className="grid grid-cols-4 gap-2">
-                      {cards.map((c, i) => (
-                        <button key={i} onClick={() => setOpenScene(i)} className="relative aspect-video rounded-md overflow-hidden bg-neutral-900 border border-white/5 hover:border-white/30 transition text-left">
-                          {c.videoUrl && c.done ? (
-                            <video src={c.videoUrl} muted playsInline className="absolute inset-0 h-full w-full object-cover" />
-                          ) : c.posterUrl ? (
-                            <img src={c.posterUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
-                          ) : (
-                            <div className="absolute inset-0 flex items-center justify-center text-[10px] text-white/40">{c.progress}%</div>
-                          )}
-                          {!c.done && (
-                            <div className="absolute inset-x-0 bottom-0 h-0.5 bg-white/10">
-                              <div className="h-full bg-emerald-400 transition-all" style={{ width: `${c.progress}%` }} />
-                            </div>
-                          )}
-                          <div className="absolute top-1 right-1 flex gap-1">
-                            {c.audioUrl && <span className="text-[9px] bg-black/70 text-white/80 px-1 rounded">🎙</span>}
-                            {c.bgm && <span className="text-[9px] bg-black/70 text-white/80 px-1 rounded">♪</span>}
-                          </div>
-                          <div className="absolute bottom-1 left-1 text-[9px] text-white/80 bg-black/60 px-1 rounded">#{i + 1}{c.shotType ? ` · ${c.shotType}` : ""}</div>
-                          <div className="absolute top-1 left-1 text-[9px] text-white/70 bg-black/60 px-1 rounded">{c.language || "dialogue"}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
                 </>
               )}
             </div>
@@ -702,11 +680,12 @@ function SceneDetail({ card, index, total, onClose }: { card: StoryCard; index: 
           {card.visual && <p className="text-white/70 leading-relaxed">{card.visual}</p>}
           <div className="grid grid-cols-2 gap-3 text-xs text-white/70">
             <Detail label="Shot" value={card.shotType} />
+            <Detail label="Location" value={card.location} />
             <Detail label="Character" value={card.character} />
             <Detail label="Language" value={card.language} />
             <Detail label="Voice tone" value={card.voiceTone} />
             <Detail label="Pitch" value={card.pitch} />
-            <Detail label="Duration" value={`${card.durationSeconds || 7}s`} />
+            <Detail label="Duration" value={`${card.durationSeconds || 8}s`} />
             <Detail label="Color grade" value={card.colorGrade} />
             <Detail label="Editing note" value={card.editingNotes} />
             <Detail label="BGM" value={card.bgm} />
@@ -762,64 +741,66 @@ function MessageBubble({ msg }: { msg: ChatMsg }) {
   );
 }
 
-function VideoTimeline({ cards, activeIndex, onScene }: { cards: StoryCard[]; activeIndex: number; onScene?: (i: number) => void }) {
+function ContextPanel({ cards, title, logline, onScene }: { cards: StoryCard[]; title: string; logline: string; onScene?: (i: number) => void }) {
   const total = cards.reduce((sum, card) => sum + (card.durationSeconds || 8), 0) || cards.length * 8 || 1;
-  let cursor = 0;
+  const rendered = cards.filter((card) => card.done && card.videoUrl).length;
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
-      <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-wider text-white/40">
-        <span>Video timeline</span>
-        <span>{formatTime(total)} · {cards.length} scenes</span>
+    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-white/40">
+            <BookOpen className="h-3 w-3" /> Context
+          </div>
+          <h2 className="mt-1 text-lg font-medium text-white">{title || "Story context"}</h2>
+        </div>
+        <div className="text-right text-[11px] text-white/50">
+          <div>{formatTime(total)} · {cards.length} scenes</div>
+          <div>{rendered}/{cards.length} videos rendered</div>
+        </div>
       </div>
-      <div className="flex h-20 overflow-hidden rounded-md border border-white/10 bg-black">
-        {cards.map((card, index) => {
-          const start = cursor;
-          const duration = card.durationSeconds || 8;
-          cursor += duration;
-          return (
-            <button
-              type="button"
-              onClick={() => onScene?.(index)}
-              key={index}
-              className={`relative border-r border-black/70 overflow-hidden group ${index === activeIndex ? "ring-1 ring-inset ring-white/60" : ""}`}
-              style={{ width: `${Math.max(8, (duration / total) * 100)}%` }}
-              title={`${card.title} · ${formatTime(start)}-${formatTime(start + duration)}`}
-            >
-              {card.posterUrl || card.videoUrl ? (
-                card.videoUrl && card.done ? (
-                  <video src={card.videoUrl} muted playsInline className="absolute inset-0 h-full w-full object-cover opacity-80 group-hover:opacity-100" />
-                ) : (
-                  <img src={card.posterUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-80 group-hover:opacity-100" />
-                )
-              ) : (
-                <div className="absolute inset-0 bg-white/5" />
-              )}
-              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent" />
-              <div className={`absolute inset-x-1 top-1 h-1 rounded-sm ${card.done ? "bg-emerald-400" : "bg-white/40"}`}
-                   style={{ width: `${Math.max(8, card.progress)}%` }} />
-              <div className="absolute bottom-1 left-1 right-1 truncate text-[10px] text-white drop-shadow">#{index + 1} {card.shotType || "shot"}</div>
-              <div className="absolute top-1.5 right-1 flex gap-0.5">
-                {card.audioUrl && <span className="text-[8px] bg-black/70 text-white px-1 rounded">🎙</span>}
+      {logline && <p className="text-sm text-white/70 leading-relaxed">{logline}</p>}
+      <div className="space-y-3">
+        {cards.map((card, index) => (
+          <button
+            key={index}
+            type="button"
+            onClick={() => onScene?.(index)}
+            className="w-full rounded-lg border border-white/10 bg-black/25 p-3 text-left hover:border-white/25 transition"
+          >
+            <div className="flex items-center gap-3">
+              <span className={`h-6 w-6 shrink-0 rounded-full border flex items-center justify-center text-[11px] ${card.done && card.videoUrl ? "border-emerald-400 bg-emerald-400 text-black" : "border-white/20 text-white/50"}`}>
+                {card.done && card.videoUrl ? <Check className="h-3.5 w-3.5" /> : index + 1}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="font-medium text-white">Scene {index + 1}: {card.title.replace(/^#\d+\s*/, "")}</span>
+                  <span className="text-[11px] text-white/45">{card.shotType || "cinematic shot"}</span>
+                  <span className="text-[11px] text-white/45">{card.location || "story location"}</span>
+                </div>
+                <p className="mt-1 line-clamp-2 text-xs text-white/65">{card.visual || card.caption}</p>
               </div>
-            </button>
-          );
-        })}
+              <div className="text-right text-[11px] text-white/45">
+                <div>{card.durationSeconds || 8}s</div>
+                <div>{card.done && card.videoUrl ? "rendered" : `${card.progress}%`}</div>
+              </div>
+            </div>
+            <div className="mt-3 rounded-md bg-white/[0.04] px-3 py-2 text-xs text-white/75">
+              {card.character && <b className="mr-1 text-white/90">{card.character}:</b>}{card.spokenLine}
+            </div>
+            <div className="mt-2 grid gap-2 text-[11px] text-white/45 sm:grid-cols-3">
+              <span>BGM: {card.bgm || "cinematic score"}</span>
+              <span>SFX: {card.sfx || "Foley"}</span>
+              <span>Edit: {card.editingNotes || "continuity cut"}</span>
+            </div>
+          </button>
+        ))}
       </div>
     </div>
   );
 }
 
-function getSequentialReadyCards(cards: StoryCard[]) {
-  const ready: StoryCard[] = [];
-  for (const card of cards) {
-    // Play every scene that has SOMETHING to show. A scene with only a
-    // poster (video still rendering) plays as a still with dialogue + BGM
-    // for its duration, then advances — so the full film is watchable
-    // end-to-end instead of stopping at the first un-rendered shot.
-    if (!card.videoUrl && !card.posterUrl) break;
-    ready.push(card);
-  }
-  return ready;
+function getRenderedCards(cards: StoryCard[]) {
+  return cards.filter((card) => card.done && Boolean(card.videoUrl));
 }
 
 /**
@@ -840,10 +821,9 @@ function FilmPlayer({
   title: string;
   onClose: () => void;
 }) {
-  const shots = useMemo(() => getSequentialReadyCards(cards), [cards]);
+  const shots = useMemo(() => getRenderedCards(cards), [cards]);
   const [idx, setIdx] = useState(0);
   const [muted, setMuted] = useState(false);
-  const [waitingNext, setWaitingNext] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordDone, setRecordDone] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -933,7 +913,8 @@ function FilmPlayer({
         v.volume = 0.9;
         v.play().catch(() => {});
       } else {
-        // Poster-only shot — remove any prior source so we don't loop last clip
+        // Should not happen because playback is locked until all videos render,
+        // but clear the source defensively if an old session has incomplete data.
         v.removeAttribute("src");
         v.load();
       }
@@ -946,9 +927,7 @@ function FilmPlayer({
     }
     if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
     const duration = Math.max(6, current?.durationSeconds || 8) * 1000;
-    // Poster-only shots have no onEnded, so the fallback timer IS the driver.
-    const hold = current?.videoUrl ? duration + 1200 : duration;
-    fallbackTimerRef.current = window.setTimeout(() => advance(), hold);
+    fallbackTimerRef.current = window.setTimeout(() => advance(), duration + 1200);
     playSceneAccent(audioCtxRef.current, current?.sfx || current?.bgm || "cinematic cut");
     const next = shots[idx + 1];
     if (next?.videoUrl) {
@@ -979,20 +958,9 @@ function FilmPlayer({
     if (videoRef.current) videoRef.current.muted = muted;
   }, [muted]);
 
-  useEffect(() => {
-    if (waitingNext && idx + 1 < shots.length) {
-      setWaitingNext(false);
-      setIdx((i) => i + 1);
-    }
-  }, [waitingNext, idx, shots.length]);
-
   function advance() {
     if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
     if (idx + 1 >= shots.length) {
-      if (shots.length < cards.length) {
-        setWaitingNext(true);
-        return;
-      }
       // End of film — stop recording if active
       if (recorderRef.current && recorderRef.current.state !== "inactive") {
         try { recorderRef.current.stop(); } catch { /* noop */ }
@@ -1092,12 +1060,12 @@ function FilmPlayer({
           onEnded={advance}
           onError={advance}
           onStalled={() => {
-            if (!waitingNext) setTimeout(() => videoRef.current?.play().catch(() => advance()), 900);
+            setTimeout(() => videoRef.current?.play().catch(() => advance()), 900);
           }}
           poster={current.posterUrl}
           className="absolute inset-0 h-full w-full object-cover kenburns transition-opacity duration-500"
           style={{
-            animationDuration: `${Math.max(6, current.durationSeconds || 7)}s`,
+            animationDuration: `${Math.max(6, current.durationSeconds || 8)}s`,
             filter: filterForGrade(current.colorGrade),
           }}
         />
@@ -1122,15 +1090,6 @@ function FilmPlayer({
           </div>
         )}
 
-        {waitingNext && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 backdrop-blur-sm pointer-events-none">
-            <div className="rounded-md border border-white/15 bg-black/70 px-5 py-3 text-center">
-              <div className="text-sm text-white">Next shot is rendering…</div>
-              <div className="mt-1 text-[11px] text-white/50">Playback will continue automatically</div>
-            </div>
-          </div>
-        )}
-
         {/* Subtitle */}
         <div key={`sub-${idx}`} className="absolute bottom-[20%] inset-x-0 text-center px-6 pointer-events-none animate-[fadein_0.5s_ease-out]">
           <div className="inline-block bg-black/60 text-white text-lg md:text-2xl px-6 py-3 rounded-md backdrop-blur max-w-[80%]">
@@ -1149,9 +1108,6 @@ function FilmPlayer({
         </div>
         <div className="absolute top-10 left-4 max-w-[70vw] text-white text-sm md:text-lg font-medium drop-shadow z-20">
           {current.title.replace(/^#\d+\s*/, "")}
-        </div>
-        <div className="absolute bottom-2 inset-x-4 z-20">
-          <VideoTimeline cards={cards} activeIndex={currentSceneIndex} />
         </div>
       </div>
 
