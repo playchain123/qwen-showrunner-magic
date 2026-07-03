@@ -72,7 +72,9 @@ function AgentWorkspace() {
   const renderedCount = cards.filter((c) => c.done && c.videoUrl).length;
   const allDone = cards.length > 0 && renderedCount === cards.length;
   const playableCards = getRenderedCards(cards);
-  const canPlay = allDone;
+  // Allow playing the full movie as soon as at least one scene is rendered.
+  // Missing scenes fall back to posters + dialogue so the film always plays end-to-end.
+  const canPlay = renderedCount > 0;
   const firstReady = playableCards[0];
 
   // auth + seed
@@ -481,7 +483,7 @@ function AgentWorkspace() {
                   onClick={() => setPlayingFilm(true)}
                   className="flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium hover:bg-white/90"
                 >
-                  <Film className="h-3 w-3" /> Play Full Film
+                  <Film className="h-3 w-3" /> Play Full Movie {!allDone && `(${renderedCount}/${cards.length})`}
                 </button>
               )}
             </div>
@@ -495,7 +497,7 @@ function AgentWorkspace() {
                 <>
                   {/* Big stage */}
                   <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-neutral-950 border border-white/10">
-                    {allDone && firstReady ? (
+                    {canPlay && firstReady ? (
                       <button
                         onClick={() => setPlayingFilm(true)}
                         className="group absolute inset-0"
@@ -514,7 +516,11 @@ function AgentWorkspace() {
                             <Play className="h-6 w-6 ml-1" fill="currentColor" />
                           </div>
                           <div className="mt-4 text-white text-lg font-medium drop-shadow">{filmTitle}</div>
-                          <div className="mt-1 text-white/70 text-xs">Final cut ready · all {cards.length} scenes rendered · dialogue + score</div>
+                          <div className="mt-1 text-white/70 text-xs">
+                            {allDone
+                              ? `Final cut · all ${cards.length} scenes rendered · dialogue + score`
+                              : `Preview cut · ${renderedCount}/${cards.length} scenes rendered · plays end-to-end`}
+                          </div>
                         </div>
                       </button>
                     ) : (
@@ -543,7 +549,13 @@ function AgentWorkspace() {
                     )}
                   </div>
 
-                  <ContextPanel cards={cards} title={filmTitle} logline={logline} onScene={setOpenScene} />
+                  <ContextPanel
+                    cards={cards}
+                    title={filmTitle}
+                    logline={logline}
+                    onScene={setOpenScene}
+                    references={referenceImages}
+                  />
 
                   {referenceImages.length > 0 && (
                     <div>
@@ -741,66 +753,171 @@ function MessageBubble({ msg }: { msg: ChatMsg }) {
   );
 }
 
-function ContextPanel({ cards, title, logline, onScene }: { cards: StoryCard[]; title: string; logline: string; onScene?: (i: number) => void }) {
+function ContextPanel({ cards, title, logline, onScene, references = [] }: { cards: StoryCard[]; title: string; logline: string; onScene?: (i: number) => void; references?: ReferenceImage[] }) {
+  const [tab, setTab] = useState<"context" | "notebook">("context");
   const total = cards.reduce((sum, card) => sum + (card.durationSeconds || 8), 0) || cards.length * 8 || 1;
   const rendered = cards.filter((card) => card.done && card.videoUrl).length;
+
+  // Aggregate unique characters and locations from the storyboard
+  const characters = useMemo(() => {
+    const map = new Map<string, { name: string; lines: string[]; scenes: number[]; wardrobe?: string; visual?: string }>();
+    cards.forEach((c, i) => {
+      const name = (c.character || "").trim();
+      if (!name) return;
+      const entry = map.get(name) || { name, lines: [], scenes: [], wardrobe: c.referenceImageDirection, visual: c.visual };
+      entry.scenes.push(i + 1);
+      if (c.spokenLine) entry.lines.push(c.spokenLine);
+      map.set(name, entry);
+    });
+    return Array.from(map.values());
+  }, [cards]);
+
+  const locations = useMemo(() => {
+    const map = new Map<string, number[]>();
+    cards.forEach((c, i) => {
+      const loc = (c.location || "").trim();
+      if (!loc) return;
+      const arr = map.get(loc) || [];
+      arr.push(i + 1);
+      map.set(loc, arr);
+    });
+    return Array.from(map.entries()).map(([name, scenes]) => ({ name, scenes }));
+  }, [cards]);
+
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-4">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-white/40">
-            <BookOpen className="h-3 w-3" /> Context
-          </div>
-          <h2 className="mt-1 text-lg font-medium text-white">{title || "Story context"}</h2>
-        </div>
-        <div className="text-right text-[11px] text-white/50">
-          <div>{formatTime(total)} · {cards.length} scenes</div>
-          <div>{rendered}/{cards.length} videos rendered</div>
-        </div>
-      </div>
-      {logline && <p className="text-sm text-white/70 leading-relaxed">{logline}</p>}
-      <div className="space-y-3">
-        {cards.map((card, index) => (
+    <div className="rounded-xl border border-white/10 bg-white/[0.03]">
+      {/* Tabs bar */}
+      <div className="flex items-center gap-1 border-b border-white/10 px-3 pt-3">
+        {(["context", "notebook"] as const).map((k) => (
           <button
-            key={index}
-            type="button"
-            onClick={() => onScene?.(index)}
-            className="w-full rounded-lg border border-white/10 bg-black/25 p-3 text-left hover:border-white/25 transition"
+            key={k}
+            onClick={() => setTab(k)}
+            className={`flex items-center gap-2 rounded-t-md px-3 py-2 text-xs capitalize ${tab === k ? "bg-white/10 text-white border border-b-transparent border-white/10" : "text-white/50 hover:text-white/80"}`}
           >
-            <div className="flex items-center gap-3">
-              <span className={`h-6 w-6 shrink-0 rounded-full border flex items-center justify-center text-[11px] ${card.done && card.videoUrl ? "border-emerald-400 bg-emerald-400 text-black" : "border-white/20 text-white/50"}`}>
-                {card.done && card.videoUrl ? <Check className="h-3.5 w-3.5" /> : index + 1}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="font-medium text-white">Scene {index + 1}: {card.title.replace(/^#\d+\s*/, "")}</span>
-                  <span className="text-[11px] text-white/45">{card.shotType || "cinematic shot"}</span>
-                  <span className="text-[11px] text-white/45">{card.location || "story location"}</span>
-                </div>
-                <p className="mt-1 line-clamp-2 text-xs text-white/65">{card.visual || card.caption}</p>
-              </div>
-              <div className="text-right text-[11px] text-white/45">
-                <div>{card.durationSeconds || 8}s</div>
-                <div>{card.done && card.videoUrl ? "rendered" : `${card.progress}%`}</div>
-              </div>
-            </div>
-            <div className="mt-3 rounded-md bg-white/[0.04] px-3 py-2 text-xs text-white/75">
-              {card.character && <b className="mr-1 text-white/90">{card.character}:</b>}{card.spokenLine}
-            </div>
-            <div className="mt-2 grid gap-2 text-[11px] text-white/45 sm:grid-cols-3">
-              <span>BGM: {card.bgm || "cinematic score"}</span>
-              <span>SFX: {card.sfx || "Foley"}</span>
-              <span>Edit: {card.editingNotes || "continuity cut"}</span>
-            </div>
+            {k === "context" ? <BookOpen className="h-3 w-3" /> : <Film className="h-3 w-3" />}
+            {k === "context" ? "Context" : `Notebook · ${cards.length} scenes`}
           </button>
         ))}
+        <div className="ml-auto pb-2 text-[11px] text-white/45">{formatTime(total)} · {rendered}/{cards.length} rendered</div>
       </div>
+
+      {tab === "context" ? (
+        <div className="p-5 space-y-6">
+          {/* World Building header */}
+          <div>
+            <h2 className="text-2xl font-semibold text-white">World Building</h2>
+            <p className="mt-1 text-sm text-white/55">Characters, locations, and lore that define {title || "your film"}'s universe.</p>
+          </div>
+
+          {logline && (
+            <p className="text-sm text-white/75 leading-relaxed border-l-2 border-white/20 pl-3 italic">{logline}</p>
+          )}
+
+          {/* Characters */}
+          {characters.length > 0 && (
+            <div className="space-y-4">
+              <div className="text-[11px] uppercase tracking-widest text-white/40">Characters</div>
+              {characters.map((ch) => (
+                <div key={ch.name} className="rounded-lg border border-white/10 bg-black/30 p-4">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-lg font-medium text-white">{ch.name}</h3>
+                    <span className="rounded-full border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-wider text-white/60">Character</span>
+                    <span className="ml-auto text-[11px] text-white/45">Appears in scene {ch.scenes.join(", ")}</span>
+                  </div>
+                  {ch.visual && <p className="mt-2 text-sm italic text-white/70">{ch.visual}</p>}
+                  {ch.wardrobe && (
+                    <div className="mt-3">
+                      <div className="text-[11px] uppercase tracking-wider text-white/40">Wardrobe & continuity</div>
+                      <p className="mt-1 text-xs text-white/70 leading-relaxed">{ch.wardrobe}</p>
+                    </div>
+                  )}
+                  {ch.lines.length > 0 && (
+                    <div className="mt-3">
+                      <div className="text-[11px] uppercase tracking-wider text-white/40">Dialogue</div>
+                      <ul className="mt-1 space-y-1 text-xs text-white/75">
+                        {ch.lines.slice(0, 4).map((l, i) => (
+                          <li key={i}>"{l}"</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {references.length > 0 && (
+                    <div className="mt-3">
+                      <div className="text-[11px] uppercase tracking-wider text-white/40">References</div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {references.slice(0, 6).map((r, i) => (
+                          <img key={i} src={r.dataUrl} alt={r.name} title={r.description} className="h-16 w-16 rounded object-cover border border-white/15" />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Locations */}
+          {locations.length > 0 && (
+            <div className="space-y-3">
+              <div className="text-[11px] uppercase tracking-widest text-white/40">Locations</div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {locations.map((l) => (
+                  <div key={l.name} className="rounded-lg border border-white/10 bg-black/30 p-3">
+                    <div className="text-sm font-medium text-white">{l.name}</div>
+                    <div className="mt-1 text-[11px] text-white/50">Scene {l.scenes.join(", ")}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="p-4 space-y-3">
+          {cards.map((card, index) => (
+            <button
+              key={index}
+              type="button"
+              onClick={() => onScene?.(index)}
+              className="w-full rounded-lg border border-white/10 bg-black/25 p-3 text-left hover:border-white/25 transition"
+            >
+              <div className="flex items-center gap-3">
+                <span className={`h-6 w-6 shrink-0 rounded-full border flex items-center justify-center text-[11px] ${card.done && card.videoUrl ? "border-emerald-400 bg-emerald-400 text-black" : "border-white/20 text-white/50"}`}>
+                  {card.done && card.videoUrl ? <Check className="h-3.5 w-3.5" /> : index + 1}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="font-medium text-white">Scene {index + 1}: {card.title.replace(/^#\d+\s*/, "")}</span>
+                    <span className="text-[11px] text-white/45">{card.shotType || "cinematic shot"}</span>
+                    <span className="text-[11px] text-white/45">{card.location || "story location"}</span>
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-xs text-white/65">{card.visual || card.caption}</p>
+                </div>
+                <div className="text-right text-[11px] text-white/45">
+                  <div>{card.durationSeconds || 8}s</div>
+                  <div>{card.done && card.videoUrl ? "rendered" : `${card.progress}%`}</div>
+                </div>
+              </div>
+              <div className="mt-3 rounded-md bg-white/[0.04] px-3 py-2 text-xs text-white/75">
+                {card.character && <b className="mr-1 text-white/90">{card.character}:</b>}{card.spokenLine}
+              </div>
+              <div className="mt-2 grid gap-2 text-[11px] text-white/45 sm:grid-cols-3">
+                <span>BGM: {card.bgm || "cinematic score"}</span>
+                <span>SFX: {card.sfx || "Foley"}</span>
+                <span>Edit: {card.editingNotes || "continuity cut"}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
 function getRenderedCards(cards: StoryCard[]) {
-  return cards.filter((card) => card.done && Boolean(card.videoUrl));
+  // Any scene with a video OR poster can play — poster-only shots render as
+  // still frames with dialogue+BGM so the full movie always plays end-to-end
+  // even while later scenes are still rendering.
+  return cards.filter((card) => Boolean(card.videoUrl) || Boolean(card.posterUrl));
 }
 
 /**
