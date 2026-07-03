@@ -72,10 +72,11 @@ function AgentWorkspace() {
   const renderedCount = cards.filter((c) => c.done && c.videoUrl).length;
   const allDone = cards.length > 0 && renderedCount === cards.length;
   const playableCards = getRenderedCards(cards);
-  // Allow playing the full movie as soon as at least one scene is rendered.
-  // Missing scenes fall back to posters + dialogue so the film always plays end-to-end.
-  const canPlay = renderedCount > 0;
-  const firstReady = playableCards[0];
+  // Play unlocks as soon as ANY scene has a poster or video. Missing shots
+  // fall back to the poster still + dialogue so the full film plays end-to-end
+  // even before every video finishes rendering.
+  const canPlay = playableCards.length > 0;
+  const firstReady = playableCards.find((c) => c.videoUrl) ?? playableCards[0];
 
   // auth + seed
   useEffect(() => {
@@ -418,16 +419,18 @@ function AgentWorkspace() {
                 <Play className="h-3 w-3" /> Replay
               </div>
             </div>
-            <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
-              {messages.map((m, i) => (
-                <MessageBubble key={i} msg={m} />
-              ))}
-              {thinking && (
-                <div className="flex items-center gap-2 text-sm text-white/60">
-                  <MakersMark className="h-4 w-4" />
-                  <span className="animate-pulse">Makers is thinking…</span>
-                </div>
-              )}
+            <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6 flex flex-col justify-end">
+              <div className="space-y-6">
+                {messages.map((m, i) => (
+                  <MessageBubble key={i} msg={m} />
+                ))}
+                {thinking && (
+                  <div className="flex items-center gap-2 text-sm text-white/60">
+                    <MakersMark className="h-4 w-4" />
+                    <span className="animate-pulse">Makers is thinking…</span>
+                  </div>
+                )}
+              </div>
             </div>
             <div className="p-4 border-t border-white/10">
               <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
