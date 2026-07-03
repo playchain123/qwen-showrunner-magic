@@ -247,10 +247,12 @@ function AgentWorkspace() {
               .catch(() => {});
             const fullPrompt = [
               s.video_prompt,
+              (s as { location?: string }).location ? `Exact location continuity: ${(s as { location?: string }).location}` : "",
               s.reference_image_direction ? `Character/style reference: ${s.reference_image_direction}` : "",
               s.editing_notes ? `Professional edit intent: ${s.editing_notes}` : "",
               s.color_grade ? `Color grade: ${s.color_grade}` : "",
               s.sfx ? `On-screen action must support these clean SFX cues: ${s.sfx}` : "",
+              `This is scene ${idx + 1} of ${scenes.length} in the same short film. Preserve the same characters, wardrobe, lighting mood, location geography, emotional continuity and storyline from the surrounding scenes. Render as one continuous 8-second cinematic shot.`,
             ].filter(Boolean).join("\n");
             const { task_id } = await submitVideo({
               data: { prompt: fullPrompt, size: "832*480", model: "wan2.2-t2v-plus" },
@@ -268,7 +270,6 @@ function AgentWorkspace() {
                 setCards((c) =>
                   c.map((card, i) => (i === idx ? { ...card, progress: 100, done: true, videoUrl: status.video_url } : card)),
                 );
-                setTasks((t) => t.map((task, taskIndex) => (taskIndex === 0 ? { ...task, done: true } : task)));
                 return;
               }
               if (status.status === "FAILED") throw new Error(status.error || "Task failed");
@@ -277,6 +278,7 @@ function AgentWorkspace() {
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
             setCards((c) => c.map((card, i) => (i === idx ? { ...card, caption: `${card.caption}\n⚠ ${msg}` } : card)));
+            throw new Error(`Scene ${idx + 1} failed: ${msg}`);
           }
         }),
       );
@@ -284,7 +286,7 @@ function AgentWorkspace() {
       setTasks((t) => t.map((task) => ({ ...task, done: true })));
       setMessages((m) => [
         ...m,
-        { role: "agent", text: `Final cut is locked — ~${story.scenes.length * 6}s short film with dialogue, ambient sound and score. Press ▶ Play Film.` },
+        { role: "agent", text: `Final cut is locked — ~${story.scenes.length * 8}s full film with every video scene rendered, dialogue mixed, ambient sound and score ready. Press ▶ Play Film.` },
       ]);
       // Auto-play once ready
       setTimeout(() => setPlayingFilm(true), 400);
@@ -306,6 +308,7 @@ function AgentWorkspace() {
             videoUrl: c.videoUrl,
             audioUrl: c.audioUrl,
             visual: c.visual,
+            location: c.location,
             caption: c.caption,
             spokenLine: c.spokenLine,
             character: c.character,
