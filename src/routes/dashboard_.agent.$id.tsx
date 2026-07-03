@@ -380,14 +380,16 @@ function AgentWorkspace() {
     );
   }
 
-  function exportTimeline() {
-    const timeline = cards.map((c, i) => {
-      const start = cards.slice(0, i).reduce((sum, s) => sum + (s.durationSeconds || 7), 0);
-      const end = start + (c.durationSeconds || 7);
+  function exportContext() {
+    const context = cards.map((c, i) => {
+      const start = cards.slice(0, i).reduce((sum, s) => sum + (s.durationSeconds || 8), 0);
+      const end = start + (c.durationSeconds || 8);
       return [
         `SCENE ${i + 1}: ${c.title.replace(/^#\d+\s*/, "")}`,
         `TIME: ${formatTime(start)} - ${formatTime(end)}`,
+        `LOCATION: ${c.location || "story location"}`,
         `SHOT: ${c.shotType || "cinematic"}`,
+        `STORYLINE: ${c.visual || c.caption}`,
         `DIALOGUE: ${c.character ? `${c.character}: ` : ""}${c.spokenLine}`,
         `VOICE: ${c.language || "English"}, ${c.voiceTone || "natural"}, ${c.pitch || "medium"} pitch`,
         `BGM: ${c.bgm || "cinematic score"}`,
@@ -397,7 +399,7 @@ function AgentWorkspace() {
         `VIDEO: ${c.videoUrl || "rendering"}`,
       ].join("\n");
     }).join("\n\n---\n\n");
-    downloadText(`${slugify(filmTitle || "makers-film")}-timeline.txt`, `${filmTitle}\n${logline}\n\n${timeline}`, "text/plain");
+    downloadText(`${slugify(filmTitle || "makers-film")}-context.txt`, `${filmTitle}\n${logline}\n\n${context}`, "text/plain");
   }
 
   return (
@@ -468,8 +470,8 @@ function AgentWorkspace() {
               <span className="text-white/60 truncate">{filmTitle || "Untitled"}</span>
               {cards.length > 0 && (
                 <div className="ml-auto flex items-center gap-2">
-                  <button onClick={exportTimeline} className="flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1 text-[11px] text-white/75 hover:bg-white/10">
-                    <Scissors className="h-3 w-3" /> Timeline
+                  <button onClick={exportContext} className="flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1 text-[11px] text-white/75 hover:bg-white/10">
+                    <BookOpen className="h-3 w-3" /> Context
                   </button>
                   <button onClick={exportProject} className="flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1 text-[11px] text-white/75 hover:bg-white/10">
                     <Download className="h-3 w-3" /> Export
@@ -481,7 +483,7 @@ function AgentWorkspace() {
                   onClick={() => setPlayingFilm(true)}
                   className="flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium hover:bg-white/90"
                 >
-                  <Film className="h-3 w-3" /> {allDone ? "Play Film" : `Play (${readyCount}/${cards.length})`}
+                  <Film className="h-3 w-3" /> Play Full Film
                 </button>
               )}
             </div>
