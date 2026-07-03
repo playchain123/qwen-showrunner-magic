@@ -611,7 +611,7 @@ function VideoTimeline({ cards, activeIndex }: { cards: StoryCard[]; activeIndex
 
 /**
  * Cinematic FilmPlayer — professional AI edit on the client:
- *  - Two <video> elements alternating for gapless CROSSFADE cuts
+ *  - Single reliable <video> element with preload + guarded timing
  *  - Slow Ken-Burns zoom on every clip
  *  - Dialogue audio synced per shot (multiple voices)
  *  - Web Audio synthesized ambient PAD + soft bass score (always works, no CDN)
@@ -630,9 +630,12 @@ function FilmPlayer({
   const shots = useMemo(() => cards.filter((c) => c.videoUrl && c.done), [cards]);
   const [idx, setIdx] = useState(0);
   const [muted, setMuted] = useState(false);
+  const [waitingNext, setWaitingNext] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const dialogueRef = useRef<HTMLAudioElement>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const masterGainRef = useRef<GainNode | null>(null);
+  const fallbackTimerRef = useRef<number | null>(null);
   const scoreStopRef = useRef<(() => void) | null>(null);
 
   const current = shots[idx];
@@ -641,8 +644,10 @@ function FilmPlayer({
   useEffect(() => {
     const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     const ctx = new Ctx();
+    void ctx.resume?.();
     audioCtxRef.current = ctx;
     const master = ctx.createGain();
+    masterGainRef.current = master;
     master.gain.value = 0;
     master.gain.linearRampToValueAtTime(0.18, ctx.currentTime + 2);
     master.connect(ctx.destination);
@@ -680,8 +685,13 @@ function FilmPlayer({
     return () => { scoreStopRef.current?.(); };
   }, []);
 
-  // Duck score when a dialogue line plays
-  useEffect(() => { setMuted(false); }, []);
+  useEffect(() => {
+    const master = masterGainRef.current;
+    const ctx = audioCtxRef.current;
+    if (!master || !ctx) return;
+    master.gain.cancelScheduledValues(ctx.currentTime);
+    master.gain.linearRampToValueAtTime(muted ? 0 : 0.18, ctx.currentTime + 0.25);
+  }, [muted]);
 
   // Drive current shot: play video + sync dialogue
   useEffect(() => {
@@ -689,6 +699,7 @@ function FilmPlayer({
     if (v && current?.videoUrl) {
       v.src = current.videoUrl;
       v.currentTime = 0;
+      v.load();
       v.play().catch(() => {});
     }
     const d = dialogueRef.current;
@@ -697,10 +708,42 @@ function FilmPlayer({
       d.currentTime = 0;
       d.play().catch(() => {});
     }
-  }, [idx, current]);
+    if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
+    const duration = Math.max(5, current?.durationSeconds || 7) * 1000;
+    fallbackTimerRef.current = window.setTimeout(() => advance(), duration + 1200);
+    playSceneAccent(audioCtxRef.current, current?.sfx || current?.bgm || "cinematic cut");
+    const next = shots[idx + 1];
+    if (next?.videoUrl) {
+      const link = document.createElement("link");
+      link.rel = "preload";
+      link.as = "video";
+      link.href = next.videoUrl;
+      document.head.appendChild(link);
+      return () => {
+        link.remove();
+        if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
+      };
+    }
+    return () => {
+      if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idx, current?.videoUrl]);
+
+  useEffect(() => {
+    if (waitingNext && idx + 1 < shots.length) {
+      setWaitingNext(false);
+      setIdx((i) => i + 1);
+    }
+  }, [waitingNext, idx, shots.length]);
 
   function advance() {
+    if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
     if (idx + 1 >= shots.length) {
+      if (shots.length < cards.length) {
+        setWaitingNext(true);
+        return;
+      }
       setTimeout(() => onClose(), 800);
       return;
     }
@@ -725,7 +768,11 @@ function FilmPlayer({
           muted
           onEnded={advance}
           onError={advance}
+          onStalled={() => {
+            if (!waitingNext) setTimeout(() => videoRef.current?.play().catch(() => advance()), 900);
+          }}
           className="absolute inset-0 h-full w-full object-cover kenburns"
+          style={{ animationDuration: `${Math.max(6, current.durationSeconds || 7)}s` }}
         />
 
         {/* Dialogue */}
@@ -746,6 +793,15 @@ function FilmPlayer({
           </div>
         )}
 
+        {waitingNext && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 backdrop-blur-sm pointer-events-none">
+            <div className="rounded-md border border-white/15 bg-black/70 px-5 py-3 text-center">
+              <div className="text-sm text-white">Next shot is rendering…</div>
+              <div className="mt-1 text-[11px] text-white/50">Playback will continue automatically</div>
+            </div>
+          </div>
+        )}
+
         {/* Subtitle */}
         <div key={`sub-${idx}`} className="absolute bottom-[9%] inset-x-0 text-center px-6 pointer-events-none animate-[fadein_0.5s_ease-out]">
           <div className="inline-block bg-black/60 text-white text-lg md:text-2xl px-6 py-3 rounded-md backdrop-blur max-w-[80%]">
@@ -760,7 +816,13 @@ function FilmPlayer({
         </div>
 
         <div className="absolute top-4 left-4 text-white/70 text-[11px] uppercase tracking-widest z-20">
-          {title} · Shot {idx + 1}/{shots.length}
+          {title} · Scene {idx + 1}/{cards.length}
+        </div>
+        <div className="absolute top-10 left-4 max-w-[70vw] text-white text-sm md:text-lg font-medium drop-shadow z-20">
+          {current.title.replace(/^#\d+\s*/, "")}
+        </div>
+        <div className="absolute bottom-2 inset-x-4 z-20">
+          <VideoTimeline cards={cards} activeIndex={idx} />
         </div>
       </div>
 
