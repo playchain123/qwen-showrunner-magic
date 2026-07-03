@@ -758,12 +758,18 @@ function FilmPlayer({
   const [idx, setIdx] = useState(0);
   const [muted, setMuted] = useState(false);
   const [waitingNext, setWaitingNext] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recordDone, setRecordDone] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const dialogueRef = useRef<HTMLAudioElement>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const masterGainRef = useRef<GainNode | null>(null);
   const fallbackTimerRef = useRef<number | null>(null);
   const scoreStopRef = useRef<(() => void) | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recChunksRef = useRef<Blob[]>([]);
+  const dialogueSrcRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const recDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
 
   const current = shots[idx];
   const currentSceneIndex = Math.max(0, cards.findIndex((c) => c.videoUrl === current?.videoUrl));
