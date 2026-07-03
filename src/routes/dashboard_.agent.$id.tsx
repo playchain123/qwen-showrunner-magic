@@ -197,6 +197,25 @@ function AgentWorkspace() {
             let hash = 0;
             for (let i = 0; i < charKey.length; i++) hash = (hash * 31 + charKey.charCodeAt(i)) >>> 0;
             const chosenVoice = voicePool[hash % voicePool.length];
+            // Kick off a cinematic poster image per scene so the storyboard
+            // shows real thumbnails immediately, long before the video renders.
+            const imgPrompt = [
+              s.visual || s.video_prompt,
+              s.reference_image_direction ? `Reference note: ${s.reference_image_direction}` : "",
+              s.color_grade ? `Color grade: ${s.color_grade}` : "",
+              s.character ? `Featured character: ${s.character}` : "",
+            ].filter(Boolean).join("\n");
+            void generateSceneImage({
+              data: {
+                prompt: imgPrompt,
+                referenceImages: refs.map((r) => r.dataUrl),
+                referenceWeight: refWeight,
+              },
+            })
+              .then((img) => {
+                setCards((c) => c.map((card, i) => (i === idx ? { ...card, posterUrl: img.image_url } : card)));
+              })
+              .catch(() => {});
             // kick off voice + video in parallel
             const voiceP = generateVoice({
               data: {
