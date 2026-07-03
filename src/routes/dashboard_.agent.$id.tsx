@@ -758,12 +758,18 @@ function FilmPlayer({
   const [idx, setIdx] = useState(0);
   const [muted, setMuted] = useState(false);
   const [waitingNext, setWaitingNext] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recordDone, setRecordDone] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const dialogueRef = useRef<HTMLAudioElement>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const masterGainRef = useRef<GainNode | null>(null);
   const fallbackTimerRef = useRef<number | null>(null);
   const scoreStopRef = useRef<(() => void) | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recChunksRef = useRef<Blob[]>([]);
+  const dialogueSrcRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const recDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
 
   const current = shots[idx];
   const currentSceneIndex = Math.max(0, cards.findIndex((c) => c.videoUrl === current?.videoUrl));
@@ -872,10 +878,68 @@ function FilmPlayer({
         setWaitingNext(true);
         return;
       }
+      // End of film — stop recording if active
+      if (recorderRef.current && recorderRef.current.state !== "inactive") {
+        try { recorderRef.current.stop(); } catch { /* noop */ }
+      }
       setTimeout(() => onClose(), 800);
       return;
     }
     setIdx((i) => i + 1);
+  }
+
+  async function startRecording() {
+    const v = videoRef.current;
+    const ctx = audioCtxRef.current;
+    const master = masterGainRef.current;
+    const dEl = dialogueRef.current;
+    if (!v || !ctx || !master || !dEl) return;
+    try {
+      const videoStream = (v as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream?.();
+      if (!videoStream) { alert("Recording not supported in this browser."); return; }
+      // Route dialogue element into a WebAudio source (once) so recorder can hear it
+      if (!dialogueSrcRef.current) {
+        dialogueSrcRef.current = ctx.createMediaElementSource(dEl);
+        dialogueSrcRef.current.connect(ctx.destination);
+      }
+      if (!recDestRef.current) {
+        recDestRef.current = ctx.createMediaStreamDestination();
+        master.connect(recDestRef.current);
+        dialogueSrcRef.current.connect(recDestRef.current);
+      }
+      const combined = new MediaStream([
+        ...videoStream.getVideoTracks(),
+        ...recDestRef.current.stream.getAudioTracks(),
+      ]);
+      const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
+        ? "video/webm;codecs=vp9,opus"
+        : MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")
+        ? "video/webm;codecs=vp8,opus"
+        : "video/webm";
+      const rec = new MediaRecorder(combined, { mimeType: mime, videoBitsPerSecond: 4_000_000 });
+      recChunksRef.current = [];
+      rec.ondataavailable = (e) => { if (e.data.size) recChunksRef.current.push(e.data); };
+      rec.onstop = () => {
+        const blob = new Blob(recChunksRef.current, { type: "video/webm" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${(title || "makers-film").replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.webm`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        setRecording(false);
+        setRecordDone(true);
+      };
+      recorderRef.current = rec;
+      rec.start(500);
+      setRecording(true);
+      setRecordDone(false);
+      // Restart from first shot so full film is captured
+      setIdx(0);
+    } catch (err) {
+      console.error(err);
+      alert("Could not start recording. Your browser may block captureStream.");
+    }
   }
 
   if (!current) return null;
@@ -885,6 +949,14 @@ function FilmPlayer({
       <button onClick={onClose} className="absolute top-4 right-4 text-white/70 hover:text-white text-sm z-30">Close ✕</button>
       <button onClick={() => setMuted((m) => !m)} className="absolute top-4 right-24 text-white/70 hover:text-white z-30">
         {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+      </button>
+      <button
+        onClick={startRecording}
+        disabled={recording}
+        className="absolute top-4 right-40 z-30 flex items-center gap-1 rounded-full bg-red-500/90 hover:bg-red-500 text-white text-[11px] px-3 py-1 disabled:opacity-60"
+        title="Records the film in real time and downloads a .webm file"
+      >
+        {recording ? "● Recording…" : recordDone ? "Download again" : "⬇ Record & Download"}
       </button>
 
       <div className="relative w-screen h-screen overflow-hidden bg-black">
@@ -900,7 +972,10 @@ function FilmPlayer({
             if (!waitingNext) setTimeout(() => videoRef.current?.play().catch(() => advance()), 900);
           }}
           className="absolute inset-0 h-full w-full object-cover kenburns"
-          style={{ animationDuration: `${Math.max(6, current.durationSeconds || 7)}s` }}
+          style={{
+            animationDuration: `${Math.max(6, current.durationSeconds || 7)}s`,
+            filter: filterForGrade(current.colorGrade),
+          }}
         />
 
         {/* Dialogue */}
@@ -1067,4 +1142,17 @@ function playSceneAccent(ctx: AudioContext | null, cue: string) {
   } catch {
     // audio accent is optional
   }
+}
+function filterForGrade(grade?: string) {
+  const s = (grade || "").toLowerCase();
+  if (/teal.*orange|blockbuster|marvel|action/.test(s)) return "saturate(1.25) contrast(1.12) hue-rotate(-8deg)";
+  if (/bleach|desatur/.test(s)) return "saturate(0.55) contrast(1.35) brightness(1.05)";
+  if (/noir|black.*white|monochrome/.test(s)) return "grayscale(1) contrast(1.25) brightness(0.95)";
+  if (/warm|golden|sunset|amber/.test(s)) return "sepia(0.22) saturate(1.18) brightness(1.06) contrast(1.05)";
+  if (/cyber|neon|blade.*runner|cold|blue/.test(s)) return "saturate(1.35) contrast(1.15) hue-rotate(14deg)";
+  if (/vintage|film.*print|kodak|super.*8|grain/.test(s)) return "sepia(0.3) contrast(1.08) saturate(0.88) brightness(0.98)";
+  if (/anime|ghibli|pixar|animation/.test(s)) return "saturate(1.4) contrast(1.05) brightness(1.05)";
+  if (/dune|desert|earth/.test(s)) return "sepia(0.35) saturate(1.15) contrast(1.1) hue-rotate(-6deg)";
+  if (/horror|thriller|dark/.test(s)) return "contrast(1.3) brightness(0.85) saturate(0.85)";
+  return "contrast(1.06) saturate(1.08)";
 }
