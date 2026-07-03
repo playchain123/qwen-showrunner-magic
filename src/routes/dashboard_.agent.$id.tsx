@@ -878,10 +878,68 @@ function FilmPlayer({
         setWaitingNext(true);
         return;
       }
+      // End of film — stop recording if active
+      if (recorderRef.current && recorderRef.current.state !== "inactive") {
+        try { recorderRef.current.stop(); } catch { /* noop */ }
+      }
       setTimeout(() => onClose(), 800);
       return;
     }
     setIdx((i) => i + 1);
+  }
+
+  async function startRecording() {
+    const v = videoRef.current;
+    const ctx = audioCtxRef.current;
+    const master = masterGainRef.current;
+    const dEl = dialogueRef.current;
+    if (!v || !ctx || !master || !dEl) return;
+    try {
+      const videoStream = (v as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream?.();
+      if (!videoStream) { alert("Recording not supported in this browser."); return; }
+      // Route dialogue element into a WebAudio source (once) so recorder can hear it
+      if (!dialogueSrcRef.current) {
+        dialogueSrcRef.current = ctx.createMediaElementSource(dEl);
+        dialogueSrcRef.current.connect(ctx.destination);
+      }
+      if (!recDestRef.current) {
+        recDestRef.current = ctx.createMediaStreamDestination();
+        master.connect(recDestRef.current);
+        dialogueSrcRef.current.connect(recDestRef.current);
+      }
+      const combined = new MediaStream([
+        ...videoStream.getVideoTracks(),
+        ...recDestRef.current.stream.getAudioTracks(),
+      ]);
+      const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
+        ? "video/webm;codecs=vp9,opus"
+        : MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")
+        ? "video/webm;codecs=vp8,opus"
+        : "video/webm";
+      const rec = new MediaRecorder(combined, { mimeType: mime, videoBitsPerSecond: 4_000_000 });
+      recChunksRef.current = [];
+      rec.ondataavailable = (e) => { if (e.data.size) recChunksRef.current.push(e.data); };
+      rec.onstop = () => {
+        const blob = new Blob(recChunksRef.current, { type: "video/webm" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${(title || "makers-film").replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.webm`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        setRecording(false);
+        setRecordDone(true);
+      };
+      recorderRef.current = rec;
+      rec.start(500);
+      setRecording(true);
+      setRecordDone(false);
+      // Restart from first shot so full film is captured
+      setIdx(0);
+    } catch (err) {
+      console.error(err);
+      alert("Could not start recording. Your browser may block captureStream.");
+    }
   }
 
   if (!current) return null;
