@@ -119,7 +119,7 @@ function AgentWorkspace() {
               })
               .catch(() => {});
             const { task_id } = await submitVideo({
-              data: { prompt: s.video_prompt, model: "wan2.2-t2v-plus", size: "832*480" },
+              data: { prompt: s.video_prompt, size: "832*480" },
             });
             // poll
             let attempts = 0;
