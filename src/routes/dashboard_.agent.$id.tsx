@@ -950,6 +950,14 @@ function FilmPlayer({
       <button onClick={() => setMuted((m) => !m)} className="absolute top-4 right-24 text-white/70 hover:text-white z-30">
         {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
       </button>
+      <button
+        onClick={startRecording}
+        disabled={recording}
+        className="absolute top-4 right-40 z-30 flex items-center gap-1 rounded-full bg-red-500/90 hover:bg-red-500 text-white text-[11px] px-3 py-1 disabled:opacity-60"
+        title="Records the film in real time and downloads a .webm file"
+      >
+        {recording ? "● Recording…" : recordDone ? "Download again" : "⬇ Record & Download"}
+      </button>
 
       <div className="relative w-screen h-screen overflow-hidden bg-black">
         <video
@@ -964,7 +972,10 @@ function FilmPlayer({
             if (!waitingNext) setTimeout(() => videoRef.current?.play().catch(() => advance()), 900);
           }}
           className="absolute inset-0 h-full w-full object-cover kenburns"
-          style={{ animationDuration: `${Math.max(6, current.durationSeconds || 7)}s` }}
+          style={{
+            animationDuration: `${Math.max(6, current.durationSeconds || 7)}s`,
+            filter: filterForGrade(current.colorGrade),
+          }}
         />
 
         {/* Dialogue */}
