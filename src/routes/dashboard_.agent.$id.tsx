@@ -41,6 +41,8 @@ function AgentWorkspace() {
     ? Math.round(cards.reduce((s, c) => s + c.progress, 0) / cards.length)
     : 0;
   const allDone = cards.length > 0 && cards.every((c) => c.done);
+  const readyCount = cards.filter((c) => c.done && c.videoUrl).length;
+  const canPlay = readyCount >= 1;
 
   // auth + seed
   useEffect(() => {
@@ -64,8 +66,8 @@ function AgentWorkspace() {
   async function runPipeline(prompt: string) {
     setThinking(true);
     try {
-      // 1. Storyboard via Qwen (8 scenes for a real ~60s short film)
-      const story = await generateStoryboard({ data: { prompt, sceneCount: 8 } });
+      // 1. Storyboard via Qwen (5 scenes ~ 30s — faster, still cinematic)
+      const story = await generateStoryboard({ data: { prompt, sceneCount: 5 } });
       setThinking(false);
       setFilmTitle(story.title);
       setLogline(story.logline);
@@ -118,13 +120,15 @@ function AgentWorkspace() {
                 setCards((c) => c.map((card, i) => (i === idx ? { ...card, audioUrl: v.audio_url } : card)));
               })
               .catch(() => {});
-            const { task_id } = await submitVideo({ data: { prompt: s.video_prompt } });
+            const { task_id } = await submitVideo({
+              data: { prompt: s.video_prompt, size: "832*480" },
+            });
             // poll
             let attempts = 0;
-            while (attempts < 90) {
-              await new Promise((r) => setTimeout(r, 5000));
+            while (attempts < 180) {
+              await new Promise((r) => setTimeout(r, 2000));
               attempts++;
-              const p = Math.min(10 + attempts * 2, 90);
+              const p = Math.min(10 + attempts * 3, 92);
               setCards((c) => c.map((card, i) => (i === idx ? { ...card, progress: p } : card)));
               const status = await pollVideo({ data: { task_id } });
               if (status.status === "SUCCEEDED" && status.video_url) {
@@ -248,12 +252,12 @@ function AgentWorkspace() {
               <span className="font-medium text-white">Film Preview</span>
               <span className="text-white/40">·</span>
               <span className="text-white/60 truncate">{filmTitle || "Untitled"}</span>
-              {allDone && (
+              {canPlay && (
                 <button
                   onClick={() => setPlayingFilm(true)}
                   className="ml-auto flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium hover:bg-white/90"
                 >
-                  <Film className="h-3 w-3" /> Play Film
+                  <Film className="h-3 w-3" /> {allDone ? "Play Film" : `Play (${readyCount}/${cards.length})`}
                 </button>
               )}
             </div>
@@ -408,17 +412,13 @@ function FilmPlayer({
 }) {
   const shots = useMemo(() => cards.filter((c) => c.videoUrl && c.done), [cards]);
   const [idx, setIdx] = useState(0);
-  const [activeLayer, setActiveLayer] = useState<0 | 1>(0);
   const [muted, setMuted] = useState(false);
-  const videoA = useRef<HTMLVideoElement>(null);
-  const videoB = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const dialogueRef = useRef<HTMLAudioElement>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const scoreStopRef = useRef<(() => void) | null>(null);
-  const advancedRef = useRef(false);
 
   const current = shots[idx];
-  const next = shots[idx + 1];
 
   // Start ambient score once (user gesture already happened — Play click)
   useEffect(() => {
@@ -466,112 +466,90 @@ function FilmPlayer({
   // Duck score when a dialogue line plays
   useEffect(() => { setMuted(false); }, []);
 
-  // Prepare next-scene preload on the inactive layer for crossfade
+  // Drive current shot: play video + sync dialogue
   useEffect(() => {
-    advancedRef.current = false;
-    const active = activeLayer === 0 ? videoA.current : videoB.current;
-    const inactive = activeLayer === 0 ? videoB.current : videoA.current;
-    if (active && current) {
-      active.currentTime = 0;
-      active.play().catch(() => {});
+    const v = videoRef.current;
+    if (v && current?.videoUrl) {
+      v.src = current.videoUrl;
+      v.currentTime = 0;
+      v.play().catch(() => {});
     }
-    if (inactive && next) {
-      inactive.src = next.videoUrl ?? "";
-      inactive.load();
-    }
-    // dialogue
     const d = dialogueRef.current;
     if (d && current?.audioUrl) {
       d.src = current.audioUrl;
       d.currentTime = 0;
       d.play().catch(() => {});
     }
-  }, [idx, activeLayer, current, next]);
+  }, [idx, current]);
 
   function advance() {
-    if (advancedRef.current) return;
-    advancedRef.current = true;
     if (idx + 1 >= shots.length) {
-      // outro — close after brief fade
       setTimeout(() => onClose(), 800);
       return;
     }
-    setActiveLayer((l) => (l === 0 ? 1 : 0));
     setIdx((i) => i + 1);
   }
 
   if (!current) return null;
 
-  const activeIsA = activeLayer === 0;
-
   return (
-    <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center">
-      <button onClick={onClose} className="absolute top-4 right-4 text-white/60 hover:text-white text-sm z-20">Close ✕</button>
-      <button onClick={() => setMuted((m) => !m)} className="absolute top-4 right-20 text-white/60 hover:text-white z-20">
+    <div className="fixed inset-0 z-50 bg-black">
+      <button onClick={onClose} className="absolute top-4 right-4 text-white/70 hover:text-white text-sm z-30">Close ✕</button>
+      <button onClick={() => setMuted((m) => !m)} className="absolute top-4 right-24 text-white/70 hover:text-white z-30">
         {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
       </button>
 
-      <div className="relative w-full max-w-6xl aspect-video overflow-hidden bg-black">
-        {/* Layer A */}
+      <div className="relative w-screen h-screen overflow-hidden bg-black">
         <video
-          ref={videoA}
-          src={activeIsA ? current.videoUrl : next?.videoUrl}
-          autoPlay={activeIsA}
+          ref={videoRef}
+          key={idx}
+          autoPlay
           playsInline
           muted
-          onEnded={activeIsA ? advance : undefined}
-          className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-700 ${activeIsA ? "opacity-100 kenburns" : "opacity-0"}`}
-        />
-        {/* Layer B */}
-        <video
-          ref={videoB}
-          src={activeIsA ? next?.videoUrl : current.videoUrl}
-          autoPlay={!activeIsA}
-          playsInline
-          muted
-          onEnded={!activeIsA ? advance : undefined}
-          className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-700 ${!activeIsA ? "opacity-100 kenburns" : "opacity-0"}`}
+          onEnded={advance}
+          onError={advance}
+          className="absolute inset-0 h-full w-full object-cover kenburns"
         />
 
         {/* Dialogue */}
         <audio ref={dialogueRef} autoPlay muted={muted} />
 
         {/* Filmic overlays */}
-        <div className="absolute inset-x-0 top-0 h-[6%] bg-black pointer-events-none" />
-        <div className="absolute inset-x-0 bottom-0 h-[6%] bg-black pointer-events-none" />
+        <div className="absolute inset-x-0 top-0 h-[5%] bg-black pointer-events-none" />
+        <div className="absolute inset-x-0 bottom-0 h-[5%] bg-black pointer-events-none" />
         <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: "inset 0 0 200px rgba(0,0,0,0.8)" }} />
 
         {/* Title card on first shot */}
         {idx === 0 && (
           <div key={`title-${idx}`} className="absolute inset-0 flex items-center justify-center pointer-events-none animate-[fadeout_3s_ease-in_forwards]">
             <div className="text-center">
-              <div className="text-white text-4xl md:text-5xl font-serif tracking-wide drop-shadow-2xl">{title}</div>
+              <div className="text-white text-5xl md:text-7xl font-serif tracking-wide drop-shadow-2xl">{title}</div>
               <div className="mt-3 text-white/70 text-xs uppercase tracking-[0.3em]">A Makers Film</div>
             </div>
           </div>
         )}
 
         {/* Subtitle */}
-        <div key={`sub-${idx}`} className="absolute bottom-[10%] inset-x-0 text-center px-6 pointer-events-none animate-[fadein_0.5s_ease-out]">
-          <div className="inline-block bg-black/60 text-white text-base md:text-lg px-5 py-2 rounded-md backdrop-blur max-w-[80%]">
+        <div key={`sub-${idx}`} className="absolute bottom-[9%] inset-x-0 text-center px-6 pointer-events-none animate-[fadein_0.5s_ease-out]">
+          <div className="inline-block bg-black/60 text-white text-lg md:text-2xl px-6 py-3 rounded-md backdrop-blur max-w-[80%]">
             {current.character && <b className="mr-2 text-white/90">{current.character}:</b>}
             <span>{current.spokenLine}</span>
           </div>
         </div>
 
         {/* Progress bar */}
-        <div className="absolute top-0 inset-x-0 h-0.5 bg-white/10 z-10">
+        <div className="absolute top-0 inset-x-0 h-0.5 bg-white/10 z-20">
           <div className="h-full bg-white/80 transition-all" style={{ width: `${((idx + 1) / shots.length) * 100}%` }} />
         </div>
 
-        <div className="absolute top-4 left-4 text-white/70 text-[11px] uppercase tracking-widest">
+        <div className="absolute top-4 left-4 text-white/70 text-[11px] uppercase tracking-widest z-20">
           {title} · Shot {idx + 1}/{shots.length}
         </div>
       </div>
 
       <style>{`
-        @keyframes kenburns { 0% { transform: scale(1.02); } 100% { transform: scale(1.12); } }
-        .kenburns { animation: kenburns 7s ease-out forwards; transform-origin: center; }
+        @keyframes kenburns { 0% { transform: scale(1.04); } 100% { transform: scale(1.14); } }
+        .kenburns { animation: kenburns 8s ease-out forwards; transform-origin: center; }
         @keyframes fadein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
         @keyframes fadeout { 0%,60% { opacity: 1; } 100% { opacity: 0; } }
       `}</style>
