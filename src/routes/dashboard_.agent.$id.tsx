@@ -763,7 +763,7 @@ function MessageBubble({ msg }: { msg: ChatMsg }) {
 }
 
 function VideoTimeline({ cards, activeIndex, onScene }: { cards: StoryCard[]; activeIndex: number; onScene?: (i: number) => void }) {
-  const total = cards.reduce((sum, card) => sum + (card.durationSeconds || 7), 0) || cards.length * 7 || 1;
+  const total = cards.reduce((sum, card) => sum + (card.durationSeconds || 8), 0) || cards.length * 8 || 1;
   let cursor = 0;
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
@@ -774,7 +774,7 @@ function VideoTimeline({ cards, activeIndex, onScene }: { cards: StoryCard[]; ac
       <div className="flex h-20 overflow-hidden rounded-md border border-white/10 bg-black">
         {cards.map((card, index) => {
           const start = cursor;
-          const duration = card.durationSeconds || 7;
+          const duration = card.durationSeconds || 8;
           cursor += duration;
           return (
             <button
