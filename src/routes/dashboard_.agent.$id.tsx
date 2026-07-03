@@ -164,7 +164,7 @@ function AgentWorkspace() {
         ...m,
         {
           role: "agent",
-          text: `🎬 "${story.title}"\n${story.logline}\n\nTone: ${story.tone}\n\nRolling ${story.scenes.length} cinematic shots into a timeline — dialogue, Foley, score, color grade, VFX cues and clean scene continuity are saved to this session.`,
+          text: `🎬 "${story.title}"\n${story.logline}\n\nTone: ${story.tone}\n\nRendering all ${story.scenes.length} cinematic shots together — playback stays locked until every scene video, dialogue, Foley, score, color grade, VFX cue and continuity note is complete.`,
           skills: ["Script Agent", "Shot-list Agent", "Casting & Voice Agent", "Cinematography Agent", "Premiere Pro Edit Agent", "After Effects VFX Agent", "DaVinci Color Agent", "SFX / Foley Agent", "Learning Memory Agent"],
           task: `Cut ${story.scenes.length} shots into a short film`,
         },
@@ -172,7 +172,7 @@ function AgentWorkspace() {
       setTasks([
         { text: `Render ${story.scenes.length} cinematic shots`, done: false },
         { text: `Cast clean human dialogue voices`, done: false },
-        { text: `Build timeline: cuts, J/L-cuts, VFX, score, SFX`, done: false },
+        { text: `Build context: storyline, shots, locations, dialogue, edit notes`, done: false },
       ]);
 
       // 2. Add cards + submit videos in parallel
@@ -181,6 +181,7 @@ function AgentWorkspace() {
         scenes.map((s, i) => ({
           title: `#${i + 1} ${s.title}`,
           visual: s.visual,
+          location: (s as { location?: string }).location,
           caption: s.caption || s.spoken_line || s.dialogue,
           spokenLine: s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, ""),
           character: s.character || "",
@@ -190,7 +191,7 @@ function AgentWorkspace() {
           pitch: s.pitch,
           bgm: s.bgm,
           sfx: s.sfx,
-          durationSeconds: s.duration_seconds || 7,
+          durationSeconds: s.duration_seconds || 8,
           colorGrade: s.color_grade,
           editingNotes: s.editing_notes,
           referenceImageDirection: s.reference_image_direction,
