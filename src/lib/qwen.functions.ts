@@ -193,11 +193,43 @@ export const generateVoice = createServerFn({ method: "POST" })
     };
 
     const mapGatewayVoice = (voice: string) => {
-      const pool = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"];
+      const female = ["nova", "shimmer", "sage"];
+      const male = ["onyx", "echo", "ash"];
+      const neutral = ["alloy", "fable"];
+      const tone = `${data.tone} ${voice}`.toLowerCase();
+      const pool = /female|woman|girl|mother|sister|queen|witch/.test(tone)
+        ? female
+        : /male|man|boy|father|brother|king|villain|hero|warrior/.test(tone)
+        ? male
+        : /child|kid|young/.test(tone)
+        ? female
+        : neutral;
       let hash = 0;
       for (let i = 0; i < voice.length; i++) hash = (hash * 31 + voice.charCodeAt(i)) >>> 0;
       return pool[hash % pool.length];
     };
+
+    const detectEmotion = (t: string) => {
+      const lower = t.toLowerCase();
+      if (/cry|sob|tear|grief|mourn/.test(lower)) return "sad, tearful, breath catching";
+      if (/whisper|hush|secret/.test(lower)) return "whispered, intimate, breathy";
+      if (/shout|scream|yell|rage/.test(lower)) return "shouting, forceful, urgent";
+      if (/laugh|joyful|excite|thrill/.test(lower)) return "joyful, animated, light";
+      if (/angry|furious|threat/.test(lower)) return "angry, tight, controlled fury";
+      if (/fear|scare|terrified/.test(lower)) return "fearful, trembling, quick breaths";
+      if (/love|tender|gentle/.test(lower)) return "tender, warm, soft";
+      if (/hope|inspire|motivat/.test(lower)) return "hopeful, uplifted, steady";
+      return "grounded, natural, in-the-moment acting";
+    };
+    const emotion = detectEmotion(`${data.text} ${data.tone}`);
+    const pitchWord = data.pitch === "low" ? "low chest resonance" : data.pitch === "high" ? "bright forward placement" : "balanced";
+    const richInstructions = [
+      `You are a professional on-screen film actor delivering an in-world line — never a narrator, never an announcer.`,
+      `Language: ${data.language}. Speak with clean native pronunciation, natural colloquial rhythm and human phrasing. No robotic cadence.`,
+      `Emotion: ${emotion}. Vocal placement: ${pitchWord}.`,
+      `Directorial note: ${data.tone}.`,
+      `Deliver with real breaths, micro-pauses, and dynamic pitch that matches the emotion.`,
+    ].join(" ");
 
     // Prefer Lovable AI Gateway TTS for more natural multilingual delivery.
     const lovKey = process.env.LOVABLE_API_KEY;
