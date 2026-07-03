@@ -192,7 +192,7 @@ export const generateVoice = createServerFn({ method: "POST" })
     };
 
     const mapGatewayVoice = (voice: string) => {
-      const pool = ["alloy", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"];
+      const pool = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"];
       let hash = 0;
       for (let i = 0; i < voice.length; i++) hash = (hash * 31 + voice.charCodeAt(i)) >>> 0;
       return pool[hash % pool.length];
