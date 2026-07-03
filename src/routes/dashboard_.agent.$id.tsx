@@ -72,10 +72,11 @@ function AgentWorkspace() {
   const renderedCount = cards.filter((c) => c.done && c.videoUrl).length;
   const allDone = cards.length > 0 && renderedCount === cards.length;
   const playableCards = getRenderedCards(cards);
-  // Allow playing the full movie as soon as at least one scene is rendered.
-  // Missing scenes fall back to posters + dialogue so the film always plays end-to-end.
-  const canPlay = renderedCount > 0;
-  const firstReady = playableCards[0];
+  // Play unlocks as soon as ANY scene has a poster or video. Missing shots
+  // fall back to the poster still + dialogue so the full film plays end-to-end
+  // even before every video finishes rendering.
+  const canPlay = playableCards.length > 0;
+  const firstReady = playableCards.find((c) => c.videoUrl) ?? playableCards[0];
 
   // auth + seed
   useEffect(() => {
