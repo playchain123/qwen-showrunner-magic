@@ -247,7 +247,7 @@ export const generateVoice = createServerFn({ method: "POST" })
             input: data.text,
             voice: mapGatewayVoice(data.voice),
             response_format: "mp3",
-            instructions: `Act as an on-screen film actor. Language: ${data.language}. Delivery: ${data.tone}. Pitch: ${data.pitch}. Speak with clean native human phrasing, natural emotion, no announcer voice, no narration, no robotic cadence.`,
+            instructions: richInstructions,
           }),
         });
         if (res.ok) {
