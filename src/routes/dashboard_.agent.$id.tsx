@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX } from "lucide-react";
+import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX, Download, ImagePlus, Scissors } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice } from "@/lib/qwen.functions";
@@ -11,16 +11,27 @@ export const Route = createFileRoute("/dashboard_/agent/$id")({
 });
 
 type ChatMsg = { role: "user" | "agent"; text: string; skills?: string[]; task?: string };
+type ReferenceImage = { name: string; dataUrl: string; description?: string };
 type StoryCard = {
   title: string;
   progress: number;
   done: boolean;
   videoUrl?: string;
   audioUrl?: string;
+  visual?: string;
   caption: string;
   spokenLine: string;
   character: string;
   shotType?: string;
+  language?: string;
+  voiceTone?: string;
+  pitch?: "low" | "medium" | "high";
+  bgm?: string;
+  sfx?: string;
+  durationSeconds?: number;
+  colorGrade?: string;
+  editingNotes?: string;
+  referenceImageDirection?: string;
 };
 
 function AgentWorkspace() {
@@ -34,40 +45,102 @@ function AgentWorkspace() {
   const [playingFilm, setPlayingFilm] = useState(false);
   const [filmTitle, setFilmTitle] = useState<string>("");
   const [logline, setLogline] = useState<string>("");
+  const [currentPrompt, setCurrentPrompt] = useState<string>("");
+  const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const uploadRef = useRef<HTMLInputElement>(null);
   const startedRef = useRef(false);
 
   const totalProgress = cards.length
     ? Math.round(cards.reduce((s, c) => s + c.progress, 0) / cards.length)
     : 0;
   const allDone = cards.length > 0 && cards.every((c) => c.done);
-  const readyCount = cards.filter((c) => c.done && c.videoUrl).length;
+  const playableCards = getSequentialReadyCards(cards);
+  const readyCount = playableCards.length;
   const canPlay = readyCount >= 1;
+  const firstReady = playableCards[0];
 
   // auth + seed
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
       if (!data.user) navigate({ to: "/auth", search: { mode: "login" } });
     });
+    const saved = localStorage.getItem(`makers:agentdoc:${id}`);
+    if (saved && !startedRef.current) {
+      try {
+        const doc = JSON.parse(saved) as {
+          prompt?: string;
+          messages?: ChatMsg[];
+          cards?: StoryCard[];
+          tasks?: { text: string; done: boolean }[];
+          filmTitle?: string;
+          logline?: string;
+          referenceImages?: ReferenceImage[];
+        };
+        startedRef.current = true;
+        setCurrentPrompt(doc.prompt || "");
+        setMessages(doc.messages || []);
+        setCards(doc.cards || []);
+        setTasks(doc.tasks || []);
+        setFilmTitle(doc.filmTitle || "");
+        setLogline(doc.logline || "");
+        setReferenceImages(doc.referenceImages || []);
+        return;
+      } catch {
+        localStorage.removeItem(`makers:agentdoc:${id}`);
+      }
+    }
     const raw = sessionStorage.getItem(`makers:agent:${id}`);
     if (raw && !startedRef.current) {
       startedRef.current = true;
-      const { prompt } = JSON.parse(raw);
+      const { prompt, referenceImages: refs = [] } = JSON.parse(raw) as { prompt: string; referenceImages?: ReferenceImage[] };
+      setCurrentPrompt(prompt);
+      setReferenceImages(refs);
       setMessages([{ role: "user", text: prompt }]);
-      void runPipeline(prompt);
+      void runPipeline(prompt, refs);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
+    if (!startedRef.current && !currentPrompt && messages.length === 0 && cards.length === 0) return;
+    try {
+      localStorage.setItem(
+        `makers:agentdoc:${id}`,
+        JSON.stringify({
+          prompt: currentPrompt,
+          messages,
+          cards,
+          tasks,
+          filmTitle,
+          logline,
+          referenceImages,
+          updatedAt: Date.now(),
+        }),
+      );
+    } catch {
+      // local restore is best-effort
+    }
+  }, [id, currentPrompt, messages, cards, tasks, filmTitle, logline, referenceImages]);
+
+  useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, thinking]);
 
-  async function runPipeline(prompt: string) {
+  async function runPipeline(prompt: string, refs = referenceImages) {
+    setCurrentPrompt(prompt);
     setThinking(true);
+    setPlayingFilm(false);
+    setCards([]);
+    setTasks([]);
+    setFilmTitle("");
+    setLogline("");
     try {
-      // 1. Storyboard via Qwen (5 scenes ~ 30s — faster, still cinematic)
-      const story = await generateStoryboard({ data: { prompt, sceneCount: 5 } });
+      const sceneCount = chooseSceneCount(prompt);
+      const learningContext = readLearningContext();
+      const referenceBrief = refs.map((r) => ({ name: r.name, description: r.description || "user uploaded character/style reference image" }));
+      // 1. Storyboard via Qwen — prompt-aware scene count with persistent learning context
+      const story = await generateStoryboard({ data: { prompt, sceneCount, learningContext, referenceImages: referenceBrief } });
       setThinking(false);
       setFilmTitle(story.title);
       setLogline(story.logline);
@@ -75,15 +148,15 @@ function AgentWorkspace() {
         ...m,
         {
           role: "agent",
-          text: `🎬 "${story.title}"\n${story.logline}\n\nTone: ${story.tone}\n\nRolling ${story.scenes.length} cinematic shots — editing dialogue, ambient sound and score into one continuous film.`,
-          skills: ["Script Agent", "Shot-list Agent", "Casting & Voice Agent", "Cinematography Agent", "Editorial / Score Agent"],
+          text: `🎬 "${story.title}"\n${story.logline}\n\nTone: ${story.tone}\n\nRolling ${story.scenes.length} cinematic shots into a timeline — dialogue, Foley, score, color grade, VFX cues and clean scene continuity are saved to this session.`,
+          skills: ["Script Agent", "Shot-list Agent", "Casting & Voice Agent", "Cinematography Agent", "Premiere Pro Edit Agent", "After Effects VFX Agent", "DaVinci Color Agent", "SFX / Foley Agent", "Learning Memory Agent"],
           task: `Cut ${story.scenes.length} shots into a short film`,
         },
       ]);
       setTasks([
         { text: `Render ${story.scenes.length} cinematic shots`, done: false },
-        { text: `Cast voices per character`, done: false },
-        { text: `Assemble edit: cuts, crossfades, score`, done: false },
+        { text: `Cast clean human dialogue voices`, done: false },
+        { text: `Build timeline: cuts, J/L-cuts, VFX, score, SFX`, done: false },
       ]);
 
       // 2. Add cards + submit videos in parallel
@@ -91,14 +164,26 @@ function AgentWorkspace() {
       setCards(
         scenes.map((s, i) => ({
           title: `#${i + 1} ${s.title}`,
+          visual: s.visual,
           caption: s.caption || s.spoken_line || s.dialogue,
           spokenLine: s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, ""),
           character: s.character || "",
           shotType: (s as { shot_type?: string }).shot_type,
+          language: s.language,
+          voiceTone: s.voice_tone,
+          pitch: s.pitch,
+          bgm: s.bgm,
+          sfx: s.sfx,
+          durationSeconds: s.duration_seconds || 7,
+          colorGrade: s.color_grade,
+          editingNotes: s.editing_notes,
+          referenceImageDirection: s.reference_image_direction,
           progress: 5,
           done: false,
         })),
       );
+
+      writeLearningContext(prompt, story.title, story.tone, story.scenes.map((s) => s.language).filter(Boolean).join(", "));
 
       await Promise.all(
         scenes.map(async (s, idx) => {
@@ -114,14 +199,25 @@ function AgentWorkspace() {
               data: {
                 text: s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, ""),
                 voice: chosenVoice,
+                language: s.language || "English",
+                tone: s.voice_tone || "natural film dialogue",
+                pitch: s.pitch || "medium",
               },
             })
               .then((v) => {
                 setCards((c) => c.map((card, i) => (i === idx ? { ...card, audioUrl: v.audio_url } : card)));
+                setTasks((t) => t.map((task, taskIndex) => (taskIndex === 1 ? { ...task, done: true } : task)));
               })
               .catch(() => {});
+            const fullPrompt = [
+              s.video_prompt,
+              s.reference_image_direction ? `Character/style reference: ${s.reference_image_direction}` : "",
+              s.editing_notes ? `Professional edit intent: ${s.editing_notes}` : "",
+              s.color_grade ? `Color grade: ${s.color_grade}` : "",
+              s.sfx ? `On-screen action must support these clean SFX cues: ${s.sfx}` : "",
+            ].filter(Boolean).join("\n");
             const { task_id } = await submitVideo({
-              data: { prompt: s.video_prompt, size: "832*480" },
+              data: { prompt: fullPrompt, size: "832*480", model: "wan2.2-t2v-plus" },
             });
             // poll
             let attempts = 0;
@@ -136,6 +232,7 @@ function AgentWorkspace() {
                 setCards((c) =>
                   c.map((card, i) => (i === idx ? { ...card, progress: 100, done: true, videoUrl: status.video_url } : card)),
                 );
+                setTasks((t) => t.map((task, taskIndex) => (taskIndex === 0 ? { ...task, done: true } : task)));
                 return;
               }
               if (status.status === "FAILED") throw new Error(status.error || "Task failed");
@@ -172,10 +269,20 @@ function AgentWorkspace() {
             title: c.title,
             videoUrl: c.videoUrl,
             audioUrl: c.audioUrl,
+            visual: c.visual,
             caption: c.caption,
             spokenLine: c.spokenLine,
             character: c.character,
             shotType: c.shotType,
+            language: c.language,
+            voiceTone: c.voiceTone,
+            pitch: c.pitch,
+            bgm: c.bgm,
+            sfx: c.sfx,
+            durationSeconds: c.durationSeconds,
+            colorGrade: c.colorGrade,
+            editingNotes: c.editingNotes,
+            referenceImageDirection: c.referenceImageDirection,
           })),
         });
         localStorage.setItem(key, JSON.stringify(existing.slice(0, 30)));
@@ -192,7 +299,42 @@ function AgentWorkspace() {
     const text = input.trim();
     setMessages((m) => [...m, { role: "user", text }]);
     setInput("");
-    void runPipeline(text);
+    void runPipeline(text, referenceImages);
+  }
+
+  async function handleReferenceFiles(files: FileList | null) {
+    if (!files?.length) return;
+    const images = Array.from(files).filter((file) => file.type.startsWith("image/")).slice(0, 8);
+    const loaded = await Promise.all(images.map((file) => imageFileToReferenceImage(file)));
+    setReferenceImages((prev) => [...prev, ...loaded].slice(0, 8));
+  }
+
+  function exportProject() {
+    downloadText(
+      `${slugify(filmTitle || "makers-film")}-project.json`,
+      JSON.stringify({ id, prompt: currentPrompt, title: filmTitle, logline, referenceImages, scenes: cards }, null, 2),
+      "application/json",
+    );
+  }
+
+  function exportTimeline() {
+    const timeline = cards.map((c, i) => {
+      const start = cards.slice(0, i).reduce((sum, s) => sum + (s.durationSeconds || 7), 0);
+      const end = start + (c.durationSeconds || 7);
+      return [
+        `SCENE ${i + 1}: ${c.title.replace(/^#\d+\s*/, "")}`,
+        `TIME: ${formatTime(start)} - ${formatTime(end)}`,
+        `SHOT: ${c.shotType || "cinematic"}`,
+        `DIALOGUE: ${c.character ? `${c.character}: ` : ""}${c.spokenLine}`,
+        `VOICE: ${c.language || "English"}, ${c.voiceTone || "natural"}, ${c.pitch || "medium"} pitch`,
+        `BGM: ${c.bgm || "cinematic score"}`,
+        `SFX: ${c.sfx || "clean room tone and Foley"}`,
+        `GRADE: ${c.colorGrade || "cinematic film grade"}`,
+        `EDIT: ${c.editingNotes || "straight cut with smooth continuity"}`,
+        `VIDEO: ${c.videoUrl || "rendering"}`,
+      ].join("\n");
+    }).join("\n\n---\n\n");
+    downloadText(`${slugify(filmTitle || "makers-film")}-timeline.txt`, `${filmTitle}\n${logline}\n\n${timeline}`, "text/plain");
   }
 
   return (
@@ -232,9 +374,18 @@ function AgentWorkspace() {
                   className="w-full bg-transparent outline-none text-sm placeholder:text-white/40"
                 />
                 <div className="flex items-center justify-between mt-2">
-                  <button className="h-7 w-7 rounded-full border border-white/10 hover:bg-white/10 flex items-center justify-center">
+                  <input
+                    ref={uploadRef}
+                    type="file"
+                    multiple
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => void handleReferenceFiles(e.target.files)}
+                  />
+                  <button onClick={() => uploadRef.current?.click()} className="h-7 w-7 rounded-full border border-white/10 hover:bg-white/10 flex items-center justify-center" title="Add character reference images">
                     <Plus className="h-3.5 w-3.5" />
                   </button>
+                  {referenceImages.length > 0 && <span className="text-[11px] text-white/50">{referenceImages.length} refs</span>}
                   <div className="flex items-center gap-2">
                     <span className="text-[11px] text-white/50">Makers lite ▾</span>
                     <button onClick={send} className="h-7 w-7 rounded-full bg-white text-black flex items-center justify-center">
@@ -252,10 +403,20 @@ function AgentWorkspace() {
               <span className="font-medium text-white">Film Preview</span>
               <span className="text-white/40">·</span>
               <span className="text-white/60 truncate">{filmTitle || "Untitled"}</span>
+              {cards.length > 0 && (
+                <div className="ml-auto flex items-center gap-2">
+                  <button onClick={exportTimeline} className="flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1 text-[11px] text-white/75 hover:bg-white/10">
+                    <Scissors className="h-3 w-3" /> Timeline
+                  </button>
+                  <button onClick={exportProject} className="flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1 text-[11px] text-white/75 hover:bg-white/10">
+                    <Download className="h-3 w-3" /> Export
+                  </button>
+                </div>
+              )}
               {canPlay && (
                 <button
                   onClick={() => setPlayingFilm(true)}
-                  className="ml-auto flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium hover:bg-white/90"
+                  className="flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium hover:bg-white/90"
                 >
                   <Film className="h-3 w-3" /> {allDone ? "Play Film" : `Play (${readyCount}/${cards.length})`}
                 </button>
@@ -271,13 +432,13 @@ function AgentWorkspace() {
                 <>
                   {/* Big stage */}
                   <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-neutral-950 border border-white/10">
-                    {allDone ? (
+                    {firstReady ? (
                       <button
                         onClick={() => setPlayingFilm(true)}
                         className="group absolute inset-0"
                       >
                         <video
-                          src={cards[0].videoUrl}
+                          src={firstReady.videoUrl}
                           muted
                           playsInline
                           autoPlay
@@ -290,7 +451,7 @@ function AgentWorkspace() {
                             <Play className="h-6 w-6 ml-1" fill="currentColor" />
                           </div>
                           <div className="mt-4 text-white text-lg font-medium drop-shadow">{filmTitle}</div>
-                          <div className="mt-1 text-white/70 text-xs">~{cards.length * 6}s · {cards.length} shots · dialogue + score</div>
+                          <div className="mt-1 text-white/70 text-xs">{allDone ? "Final cut ready" : `Progressive playback ready · ${readyCount}/${cards.length} shots`} · dialogue + score</div>
                         </div>
                       </button>
                     ) : (
@@ -305,11 +466,26 @@ function AgentWorkspace() {
                           </svg>
                           <span className="absolute inset-0 flex items-center justify-center text-sm">{totalProgress}%</span>
                         </div>
-                        <div className="text-sm text-white/70">Assembling cinematic edit…</div>
-                        <div className="text-[11px] text-white/40">Rendering shots · casting voices · scoring music</div>
+                        <div className="text-sm text-white/70">Building first playable shot…</div>
+                        <div className="text-[11px] text-white/40">Rendering video · casting voices · preparing timeline</div>
                       </div>
                     )}
                   </div>
+
+                  <VideoTimeline cards={cards} activeIndex={Math.max(0, readyCount - 1)} />
+
+                  {referenceImages.length > 0 && (
+                    <div>
+                      <div className="text-[11px] uppercase tracking-wider text-white/40 mb-2 flex items-center gap-1.5"><ImagePlus className="h-3 w-3" /> Reference images</div>
+                      <div className="flex gap-2 overflow-x-auto pb-1">
+                        {referenceImages.map((r, i) => (
+                          <div key={`${r.name}-${i}`} className="relative h-20 w-20 shrink-0 overflow-hidden rounded-md border border-white/10 bg-neutral-900">
+                            <img src={r.dataUrl} alt={r.name} className="h-full w-full object-cover" />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {logline && (
                     <p className="text-sm text-white/70 leading-relaxed italic border-l-2 border-white/20 pl-3">
@@ -319,7 +495,7 @@ function AgentWorkspace() {
 
                   {/* Shot filmstrip */}
                   <div>
-                    <div className="text-[11px] uppercase tracking-wider text-white/40 mb-2">Shot list · {cards.filter(c=>c.done).length}/{cards.length}</div>
+                    <div className="text-[11px] uppercase tracking-wider text-white/40 mb-2">Timeline slides · {cards.filter(c=>c.done).length}/{cards.length}</div>
                     <div className="grid grid-cols-4 gap-2">
                       {cards.map((c, i) => (
                         <div key={i} className="relative aspect-video rounded-md overflow-hidden bg-neutral-900 border border-white/5">
@@ -329,6 +505,7 @@ function AgentWorkspace() {
                             <div className="absolute inset-0 flex items-center justify-center text-[10px] text-white/40">{c.progress}%</div>
                           )}
                           <div className="absolute bottom-1 left-1 text-[9px] text-white/80 bg-black/60 px-1 rounded">#{i + 1}{c.shotType ? ` · ${c.shotType}` : ""}</div>
+                          <div className="absolute top-1 left-1 text-[9px] text-white/70 bg-black/60 px-1 rounded">{c.language || "dialogue"}</div>
                         </div>
                       ))}
                     </div>
@@ -392,9 +569,49 @@ function MessageBubble({ msg }: { msg: ChatMsg }) {
   );
 }
 
+function VideoTimeline({ cards, activeIndex }: { cards: StoryCard[]; activeIndex: number }) {
+  const total = cards.reduce((sum, card) => sum + (card.durationSeconds || 7), 0) || cards.length * 7 || 1;
+  let cursor = 0;
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+      <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-wider text-white/40">
+        <span>Video timeline</span>
+        <span>{formatTime(total)} · {cards.length} scenes</span>
+      </div>
+      <div className="flex h-14 overflow-hidden rounded-md border border-white/10 bg-black">
+        {cards.map((card, index) => {
+          const start = cursor;
+          const duration = card.durationSeconds || 7;
+          cursor += duration;
+          return (
+            <div
+              key={index}
+              className={`relative border-r border-black/70 ${index === activeIndex ? "bg-white/20" : card.done ? "bg-white/12" : "bg-white/5"}`}
+              style={{ width: `${Math.max(8, (duration / total) * 100)}%` }}
+              title={`${card.title} · ${formatTime(start)}-${formatTime(start + duration)}`}
+            >
+              <div className={`absolute inset-x-1 top-1 h-2 rounded-sm ${card.done ? "bg-emerald-400" : "bg-white/20"}`} />
+              <div className="absolute bottom-1 left-1 right-1 truncate text-[10px] text-white/70">#{index + 1} {card.shotType || "shot"}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function getSequentialReadyCards(cards: StoryCard[]) {
+  const ready: StoryCard[] = [];
+  for (const card of cards) {
+    if (!card.done || !card.videoUrl) break;
+    ready.push(card);
+  }
+  return ready;
+}
+
 /**
  * Cinematic FilmPlayer — professional AI edit on the client:
- *  - Two <video> elements alternating for gapless CROSSFADE cuts
+ *  - Single reliable <video> element with preload + guarded timing
  *  - Slow Ken-Burns zoom on every clip
  *  - Dialogue audio synced per shot (multiple voices)
  *  - Web Audio synthesized ambient PAD + soft bass score (always works, no CDN)
@@ -410,22 +627,28 @@ function FilmPlayer({
   title: string;
   onClose: () => void;
 }) {
-  const shots = useMemo(() => cards.filter((c) => c.videoUrl && c.done), [cards]);
+  const shots = useMemo(() => getSequentialReadyCards(cards), [cards]);
   const [idx, setIdx] = useState(0);
   const [muted, setMuted] = useState(false);
+  const [waitingNext, setWaitingNext] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const dialogueRef = useRef<HTMLAudioElement>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const masterGainRef = useRef<GainNode | null>(null);
+  const fallbackTimerRef = useRef<number | null>(null);
   const scoreStopRef = useRef<(() => void) | null>(null);
 
   const current = shots[idx];
+  const currentSceneIndex = Math.max(0, cards.findIndex((c) => c.videoUrl === current?.videoUrl));
 
   // Start ambient score once (user gesture already happened — Play click)
   useEffect(() => {
     const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     const ctx = new Ctx();
+    void ctx.resume?.();
     audioCtxRef.current = ctx;
     const master = ctx.createGain();
+    masterGainRef.current = master;
     master.gain.value = 0;
     master.gain.linearRampToValueAtTime(0.18, ctx.currentTime + 2);
     master.connect(ctx.destination);
@@ -463,8 +686,13 @@ function FilmPlayer({
     return () => { scoreStopRef.current?.(); };
   }, []);
 
-  // Duck score when a dialogue line plays
-  useEffect(() => { setMuted(false); }, []);
+  useEffect(() => {
+    const master = masterGainRef.current;
+    const ctx = audioCtxRef.current;
+    if (!master || !ctx) return;
+    master.gain.cancelScheduledValues(ctx.currentTime);
+    master.gain.linearRampToValueAtTime(muted ? 0 : 0.18, ctx.currentTime + 0.25);
+  }, [muted]);
 
   // Drive current shot: play video + sync dialogue
   useEffect(() => {
@@ -472,6 +700,7 @@ function FilmPlayer({
     if (v && current?.videoUrl) {
       v.src = current.videoUrl;
       v.currentTime = 0;
+      v.load();
       v.play().catch(() => {});
     }
     const d = dialogueRef.current;
@@ -480,10 +709,42 @@ function FilmPlayer({
       d.currentTime = 0;
       d.play().catch(() => {});
     }
-  }, [idx, current]);
+    if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
+    const duration = Math.max(5, current?.durationSeconds || 7) * 1000;
+    fallbackTimerRef.current = window.setTimeout(() => advance(), duration + 1200);
+    playSceneAccent(audioCtxRef.current, current?.sfx || current?.bgm || "cinematic cut");
+    const next = shots[idx + 1];
+    if (next?.videoUrl) {
+      const link = document.createElement("link");
+      link.rel = "preload";
+      link.as = "video";
+      link.href = next.videoUrl;
+      document.head.appendChild(link);
+      return () => {
+        link.remove();
+        if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
+      };
+    }
+    return () => {
+      if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idx, current?.videoUrl]);
+
+  useEffect(() => {
+    if (waitingNext && idx + 1 < shots.length) {
+      setWaitingNext(false);
+      setIdx((i) => i + 1);
+    }
+  }, [waitingNext, idx, shots.length]);
 
   function advance() {
+    if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
     if (idx + 1 >= shots.length) {
+      if (shots.length < cards.length) {
+        setWaitingNext(true);
+        return;
+      }
       setTimeout(() => onClose(), 800);
       return;
     }
@@ -508,7 +769,11 @@ function FilmPlayer({
           muted
           onEnded={advance}
           onError={advance}
+          onStalled={() => {
+            if (!waitingNext) setTimeout(() => videoRef.current?.play().catch(() => advance()), 900);
+          }}
           className="absolute inset-0 h-full w-full object-cover kenburns"
+          style={{ animationDuration: `${Math.max(6, current.durationSeconds || 7)}s` }}
         />
 
         {/* Dialogue */}
@@ -529,8 +794,17 @@ function FilmPlayer({
           </div>
         )}
 
+        {waitingNext && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 backdrop-blur-sm pointer-events-none">
+            <div className="rounded-md border border-white/15 bg-black/70 px-5 py-3 text-center">
+              <div className="text-sm text-white">Next shot is rendering…</div>
+              <div className="mt-1 text-[11px] text-white/50">Playback will continue automatically</div>
+            </div>
+          </div>
+        )}
+
         {/* Subtitle */}
-        <div key={`sub-${idx}`} className="absolute bottom-[9%] inset-x-0 text-center px-6 pointer-events-none animate-[fadein_0.5s_ease-out]">
+        <div key={`sub-${idx}`} className="absolute bottom-[20%] inset-x-0 text-center px-6 pointer-events-none animate-[fadein_0.5s_ease-out]">
           <div className="inline-block bg-black/60 text-white text-lg md:text-2xl px-6 py-3 rounded-md backdrop-blur max-w-[80%]">
             {current.character && <b className="mr-2 text-white/90">{current.character}:</b>}
             <span>{current.spokenLine}</span>
@@ -543,7 +817,13 @@ function FilmPlayer({
         </div>
 
         <div className="absolute top-4 left-4 text-white/70 text-[11px] uppercase tracking-widest z-20">
-          {title} · Shot {idx + 1}/{shots.length}
+          {title} · Scene {currentSceneIndex + 1}/{cards.length}
+        </div>
+        <div className="absolute top-10 left-4 max-w-[70vw] text-white text-sm md:text-lg font-medium drop-shadow z-20">
+          {current.title.replace(/^#\d+\s*/, "")}
+        </div>
+        <div className="absolute bottom-2 inset-x-4 z-20">
+          <VideoTimeline cards={cards} activeIndex={currentSceneIndex} />
         </div>
       </div>
 
@@ -555,4 +835,109 @@ function FilmPlayer({
       `}</style>
     </div>
   );
+}
+
+function chooseSceneCount(prompt: string) {
+  const text = prompt.toLowerCase();
+  const explicit = text.match(/(\d+)\s*(scene|scenes|slide|slides|shot|shots)/);
+  if (explicit) return Math.min(12, Math.max(4, Number(explicit[1])));
+  if (text.includes("fast") || text.includes("quick")) return 5;
+  return 8;
+}
+
+function readLearningContext() {
+  try {
+    const items = JSON.parse(localStorage.getItem("makers:learning") || "[]") as Array<{
+      prompt: string;
+      title: string;
+      tone: string;
+      languages?: string;
+    }>;
+    return items
+      .slice(0, 12)
+      .map((item) => `Prompt style: ${item.prompt.slice(0, 160)} | Film: ${item.title} | Tone: ${item.tone} | Languages: ${item.languages || "auto"}`)
+      .join("\n");
+  } catch {
+    return "";
+  }
+}
+
+function writeLearningContext(prompt: string, title: string, tone: string, languages: string) {
+  try {
+    const key = "makers:learning";
+    const items = JSON.parse(localStorage.getItem(key) || "[]") as Array<Record<string, unknown>>;
+    items.unshift({ prompt, title, tone, languages, at: Date.now() });
+    localStorage.setItem(key, JSON.stringify(items.slice(0, 50)));
+  } catch {
+    // best-effort local learning memory
+  }
+}
+
+function downloadText(filename: string, text: string, type: string) {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function imageFileToReferenceImage(file: File) {
+  return new Promise<ReferenceImage>((resolve, reject) => {
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = () => {
+      img.onload = () => {
+        const max = 720;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return reject(new Error("Could not process image"));
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve({ name: file.name, dataUrl: canvas.toDataURL("image/jpeg", 0.72), description: "character/style reference" });
+      };
+      img.onerror = reject;
+      img.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function slugify(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "makers-film";
+}
+
+function formatTime(seconds: number) {
+  const safe = Math.max(0, Math.round(seconds));
+  const m = Math.floor(safe / 60);
+  const s = safe % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function playSceneAccent(ctx: AudioContext | null, cue: string) {
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.05, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
+    gain.connect(ctx.destination);
+    const osc = ctx.createOscillator();
+    const lowerCue = cue.toLowerCase();
+    osc.type = lowerCue.includes("rain") || lowerCue.includes("wind") ? "sine" : "triangle";
+    osc.frequency.setValueAtTime(lowerCue.includes("impact") || lowerCue.includes("hit") ? 72 : 146, now);
+    osc.frequency.exponentialRampToValueAtTime(lowerCue.includes("rise") ? 220 : 54, now + 0.5);
+    osc.connect(gain);
+    osc.start(now);
+    osc.stop(now + 0.7);
+  } catch {
+    // audio accent is optional
+  }
 }

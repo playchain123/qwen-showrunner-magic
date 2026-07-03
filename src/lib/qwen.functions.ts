@@ -14,6 +14,15 @@ type Scene = {
   character?: string;
   spoken_line?: string;
   caption?: string;
+  language?: string;
+  voice_tone?: string;
+  pitch?: "low" | "medium" | "high";
+  bgm?: string;
+  sfx?: string;
+  duration_seconds?: number;
+  color_grade?: string;
+  editing_notes?: string;
+  reference_image_direction?: string;
 };
 type Storyboard = {
   title: string;
@@ -25,24 +34,44 @@ type Storyboard = {
 /** Generate a full short-drama storyboard from a logline using Qwen3.7-Max. */
 export const generateStoryboard = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
-    z.object({ prompt: z.string().min(1), sceneCount: z.number().int().min(1).max(12).default(8) }).parse(input),
+    z
+      .object({
+        prompt: z.string().min(1),
+        sceneCount: z.number().int().min(1).max(12).default(8),
+        learningContext: z.string().optional().default(""),
+        referenceImages: z
+          .array(z.object({ name: z.string(), description: z.string().optional().default("") }))
+          .optional()
+          .default([]),
+      })
+      .parse(input),
   )
   .handler(async ({ data }): Promise<Storyboard> => {
     const key = process.env.DASHSCOPE_API_KEY;
     if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
 
     const system = [
-      `You are Makers, an AI showrunner + screenwriter. Given a logline, produce a FULL cinematic short film script and shot-list of EXACTLY ${data.sceneCount} scenes (~5-7 seconds each) totaling ~60 seconds.`,
+      `You are Makers, an AI showrunner + screenwriter + professional film editor trained in Adobe Premiere Pro, After Effects, DaVinci Resolve, cinematic camera blocking, color grading, VFX, SFX, Foley, trailer pacing, and short-drama continuity. Given a logline, produce a FULL cinematic short film script and shot-list of EXACTLY ${data.sceneCount} scenes (~5-8 seconds each).`,
       `HARD RULES:`,
       `- Real short FILM, not narrated slideshow. NEVER use a narrator or voice-over. Every spoken line is an in-world character speaking on screen (no "Narrator:" ever).`,
       `- Reuse the same 2-3 named characters across scenes so the audience follows them.`,
       `- Vary shot types: wide establishing, medium, close-up, insert, action, reaction. No two consecutive scenes use the same shot_type.`,
-      `- video_prompt is a cinematic shot description (~50 words): camera movement (dolly in / tracking / handheld / crane / static close-up), lens & lighting, subject action, mood, environment ambience (wind, birds, rain, crowd, footsteps, distant thunder). End every video_prompt with: "cinematic, film grain, shallow depth of field, 35mm, dramatic lighting, high detail".`,
+      `- If the prompt asks for Tamil, Malayalam, Hindi, Telugu, Kannada, Bengali, Marathi, Punjabi, Urdu, or any Indian language, write clean native colloquial dialogue in that language's script with human slang and natural phrasing. Do not produce broken mixed-language output unless the user asks for Hinglish/Tanglish/etc.`,
+      `- Assign each scene a language, voice_tone, and pitch (low/medium/high) suitable for the character and emotion.`,
+      `- Add clean bgm and sfx cues for each scene: realistic ambience, Foley, impacts, transitions, room tone, emotional score.`,
+      `- Add professional editing_notes and color_grade for every scene: match cut, J-cut/L-cut, whip pan, speed ramp, rack focus, chromatic VFX, teal-orange grade, bleach bypass, warm film print, etc.`,
+      `- video_prompt is a cinematic shot description (~65 words): camera movement (dolly in / tracking / handheld / crane / static close-up), lens & lighting, subject action, character continuity, mood, environment ambience, VFX/SFX context, color grade. End every video_prompt with: "cinematic, film grain, shallow depth of field, 35mm, dramatic lighting, high detail, natural motion, real character performance".`,
       `- spoken_line: 5-15 words, natural dialogue that fits ~6 seconds.`,
       `- Long rich logline (3-4 sentences) and detailed tone.`,
+      data.referenceImages.length
+        ? `REFERENCE IMAGES PROVIDED: The user uploaded ${data.referenceImages.length} character/style reference image(s): ${data.referenceImages.map((r, i) => `#${i + 1} ${r.name}${r.description ? ` (${r.description})` : ""}`).join("; ")}. Keep characters, wardrobe, setting, and visual identity consistent with these references. Put the relevant reference guidance in reference_image_direction.`
+        : `If no reference images are provided, create consistent original characters and repeat their visual identity in every scene.`,
+      data.learningContext
+        ? `PROJECT LEARNING MEMORY: Apply these learned user preferences and prior prompt patterns without repeating mistakes: ${data.learningContext}`
+        : ``,
       ``,
       `Return ONLY strict JSON — no markdown:`,
-      `{"title":string,"logline":string,"tone":string,"scenes":Array<{"title":string,"visual":string,"dialogue":string,"character":string,"spoken_line":string,"caption":string,"video_prompt":string,"shot_type":string}>}`,
+      `{"title":string,"logline":string,"tone":string,"scenes":Array<{"title":string,"visual":string,"dialogue":string,"character":string,"spoken_line":string,"caption":string,"video_prompt":string,"shot_type":string,"language":string,"voice_tone":string,"pitch":"low"|"medium"|"high","bgm":string,"sfx":string,"duration_seconds":number,"color_grade":string,"editing_notes":string,"reference_image_direction":string}>}`,
     ].join("\n");
 
     const res = await fetch(CHAT_URL, {
@@ -59,6 +88,7 @@ export const generateStoryboard = createServerFn({ method: "POST" })
         ],
         response_format: { type: "json_object" },
         temperature: 0.8,
+        max_tokens: 6000,
       }),
     });
 
@@ -75,14 +105,14 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     return parsed;
   });
 
-/** Submit a video-gen task to HappyHorse T2V (async). Returns task_id. */
+/** Submit a text-to-video task to Qwen Cloud (async). Returns task_id. */
 export const submitVideo = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
     z
       .object({
         prompt: z.string().min(3),
         size: z.string().default("1280*720"),
-        model: z.enum(["happyhorse-1.1-t2v", "wan2.2-t2v-plus"]).default("happyhorse-1.1-t2v"),
+        model: z.enum(["happyhorse-1.1-t2v", "wan2.2-t2v-plus"]).default("wan2.2-t2v-plus"),
       })
       .parse(input),
   )
@@ -145,10 +175,56 @@ export const generateVoice = createServerFn({ method: "POST" })
         text: z.string().min(1).max(1000),
         voice: z.string().default("Cherry"), // Qwen3-TTS voice id (Cherry, Ethan, Serena, Chelsie, Dylan, Jada, Sunny…)
         language: z.string().default("English"),
+        tone: z.string().optional().default("natural cinematic dialogue"),
+        pitch: z.enum(["low", "medium", "high"]).optional().default("medium"),
       })
       .parse(input),
   )
   .handler(async ({ data }): Promise<{ audio_url: string; provider: string }> => {
+    const toDataUrl = (buffer: ArrayBuffer, mime = "audio/mpeg") => {
+      const bytes = new Uint8Array(buffer);
+      let bin = "";
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+      }
+      return `data:${mime};base64,${btoa(bin)}`;
+    };
+
+    const mapGatewayVoice = (voice: string) => {
+      const pool = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"];
+      let hash = 0;
+      for (let i = 0; i < voice.length; i++) hash = (hash * 31 + voice.charCodeAt(i)) >>> 0;
+      return pool[hash % pool.length];
+    };
+
+    // Prefer Lovable AI Gateway TTS for more natural multilingual delivery.
+    const lovKey = process.env.LOVABLE_API_KEY;
+    if (lovKey) {
+      try {
+        const res = await fetch("https://ai.gateway.lovable.dev/v1/audio/speech", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${lovKey}`,
+            "Lovable-API-Key": lovKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "openai/gpt-4o-mini-tts",
+            input: data.text,
+            voice: mapGatewayVoice(data.voice),
+            response_format: "mp3",
+            instructions: `Act as an on-screen film actor. Language: ${data.language}. Delivery: ${data.tone}. Pitch: ${data.pitch}. Speak with clean native human phrasing, natural emotion, no announcer voice, no narration, no robotic cadence.`,
+          }),
+        });
+        if (res.ok) {
+          return { audio_url: toDataUrl(await res.arrayBuffer()), provider: "gateway-tts" };
+        }
+      } catch {
+        // fall through to Qwen
+      }
+    }
+
     const dashKey = process.env.DASHSCOPE_API_KEY;
     if (dashKey) {
       try {
@@ -186,31 +262,7 @@ export const generateVoice = createServerFn({ method: "POST" })
       }
     }
 
-    // 2) Fallback — Lovable AI Gateway (OpenAI TTS) returns raw mp3 bytes
-    const lovKey = process.env.LOVABLE_API_KEY;
-    if (!lovKey) throw new Error("No TTS provider available");
-    const res = await fetch("https://ai.gateway.lovable.dev/v1/audio/speech", {
-      method: "POST",
-      headers: {
-        "Lovable-API-Key": lovKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "openai/gpt-4o-mini-tts",
-        input: data.text,
-        voice: "alloy",
-        response_format: "mp3",
-      }),
-    });
-    if (!res.ok) {
-      const t = await res.text();
-      throw new Error(`TTS failed (${res.status}): ${t.slice(0, 200)}`);
-    }
-    const buf = new Uint8Array(await res.arrayBuffer());
-    let bin = "";
-    for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]);
-    const b64 = btoa(bin);
-    return { audio_url: `data:audio/mpeg;base64,${b64}`, provider: "gateway-tts" };
+    throw new Error("No TTS provider available");
   });
 
 /** Transcribe an audio URL with Paraformer-v2 to get word-level timing for subtitle sync. */
