@@ -75,31 +75,74 @@ export const generateStoryboard = createServerFn({ method: "POST" })
       `{"title":string,"logline":string,"tone":string,"scenes":Array<{"title":string,"visual":string,"dialogue":string,"character":string,"spoken_line":string,"caption":string,"video_prompt":string,"shot_type":string,"language":string,"voice_tone":string,"pitch":"low"|"medium"|"high","bgm":string,"sfx":string,"duration_seconds":number,"color_grade":string,"editing_notes":string,"reference_image_direction":string}>}`,
     ].join("\n");
 
-    const res = await fetch(CHAT_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "qwen3.7-max",
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: data.prompt },
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0.8,
-        max_tokens: 6000,
-      }),
-    });
+    const messages = [
+      { role: "system", content: system },
+      { role: "user", content: data.prompt },
+    ];
 
-    if (!res.ok) {
-      const t = await res.text();
-      throw new Error(`Qwen chat failed (${res.status}): ${t.slice(0, 300)}`);
+    // Qwen upstream frequently returns Cloudflare 524 (timeout) on large json_object
+    // completions. Retry with backoff across model tiers, then fall back to the
+    // Lovable AI Gateway (Gemini) so the pipeline never blocks on Qwen alone.
+    const attempts: Array<{ model: string; max_tokens: number }> = [
+      { model: "qwen3.7-max", max_tokens: 5000 },
+      { model: "qwen-plus", max_tokens: 4000 },
+      { model: "qwen-plus", max_tokens: 3000 },
+    ];
+    let content = "";
+    let lastErr = "";
+    for (let i = 0; i < attempts.length; i++) {
+      const { model, max_tokens } = attempts[i];
+      try {
+        const controller = new AbortController();
+        const to = setTimeout(() => controller.abort(), 90_000);
+        const res = await fetch(CHAT_URL, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model,
+            messages,
+            response_format: { type: "json_object" },
+            temperature: 0.8,
+            max_tokens,
+          }),
+          signal: controller.signal,
+        }).finally(() => clearTimeout(to));
+        if (res.ok) {
+          const j = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+          content = j.choices?.[0]?.message?.content ?? "";
+          if (content) break;
+        } else {
+          lastErr = `Qwen ${model} (${res.status})`;
+          if (res.status < 500 && res.status !== 429) break; // don't retry client errors
+        }
+      } catch (e) {
+        lastErr = `Qwen ${model} ${(e as Error).message}`;
+      }
+      await new Promise((r) => setTimeout(r, 1500 * (i + 1)));
     }
-    const json = (await res.json()) as { choices: Array<{ message: { content: string } }> };
-    const content = json.choices?.[0]?.message?.content ?? "{}";
-    const parsed = JSON.parse(content) as Storyboard;
+
+    // Fallback: Lovable AI Gateway (Gemini) — same JSON contract.
+    if (!content) {
+      const lovKey = process.env.LOVABLE_API_KEY;
+      if (!lovKey) throw new Error(`Storyboard failed: ${lastErr || "Qwen unreachable"}`);
+      const res = await fetch(`${LOVABLE_GATEWAY}/v1/chat/completions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${lovKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "google/gemini-2.5-flash",
+          messages,
+          response_format: { type: "json_object" },
+        }),
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`Storyboard fallback failed (${res.status}): ${t.slice(0, 240)}`);
+      }
+      const j = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+      content = j.choices?.[0]?.message?.content ?? "{}";
+    }
+
+    const parsed = JSON.parse(content || "{}") as Storyboard;
     if (!parsed.scenes || !Array.isArray(parsed.scenes)) {
       throw new Error("Storyboard missing scenes");
     }
