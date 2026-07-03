@@ -589,6 +589,65 @@ function AgentWorkspace() {
       {playingFilm && (
         <FilmPlayer cards={cards} title={filmTitle} onClose={() => setPlayingFilm(false)} />
       )}
+      {openScene !== null && cards[openScene] && (
+        <SceneDetail card={cards[openScene]} index={openScene} total={cards.length} onClose={() => setOpenScene(null)} />
+      )}
+    </div>
+  );
+}
+
+function SceneDetail({ card, index, total, onClose }: { card: StoryCard; index: number; total: number; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-40 bg-black/80 backdrop-blur-sm flex items-center justify-center p-6" onClick={onClose}>
+      <div className="max-w-3xl w-full rounded-2xl border border-white/10 bg-neutral-950 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="relative aspect-video bg-black">
+          {card.videoUrl && card.done ? (
+            <video src={card.videoUrl} controls autoPlay playsInline className="h-full w-full object-cover" />
+          ) : card.posterUrl ? (
+            <img src={card.posterUrl} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <div className="h-full w-full flex items-center justify-center text-white/40 text-sm">Rendering… {card.progress}%</div>
+          )}
+        </div>
+        <div className="p-5 space-y-3 text-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-xs text-white/40">Scene {index + 1} / {total}</div>
+              <div className="text-lg font-medium text-white">{card.title.replace(/^#\d+\s*/, "")}</div>
+            </div>
+            <button onClick={onClose} className="text-white/60 hover:text-white text-sm">Close ✕</button>
+          </div>
+          {card.visual && <p className="text-white/70 leading-relaxed">{card.visual}</p>}
+          <div className="grid grid-cols-2 gap-3 text-xs text-white/70">
+            <Detail label="Shot" value={card.shotType} />
+            <Detail label="Character" value={card.character} />
+            <Detail label="Language" value={card.language} />
+            <Detail label="Voice tone" value={card.voiceTone} />
+            <Detail label="Pitch" value={card.pitch} />
+            <Detail label="Duration" value={`${card.durationSeconds || 7}s`} />
+            <Detail label="Color grade" value={card.colorGrade} />
+            <Detail label="Editing note" value={card.editingNotes} />
+            <Detail label="BGM" value={card.bgm} />
+            <Detail label="SFX" value={card.sfx} />
+          </div>
+          {card.spokenLine && (
+            <div className="rounded-md border border-white/10 bg-white/[0.03] p-3">
+              <div className="text-[10px] uppercase tracking-wider text-white/40 mb-1">Dialogue</div>
+              <div className="text-white">{card.character && <b className="mr-1">{card.character}:</b>}{card.spokenLine}</div>
+              {card.audioUrl && <audio controls src={card.audioUrl} className="mt-2 w-full" />}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+function Detail({ label, value }: { label: string; value?: string }) {
+  if (!value) return null;
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider text-white/40">{label}</div>
+      <div className="text-white/85">{value}</div>
     </div>
   );
 }
