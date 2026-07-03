@@ -549,7 +549,13 @@ function AgentWorkspace() {
                     )}
                   </div>
 
-                  <ContextPanel cards={cards} title={filmTitle} logline={logline} onScene={setOpenScene} />
+                  <ContextPanel
+                    cards={cards}
+                    title={filmTitle}
+                    logline={logline}
+                    onScene={setOpenScene}
+                    references={referenceImages}
+                  />
 
                   {referenceImages.length > 0 && (
                     <div>
