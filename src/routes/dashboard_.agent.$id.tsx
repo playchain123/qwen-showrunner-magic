@@ -126,11 +126,20 @@ function AgentWorkspace() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, thinking]);
 
-  async function runPipeline(prompt: string) {
+  async function runPipeline(prompt: string, refs = referenceImages) {
+    setCurrentPrompt(prompt);
     setThinking(true);
+    setPlayingFilm(false);
+    setCards([]);
+    setTasks([]);
+    setFilmTitle("");
+    setLogline("");
     try {
-      // 1. Storyboard via Qwen (5 scenes ~ 30s — faster, still cinematic)
-      const story = await generateStoryboard({ data: { prompt, sceneCount: 5 } });
+      const sceneCount = chooseSceneCount(prompt);
+      const learningContext = readLearningContext();
+      const referenceBrief = refs.map((r) => ({ name: r.name, description: r.description || "user uploaded character/style reference image" }));
+      // 1. Storyboard via Qwen — prompt-aware scene count with persistent learning context
+      const story = await generateStoryboard({ data: { prompt, sceneCount, learningContext, referenceImages: referenceBrief } });
       setThinking(false);
       setFilmTitle(story.title);
       setLogline(story.logline);
@@ -138,15 +147,15 @@ function AgentWorkspace() {
         ...m,
         {
           role: "agent",
-          text: `🎬 "${story.title}"\n${story.logline}\n\nTone: ${story.tone}\n\nRolling ${story.scenes.length} cinematic shots — editing dialogue, ambient sound and score into one continuous film.`,
-          skills: ["Script Agent", "Shot-list Agent", "Casting & Voice Agent", "Cinematography Agent", "Editorial / Score Agent"],
+          text: `🎬 "${story.title}"\n${story.logline}\n\nTone: ${story.tone}\n\nRolling ${story.scenes.length} cinematic shots into a timeline — dialogue, Foley, score, color grade, VFX cues and clean scene continuity are saved to this session.`,
+          skills: ["Script Agent", "Shot-list Agent", "Casting & Voice Agent", "Cinematography Agent", "Premiere Pro Edit Agent", "After Effects VFX Agent", "DaVinci Color Agent", "SFX / Foley Agent", "Learning Memory Agent"],
           task: `Cut ${story.scenes.length} shots into a short film`,
         },
       ]);
       setTasks([
         { text: `Render ${story.scenes.length} cinematic shots`, done: false },
-        { text: `Cast voices per character`, done: false },
-        { text: `Assemble edit: cuts, crossfades, score`, done: false },
+        { text: `Cast clean human dialogue voices`, done: false },
+        { text: `Build timeline: cuts, J/L-cuts, VFX, score, SFX`, done: false },
       ]);
 
       // 2. Add cards + submit videos in parallel
@@ -154,14 +163,26 @@ function AgentWorkspace() {
       setCards(
         scenes.map((s, i) => ({
           title: `#${i + 1} ${s.title}`,
+          visual: s.visual,
           caption: s.caption || s.spoken_line || s.dialogue,
           spokenLine: s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, ""),
           character: s.character || "",
           shotType: (s as { shot_type?: string }).shot_type,
+          language: s.language,
+          voiceTone: s.voice_tone,
+          pitch: s.pitch,
+          bgm: s.bgm,
+          sfx: s.sfx,
+          durationSeconds: s.duration_seconds || 7,
+          colorGrade: s.color_grade,
+          editingNotes: s.editing_notes,
+          referenceImageDirection: s.reference_image_direction,
           progress: 5,
           done: false,
         })),
       );
+
+      writeLearningContext(prompt, story.title, story.tone, story.scenes.map((s) => s.language).filter(Boolean).join(", "));
 
       await Promise.all(
         scenes.map(async (s, idx) => {
@@ -177,14 +198,25 @@ function AgentWorkspace() {
               data: {
                 text: s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, ""),
                 voice: chosenVoice,
+                language: s.language || "English",
+                tone: s.voice_tone || "natural film dialogue",
+                pitch: s.pitch || "medium",
               },
             })
               .then((v) => {
                 setCards((c) => c.map((card, i) => (i === idx ? { ...card, audioUrl: v.audio_url } : card)));
+                setTasks((t) => t.map((task, taskIndex) => (taskIndex === 1 ? { ...task, done: true } : task)));
               })
               .catch(() => {});
+            const fullPrompt = [
+              s.video_prompt,
+              s.reference_image_direction ? `Character/style reference: ${s.reference_image_direction}` : "",
+              s.editing_notes ? `Professional edit intent: ${s.editing_notes}` : "",
+              s.color_grade ? `Color grade: ${s.color_grade}` : "",
+              s.sfx ? `On-screen action must support these clean SFX cues: ${s.sfx}` : "",
+            ].filter(Boolean).join("\n");
             const { task_id } = await submitVideo({
-              data: { prompt: s.video_prompt, size: "832*480" },
+              data: { prompt: fullPrompt, size: "832*480", model: "wan2.2-t2v-plus" },
             });
             // poll
             let attempts = 0;
@@ -199,6 +231,7 @@ function AgentWorkspace() {
                 setCards((c) =>
                   c.map((card, i) => (i === idx ? { ...card, progress: 100, done: true, videoUrl: status.video_url } : card)),
                 );
+                setTasks((t) => t.map((task, taskIndex) => (taskIndex === 0 ? { ...task, done: true } : task)));
                 return;
               }
               if (status.status === "FAILED") throw new Error(status.error || "Task failed");
@@ -235,10 +268,20 @@ function AgentWorkspace() {
             title: c.title,
             videoUrl: c.videoUrl,
             audioUrl: c.audioUrl,
+            visual: c.visual,
             caption: c.caption,
             spokenLine: c.spokenLine,
             character: c.character,
             shotType: c.shotType,
+            language: c.language,
+            voiceTone: c.voiceTone,
+            pitch: c.pitch,
+            bgm: c.bgm,
+            sfx: c.sfx,
+            durationSeconds: c.durationSeconds,
+            colorGrade: c.colorGrade,
+            editingNotes: c.editingNotes,
+            referenceImageDirection: c.referenceImageDirection,
           })),
         });
         localStorage.setItem(key, JSON.stringify(existing.slice(0, 30)));
@@ -255,7 +298,52 @@ function AgentWorkspace() {
     const text = input.trim();
     setMessages((m) => [...m, { role: "user", text }]);
     setInput("");
-    void runPipeline(text);
+    void runPipeline(text, referenceImages);
+  }
+
+  async function handleReferenceFiles(files: FileList | null) {
+    if (!files?.length) return;
+    const images = Array.from(files).filter((file) => file.type.startsWith("image/")).slice(0, 8);
+    const loaded = await Promise.all(
+      images.map(
+        (file) =>
+          new Promise<ReferenceImage>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve({ name: file.name, dataUrl: String(reader.result), description: "character/style reference" });
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          }),
+      ),
+    );
+    setReferenceImages((prev) => [...prev, ...loaded].slice(0, 8));
+  }
+
+  function exportProject() {
+    downloadText(
+      `${slugify(filmTitle || "makers-film")}-project.json`,
+      JSON.stringify({ id, prompt: currentPrompt, title: filmTitle, logline, referenceImages, scenes: cards }, null, 2),
+      "application/json",
+    );
+  }
+
+  function exportTimeline() {
+    const timeline = cards.map((c, i) => {
+      const start = cards.slice(0, i).reduce((sum, s) => sum + (s.durationSeconds || 7), 0);
+      const end = start + (c.durationSeconds || 7);
+      return [
+        `SCENE ${i + 1}: ${c.title.replace(/^#\d+\s*/, "")}`,
+        `TIME: ${formatTime(start)} - ${formatTime(end)}`,
+        `SHOT: ${c.shotType || "cinematic"}`,
+        `DIALOGUE: ${c.character ? `${c.character}: ` : ""}${c.spokenLine}`,
+        `VOICE: ${c.language || "English"}, ${c.voiceTone || "natural"}, ${c.pitch || "medium"} pitch`,
+        `BGM: ${c.bgm || "cinematic score"}`,
+        `SFX: ${c.sfx || "clean room tone and Foley"}`,
+        `GRADE: ${c.colorGrade || "cinematic film grade"}`,
+        `EDIT: ${c.editingNotes || "straight cut with smooth continuity"}`,
+        `VIDEO: ${c.videoUrl || "rendering"}`,
+      ].join("\n");
+    }).join("\n\n---\n\n");
+    downloadText(`${slugify(filmTitle || "makers-film")}-timeline.txt`, `${filmTitle}\n${logline}\n\n${timeline}`, "text/plain");
   }
 
   return (
