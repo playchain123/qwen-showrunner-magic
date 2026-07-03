@@ -241,7 +241,6 @@ function AgentWorkspace() {
             })
               .then((v) => {
                 setCards((c) => c.map((card, i) => (i === idx ? { ...card, audioUrl: v.audio_url } : card)));
-                setTasks((t) => t.map((task, taskIndex) => (taskIndex === 1 ? { ...task, done: true } : task)));
               })
               .catch(() => {});
             const fullPrompt = [
