@@ -5,6 +5,7 @@ const DASHSCOPE_BASE = "https://dashscope-intl.aliyuncs.com";
 const CHAT_URL = `${DASHSCOPE_BASE}/compatible-mode/v1/chat/completions`;
 const VIDEO_SUBMIT_URL = `${DASHSCOPE_BASE}/api/v1/services/aigc/video-generation/video-synthesis`;
 const TASK_URL = (id: string) => `${DASHSCOPE_BASE}/api/v1/tasks/${id}`;
+const LOVABLE_GATEWAY = "https://ai.gateway.lovable.dev";
 
 type Scene = {
   title: string;
@@ -263,6 +264,71 @@ export const generateVoice = createServerFn({ method: "POST" })
     }
 
     throw new Error("No TTS provider available");
+  });
+
+/** Generate a cinematic scene poster image via Lovable AI (Gemini image).
+ * Accepts optional reference images (data URLs or https URLs) so characters,
+ * wardrobe and setting stay consistent across the whole film. */
+export const generateSceneImage = createServerFn({ method: "POST" })
+  .inputValidator((input: unknown) =>
+    z
+      .object({
+        prompt: z.string().min(3),
+        referenceImages: z.array(z.string()).optional().default([]),
+        referenceWeight: z.number().min(0).max(1).optional().default(0.75),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }): Promise<{ image_url: string }> => {
+    const key = process.env.LOVABLE_API_KEY;
+    if (!key) throw new Error("LOVABLE_API_KEY not configured");
+    const weightPct = Math.round(data.referenceWeight * 100);
+    const guidance = data.referenceImages.length
+      ? `Match the provided reference image(s) at ~${weightPct}% strength: keep the SAME character face, hairstyle, wardrobe, ethnicity and body type. Preserve environmental continuity and color palette. Do not invent a new character.`
+      : ``;
+    const content: Array<Record<string, unknown>> = [
+      {
+        type: "text",
+        text: [
+          `Cinematic film still, 35mm anamorphic look, professional lighting, shallow depth of field, natural human subject, real photography look — NOT stylized illustration unless the prompt says animation.`,
+          guidance,
+          `SCENE: ${data.prompt}`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      },
+    ];
+    for (const ref of data.referenceImages.slice(0, 4)) {
+      content.push({ type: "image_url", image_url: { url: ref } });
+    }
+
+    const res = await fetch(`${LOVABLE_GATEWAY}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash-image",
+        messages: [{ role: "user", content }],
+        modalities: ["image", "text"],
+      }),
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(`Scene image failed (${res.status}): ${t.slice(0, 240)}`);
+    }
+    const j = (await res.json()) as {
+      choices?: Array<{
+        message?: {
+          images?: Array<{ image_url?: { url?: string } }>;
+          content?: unknown;
+        };
+      }>;
+    };
+    const url = j.choices?.[0]?.message?.images?.[0]?.image_url?.url;
+    if (!url) throw new Error("No image returned from gateway");
+    return { image_url: url };
   });
 
 /** Transcribe an audio URL with Paraformer-v2 to get word-level timing for subtitle sync. */
