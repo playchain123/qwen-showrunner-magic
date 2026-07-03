@@ -742,64 +742,66 @@ function MessageBubble({ msg }: { msg: ChatMsg }) {
   );
 }
 
-function VideoTimeline({ cards, activeIndex, onScene }: { cards: StoryCard[]; activeIndex: number; onScene?: (i: number) => void }) {
+function ContextPanel({ cards, title, logline, onScene }: { cards: StoryCard[]; title: string; logline: string; onScene?: (i: number) => void }) {
   const total = cards.reduce((sum, card) => sum + (card.durationSeconds || 8), 0) || cards.length * 8 || 1;
-  let cursor = 0;
+  const rendered = cards.filter((card) => card.done && card.videoUrl).length;
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
-      <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-wider text-white/40">
-        <span>Video timeline</span>
-        <span>{formatTime(total)} · {cards.length} scenes</span>
+    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-white/40">
+            <BookOpen className="h-3 w-3" /> Context
+          </div>
+          <h2 className="mt-1 text-lg font-medium text-white">{title || "Story context"}</h2>
+        </div>
+        <div className="text-right text-[11px] text-white/50">
+          <div>{formatTime(total)} · {cards.length} scenes</div>
+          <div>{rendered}/{cards.length} videos rendered</div>
+        </div>
       </div>
-      <div className="flex h-20 overflow-hidden rounded-md border border-white/10 bg-black">
-        {cards.map((card, index) => {
-          const start = cursor;
-          const duration = card.durationSeconds || 8;
-          cursor += duration;
-          return (
-            <button
-              type="button"
-              onClick={() => onScene?.(index)}
-              key={index}
-              className={`relative border-r border-black/70 overflow-hidden group ${index === activeIndex ? "ring-1 ring-inset ring-white/60" : ""}`}
-              style={{ width: `${Math.max(8, (duration / total) * 100)}%` }}
-              title={`${card.title} · ${formatTime(start)}-${formatTime(start + duration)}`}
-            >
-              {card.posterUrl || card.videoUrl ? (
-                card.videoUrl && card.done ? (
-                  <video src={card.videoUrl} muted playsInline className="absolute inset-0 h-full w-full object-cover opacity-80 group-hover:opacity-100" />
-                ) : (
-                  <img src={card.posterUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-80 group-hover:opacity-100" />
-                )
-              ) : (
-                <div className="absolute inset-0 bg-white/5" />
-              )}
-              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent" />
-              <div className={`absolute inset-x-1 top-1 h-1 rounded-sm ${card.done ? "bg-emerald-400" : "bg-white/40"}`}
-                   style={{ width: `${Math.max(8, card.progress)}%` }} />
-              <div className="absolute bottom-1 left-1 right-1 truncate text-[10px] text-white drop-shadow">#{index + 1} {card.shotType || "shot"}</div>
-              <div className="absolute top-1.5 right-1 flex gap-0.5">
-                {card.audioUrl && <span className="text-[8px] bg-black/70 text-white px-1 rounded">🎙</span>}
+      {logline && <p className="text-sm text-white/70 leading-relaxed">{logline}</p>}
+      <div className="space-y-3">
+        {cards.map((card, index) => (
+          <button
+            key={index}
+            type="button"
+            onClick={() => onScene?.(index)}
+            className="w-full rounded-lg border border-white/10 bg-black/25 p-3 text-left hover:border-white/25 transition"
+          >
+            <div className="flex items-center gap-3">
+              <span className={`h-6 w-6 shrink-0 rounded-full border flex items-center justify-center text-[11px] ${card.done && card.videoUrl ? "border-emerald-400 bg-emerald-400 text-black" : "border-white/20 text-white/50"}`}>
+                {card.done && card.videoUrl ? <Check className="h-3.5 w-3.5" /> : index + 1}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="font-medium text-white">Scene {index + 1}: {card.title.replace(/^#\d+\s*/, "")}</span>
+                  <span className="text-[11px] text-white/45">{card.shotType || "cinematic shot"}</span>
+                  <span className="text-[11px] text-white/45">{card.location || "story location"}</span>
+                </div>
+                <p className="mt-1 line-clamp-2 text-xs text-white/65">{card.visual || card.caption}</p>
               </div>
-            </button>
-          );
-        })}
+              <div className="text-right text-[11px] text-white/45">
+                <div>{card.durationSeconds || 8}s</div>
+                <div>{card.done && card.videoUrl ? "rendered" : `${card.progress}%`}</div>
+              </div>
+            </div>
+            <div className="mt-3 rounded-md bg-white/[0.04] px-3 py-2 text-xs text-white/75">
+              {card.character && <b className="mr-1 text-white/90">{card.character}:</b>}{card.spokenLine}
+            </div>
+            <div className="mt-2 grid gap-2 text-[11px] text-white/45 sm:grid-cols-3">
+              <span>BGM: {card.bgm || "cinematic score"}</span>
+              <span>SFX: {card.sfx || "Foley"}</span>
+              <span>Edit: {card.editingNotes || "continuity cut"}</span>
+            </div>
+          </button>
+        ))}
       </div>
     </div>
   );
 }
 
-function getSequentialReadyCards(cards: StoryCard[]) {
-  const ready: StoryCard[] = [];
-  for (const card of cards) {
-    // Play every scene that has SOMETHING to show. A scene with only a
-    // poster (video still rendering) plays as a still with dialogue + BGM
-    // for its duration, then advances — so the full film is watchable
-    // end-to-end instead of stopping at the first un-rendered shot.
-    if (!card.videoUrl && !card.posterUrl) break;
-    ready.push(card);
-  }
-  return ready;
+function getRenderedCards(cards: StoryCard[]) {
+  return cards.filter((card) => card.done && Boolean(card.videoUrl));
 }
 
 /**
