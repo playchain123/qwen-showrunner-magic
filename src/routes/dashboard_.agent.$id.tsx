@@ -442,9 +442,6 @@ function AgentWorkspace() {
                   <button onClick={() => uploadRef.current?.click()} className="h-7 w-7 rounded-full border border-white/10 hover:bg-white/10 flex items-center justify-center" title="Add character reference images">
                     <Plus className="h-3.5 w-3.5" />
                   </button>
-                  <button onClick={() => setBibleOpen(true)} className="h-7 rounded-full border border-white/10 hover:bg-white/10 px-2 text-[11px] text-white/80" title="Build a locked character bible">
-                    ✦ Character
-                  </button>
                   {referenceImages.length > 0 && <span className="text-[11px] text-white/50">{referenceImages.length} refs</span>}
                   <div className="flex items-center gap-2">
                     <span className="text-[11px] text-white/50">Makers lite ▾</span>
@@ -922,9 +919,8 @@ function FilmPlayer({
   useEffect(() => {
     const v = videoRef.current;
     if (v && current?.videoUrl) {
-      v.src = current.videoUrl;
+      if (v.src !== current.videoUrl) v.src = current.videoUrl;
       v.currentTime = 0;
-      v.load();
       v.play().catch(() => {});
     }
     const d = dialogueRef.current;
@@ -939,13 +935,19 @@ function FilmPlayer({
     playSceneAccent(audioCtxRef.current, current?.sfx || current?.bgm || "cinematic cut");
     const next = shots[idx + 1];
     if (next?.videoUrl) {
-      const link = document.createElement("link");
-      link.rel = "preload";
-      link.as = "video";
-      link.href = next.videoUrl;
-      document.head.appendChild(link);
+      // Warm the browser cache for the next clip so scene change doesn't flash black
+      const preload = document.createElement("video");
+      preload.src = next.videoUrl;
+      preload.preload = "auto";
+      preload.muted = true;
+      preload.style.position = "absolute";
+      preload.style.width = "1px";
+      preload.style.height = "1px";
+      preload.style.opacity = "0";
+      preload.style.pointerEvents = "none";
+      document.body.appendChild(preload);
       return () => {
-        link.remove();
+        preload.remove();
         if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
       };
     }
@@ -1051,9 +1053,18 @@ function FilmPlayer({
       </button>
 
       <div className="relative w-screen h-screen overflow-hidden bg-black">
+        {/* Persistent poster underlay — kills the black flash between clips */}
+        {current.posterUrl && (
+          <img
+            src={current.posterUrl}
+            alt=""
+            aria-hidden
+            className="absolute inset-0 h-full w-full object-cover"
+            style={{ filter: filterForGrade(current.colorGrade) }}
+          />
+        )}
         <video
           ref={videoRef}
-          key={idx}
           autoPlay
           playsInline
           muted
@@ -1062,7 +1073,8 @@ function FilmPlayer({
           onStalled={() => {
             if (!waitingNext) setTimeout(() => videoRef.current?.play().catch(() => advance()), 900);
           }}
-          className="absolute inset-0 h-full w-full object-cover kenburns"
+          poster={current.posterUrl}
+          className="absolute inset-0 h-full w-full object-cover kenburns transition-opacity duration-500"
           style={{
             animationDuration: `${Math.max(6, current.durationSeconds || 7)}s`,
             filter: filterForGrade(current.colorGrade),
