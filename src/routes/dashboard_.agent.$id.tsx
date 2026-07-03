@@ -794,7 +794,7 @@ function FilmPlayer({
         )}
 
         {/* Subtitle */}
-        <div key={`sub-${idx}`} className="absolute bottom-[9%] inset-x-0 text-center px-6 pointer-events-none animate-[fadein_0.5s_ease-out]">
+        <div key={`sub-${idx}`} className="absolute bottom-[20%] inset-x-0 text-center px-6 pointer-events-none animate-[fadein_0.5s_ease-out]">
           <div className="inline-block bg-black/60 text-white text-lg md:text-2xl px-6 py-3 rounded-md backdrop-blur max-w-[80%]">
             {current.character && <b className="mr-2 text-white/90">{current.character}:</b>}
             <span>{current.spokenLine}</span>
