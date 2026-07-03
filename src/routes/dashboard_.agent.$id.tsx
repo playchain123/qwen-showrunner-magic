@@ -822,10 +822,9 @@ function FilmPlayer({
   title: string;
   onClose: () => void;
 }) {
-  const shots = useMemo(() => getSequentialReadyCards(cards), [cards]);
+  const shots = useMemo(() => getRenderedCards(cards), [cards]);
   const [idx, setIdx] = useState(0);
   const [muted, setMuted] = useState(false);
-  const [waitingNext, setWaitingNext] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordDone, setRecordDone] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -915,7 +914,8 @@ function FilmPlayer({
         v.volume = 0.9;
         v.play().catch(() => {});
       } else {
-        // Poster-only shot — remove any prior source so we don't loop last clip
+        // Should not happen because playback is locked until all videos render,
+        // but clear the source defensively if an old session has incomplete data.
         v.removeAttribute("src");
         v.load();
       }
@@ -928,9 +928,7 @@ function FilmPlayer({
     }
     if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
     const duration = Math.max(6, current?.durationSeconds || 8) * 1000;
-    // Poster-only shots have no onEnded, so the fallback timer IS the driver.
-    const hold = current?.videoUrl ? duration + 1200 : duration;
-    fallbackTimerRef.current = window.setTimeout(() => advance(), hold);
+    fallbackTimerRef.current = window.setTimeout(() => advance(), duration + 1200);
     playSceneAccent(audioCtxRef.current, current?.sfx || current?.bgm || "cinematic cut");
     const next = shots[idx + 1];
     if (next?.videoUrl) {
@@ -961,20 +959,9 @@ function FilmPlayer({
     if (videoRef.current) videoRef.current.muted = muted;
   }, [muted]);
 
-  useEffect(() => {
-    if (waitingNext && idx + 1 < shots.length) {
-      setWaitingNext(false);
-      setIdx((i) => i + 1);
-    }
-  }, [waitingNext, idx, shots.length]);
-
   function advance() {
     if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
     if (idx + 1 >= shots.length) {
-      if (shots.length < cards.length) {
-        setWaitingNext(true);
-        return;
-      }
       // End of film — stop recording if active
       if (recorderRef.current && recorderRef.current.state !== "inactive") {
         try { recorderRef.current.stop(); } catch { /* noop */ }
@@ -1074,12 +1061,12 @@ function FilmPlayer({
           onEnded={advance}
           onError={advance}
           onStalled={() => {
-            if (!waitingNext) setTimeout(() => videoRef.current?.play().catch(() => advance()), 900);
+            setTimeout(() => videoRef.current?.play().catch(() => advance()), 900);
           }}
           poster={current.posterUrl}
           className="absolute inset-0 h-full w-full object-cover kenburns transition-opacity duration-500"
           style={{
-            animationDuration: `${Math.max(6, current.durationSeconds || 7)}s`,
+            animationDuration: `${Math.max(6, current.durationSeconds || 8)}s`,
             filter: filterForGrade(current.colorGrade),
           }}
         />
@@ -1104,15 +1091,6 @@ function FilmPlayer({
           </div>
         )}
 
-        {waitingNext && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/35 backdrop-blur-sm pointer-events-none">
-            <div className="rounded-md border border-white/15 bg-black/70 px-5 py-3 text-center">
-              <div className="text-sm text-white">Next shot is rendering…</div>
-              <div className="mt-1 text-[11px] text-white/50">Playback will continue automatically</div>
-            </div>
-          </div>
-        )}
-
         {/* Subtitle */}
         <div key={`sub-${idx}`} className="absolute bottom-[20%] inset-x-0 text-center px-6 pointer-events-none animate-[fadein_0.5s_ease-out]">
           <div className="inline-block bg-black/60 text-white text-lg md:text-2xl px-6 py-3 rounded-md backdrop-blur max-w-[80%]">
@@ -1131,9 +1109,6 @@ function FilmPlayer({
         </div>
         <div className="absolute top-10 left-4 max-w-[70vw] text-white text-sm md:text-lg font-medium drop-shadow z-20">
           {current.title.replace(/^#\d+\s*/, "")}
-        </div>
-        <div className="absolute bottom-2 inset-x-4 z-20">
-          <VideoTimeline cards={cards} activeIndex={currentSceneIndex} />
         </div>
       </div>
 
