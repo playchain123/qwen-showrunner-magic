@@ -48,6 +48,8 @@ function AgentWorkspace() {
   const [logline, setLogline] = useState<string>("");
   const [currentPrompt, setCurrentPrompt] = useState<string>("");
   const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
+  const [refWeight, setRefWeight] = useState<number>(0.75);
+  const [openScene, setOpenScene] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
   const startedRef = useRef(false);
