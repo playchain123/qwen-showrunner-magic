@@ -41,6 +41,8 @@ function AgentWorkspace() {
     ? Math.round(cards.reduce((s, c) => s + c.progress, 0) / cards.length)
     : 0;
   const allDone = cards.length > 0 && cards.every((c) => c.done);
+  const readyCount = cards.filter((c) => c.done && c.videoUrl).length;
+  const canPlay = readyCount >= 1;
 
   // auth + seed
   useEffect(() => {
@@ -250,12 +252,12 @@ function AgentWorkspace() {
               <span className="font-medium text-white">Film Preview</span>
               <span className="text-white/40">·</span>
               <span className="text-white/60 truncate">{filmTitle || "Untitled"}</span>
-              {allDone && (
+              {canPlay && (
                 <button
                   onClick={() => setPlayingFilm(true)}
                   className="ml-auto flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium hover:bg-white/90"
                 >
-                  <Film className="h-3 w-3" /> Play Film
+                  <Film className="h-3 w-3" /> {allDone ? "Play Film" : `Play (${readyCount}/${cards.length})`}
                 </button>
               )}
             </div>
