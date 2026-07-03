@@ -419,16 +419,18 @@ function AgentWorkspace() {
                 <Play className="h-3 w-3" /> Replay
               </div>
             </div>
-            <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
-              {messages.map((m, i) => (
-                <MessageBubble key={i} msg={m} />
-              ))}
-              {thinking && (
-                <div className="flex items-center gap-2 text-sm text-white/60">
-                  <MakersMark className="h-4 w-4" />
-                  <span className="animate-pulse">Makers is thinking…</span>
-                </div>
-              )}
+            <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6 flex flex-col justify-end">
+              <div className="space-y-6">
+                {messages.map((m, i) => (
+                  <MessageBubble key={i} msg={m} />
+                ))}
+                {thinking && (
+                  <div className="flex items-center gap-2 text-sm text-white/60">
+                    <MakersMark className="h-4 w-4" />
+                    <span className="animate-pulse">Makers is thinking…</span>
+                  </div>
+                )}
+              </div>
             </div>
             <div className="p-4 border-t border-white/10">
               <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
