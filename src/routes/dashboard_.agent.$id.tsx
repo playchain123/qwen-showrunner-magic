@@ -847,6 +847,7 @@ function FilmPlayer({
   const [recordDone, setRecordDone] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const dialogueRef = useRef<HTMLAudioElement>(null);
+  const bgmRef = useRef<HTMLAudioElement>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const masterGainRef = useRef<GainNode | null>(null);
   const fallbackTimerRef = useRef<number | null>(null);
@@ -858,6 +859,7 @@ function FilmPlayer({
 
   const current = shots[idx];
   const currentSceneIndex = Math.max(0, cards.findIndex((c) => c.videoUrl === current?.videoUrl));
+  const bgmUrl = useMemo(() => pickBgm(cards[0]?.bgm || cards[0]?.colorGrade || title), [cards, title]);
 
   // Start ambient score once (user gesture already happened — Play click)
   useEffect(() => {
@@ -1065,6 +1067,8 @@ function FilmPlayer({
 
         {/* Dialogue */}
         <audio ref={dialogueRef} autoPlay muted={muted} />
+        {/* Free hosted cinematic BGM under the WebAudio pad */}
+        <audio ref={bgmRef} src={bgmUrl} autoPlay loop muted={muted} />
 
         {/* Filmic overlays */}
         <div className="absolute inset-x-0 top-0 h-[5%] bg-black pointer-events-none" />
