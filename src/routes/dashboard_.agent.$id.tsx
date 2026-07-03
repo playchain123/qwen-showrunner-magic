@@ -922,10 +922,21 @@ function FilmPlayer({
   // Drive current shot: play video + sync dialogue
   useEffect(() => {
     const v = videoRef.current;
-    if (v && current?.videoUrl) {
-      if (v.src !== current.videoUrl) v.src = current.videoUrl;
-      v.currentTime = 0;
-      v.play().catch(() => {});
+    if (v) {
+      if (current?.videoUrl) {
+        if (v.src !== current.videoUrl) {
+          v.src = current.videoUrl;
+          v.load();
+        }
+        v.currentTime = 0;
+        v.muted = muted;
+        v.volume = 0.9;
+        v.play().catch(() => {});
+      } else {
+        // Poster-only shot — remove any prior source so we don't loop last clip
+        v.removeAttribute("src");
+        v.load();
+      }
     }
     const d = dialogueRef.current;
     if (d && current?.audioUrl) {
@@ -934,8 +945,10 @@ function FilmPlayer({
       d.play().catch(() => {});
     }
     if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
-    const duration = Math.max(5, current?.durationSeconds || 7) * 1000;
-    fallbackTimerRef.current = window.setTimeout(() => advance(), duration + 1200);
+    const duration = Math.max(6, current?.durationSeconds || 8) * 1000;
+    // Poster-only shots have no onEnded, so the fallback timer IS the driver.
+    const hold = current?.videoUrl ? duration + 1200 : duration;
+    fallbackTimerRef.current = window.setTimeout(() => advance(), hold);
     playSceneAccent(audioCtxRef.current, current?.sfx || current?.bgm || "cinematic cut");
     const next = shots[idx + 1];
     if (next?.videoUrl) {
@@ -959,7 +972,12 @@ function FilmPlayer({
       if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idx, current?.videoUrl]);
+  }, [idx, current?.videoUrl, current?.posterUrl]);
+
+  // Keep the video element's mute state in sync with the toggle
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.muted = muted;
+  }, [muted]);
 
   useEffect(() => {
     if (waitingNext && idx + 1 < shots.length) {
