@@ -707,3 +707,62 @@ function FilmPlayer({
     </div>
   );
 }
+
+function chooseSceneCount(prompt: string) {
+  const text = prompt.toLowerCase();
+  const explicit = text.match(/(\d+)\s*(scene|scenes|slide|slides|shot|shots)/);
+  if (explicit) return Math.min(12, Math.max(4, Number(explicit[1])));
+  if (text.includes("fast") || text.includes("quick")) return 5;
+  return 8;
+}
+
+function readLearningContext() {
+  try {
+    const items = JSON.parse(localStorage.getItem("makers:learning") || "[]") as Array<{
+      prompt: string;
+      title: string;
+      tone: string;
+      languages?: string;
+    }>;
+    return items
+      .slice(0, 12)
+      .map((item) => `Prompt style: ${item.prompt.slice(0, 160)} | Film: ${item.title} | Tone: ${item.tone} | Languages: ${item.languages || "auto"}`)
+      .join("\n");
+  } catch {
+    return "";
+  }
+}
+
+function writeLearningContext(prompt: string, title: string, tone: string, languages: string) {
+  try {
+    const key = "makers:learning";
+    const items = JSON.parse(localStorage.getItem(key) || "[]") as Array<Record<string, unknown>>;
+    items.unshift({ prompt, title, tone, languages, at: Date.now() });
+    localStorage.setItem(key, JSON.stringify(items.slice(0, 50)));
+  } catch {
+    // best-effort local learning memory
+  }
+}
+
+function downloadText(filename: string, text: string, type: string) {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function slugify(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "makers-film";
+}
+
+function formatTime(seconds: number) {
+  const safe = Math.max(0, Math.round(seconds));
+  const m = Math.floor(safe / 60);
+  const s = safe % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
