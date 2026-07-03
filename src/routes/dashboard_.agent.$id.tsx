@@ -64,15 +64,63 @@ function AgentWorkspace() {
     supabase.auth.getUser().then(({ data }) => {
       if (!data.user) navigate({ to: "/auth", search: { mode: "login" } });
     });
+    const saved = localStorage.getItem(`makers:agentdoc:${id}`);
+    if (saved && !startedRef.current) {
+      try {
+        const doc = JSON.parse(saved) as {
+          prompt?: string;
+          messages?: ChatMsg[];
+          cards?: StoryCard[];
+          tasks?: { text: string; done: boolean }[];
+          filmTitle?: string;
+          logline?: string;
+          referenceImages?: ReferenceImage[];
+        };
+        startedRef.current = true;
+        setCurrentPrompt(doc.prompt || "");
+        setMessages(doc.messages || []);
+        setCards(doc.cards || []);
+        setTasks(doc.tasks || []);
+        setFilmTitle(doc.filmTitle || "");
+        setLogline(doc.logline || "");
+        setReferenceImages(doc.referenceImages || []);
+        return;
+      } catch {
+        localStorage.removeItem(`makers:agentdoc:${id}`);
+      }
+    }
     const raw = sessionStorage.getItem(`makers:agent:${id}`);
     if (raw && !startedRef.current) {
       startedRef.current = true;
-      const { prompt } = JSON.parse(raw);
+      const { prompt, referenceImages: refs = [] } = JSON.parse(raw) as { prompt: string; referenceImages?: ReferenceImage[] };
+      setCurrentPrompt(prompt);
+      setReferenceImages(refs);
       setMessages([{ role: "user", text: prompt }]);
-      void runPipeline(prompt);
+      void runPipeline(prompt, refs);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  useEffect(() => {
+    if (!startedRef.current && !currentPrompt && messages.length === 0 && cards.length === 0) return;
+    try {
+      localStorage.setItem(
+        `makers:agentdoc:${id}`,
+        JSON.stringify({
+          prompt: currentPrompt,
+          messages,
+          cards,
+          tasks,
+          filmTitle,
+          logline,
+          referenceImages,
+          updatedAt: Date.now(),
+        }),
+      );
+    } catch {
+      // local restore is best-effort
+    }
+  }, [id, currentPrompt, messages, cards, tasks, filmTitle, logline, referenceImages]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
