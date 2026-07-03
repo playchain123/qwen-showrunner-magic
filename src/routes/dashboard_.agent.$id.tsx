@@ -763,7 +763,7 @@ function MessageBubble({ msg }: { msg: ChatMsg }) {
 }
 
 function VideoTimeline({ cards, activeIndex, onScene }: { cards: StoryCard[]; activeIndex: number; onScene?: (i: number) => void }) {
-  const total = cards.reduce((sum, card) => sum + (card.durationSeconds || 7), 0) || cards.length * 7 || 1;
+  const total = cards.reduce((sum, card) => sum + (card.durationSeconds || 8), 0) || cards.length * 8 || 1;
   let cursor = 0;
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
@@ -774,7 +774,7 @@ function VideoTimeline({ cards, activeIndex, onScene }: { cards: StoryCard[]; ac
       <div className="flex h-20 overflow-hidden rounded-md border border-white/10 bg-black">
         {cards.map((card, index) => {
           const start = cursor;
-          const duration = card.durationSeconds || 7;
+          const duration = card.durationSeconds || 8;
           cursor += duration;
           return (
             <button
@@ -812,7 +812,11 @@ function VideoTimeline({ cards, activeIndex, onScene }: { cards: StoryCard[]; ac
 function getSequentialReadyCards(cards: StoryCard[]) {
   const ready: StoryCard[] = [];
   for (const card of cards) {
-    if (!card.done || !card.videoUrl) break;
+    // Play every scene that has SOMETHING to show. A scene with only a
+    // poster (video still rendering) plays as a still with dialogue + BGM
+    // for its duration, then advances — so the full film is watchable
+    // end-to-end instead of stopping at the first un-rendered shot.
+    if (!card.videoUrl && !card.posterUrl) break;
     ready.push(card);
   }
   return ready;
@@ -918,10 +922,21 @@ function FilmPlayer({
   // Drive current shot: play video + sync dialogue
   useEffect(() => {
     const v = videoRef.current;
-    if (v && current?.videoUrl) {
-      if (v.src !== current.videoUrl) v.src = current.videoUrl;
-      v.currentTime = 0;
-      v.play().catch(() => {});
+    if (v) {
+      if (current?.videoUrl) {
+        if (v.src !== current.videoUrl) {
+          v.src = current.videoUrl;
+          v.load();
+        }
+        v.currentTime = 0;
+        v.muted = muted;
+        v.volume = 0.9;
+        v.play().catch(() => {});
+      } else {
+        // Poster-only shot — remove any prior source so we don't loop last clip
+        v.removeAttribute("src");
+        v.load();
+      }
     }
     const d = dialogueRef.current;
     if (d && current?.audioUrl) {
@@ -930,8 +945,10 @@ function FilmPlayer({
       d.play().catch(() => {});
     }
     if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
-    const duration = Math.max(5, current?.durationSeconds || 7) * 1000;
-    fallbackTimerRef.current = window.setTimeout(() => advance(), duration + 1200);
+    const duration = Math.max(6, current?.durationSeconds || 8) * 1000;
+    // Poster-only shots have no onEnded, so the fallback timer IS the driver.
+    const hold = current?.videoUrl ? duration + 1200 : duration;
+    fallbackTimerRef.current = window.setTimeout(() => advance(), hold);
     playSceneAccent(audioCtxRef.current, current?.sfx || current?.bgm || "cinematic cut");
     const next = shots[idx + 1];
     if (next?.videoUrl) {
@@ -955,7 +972,12 @@ function FilmPlayer({
       if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idx, current?.videoUrl]);
+  }, [idx, current?.videoUrl, current?.posterUrl]);
+
+  // Keep the video element's mute state in sync with the toggle
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.muted = muted;
+  }, [muted]);
 
   useEffect(() => {
     if (waitingNext && idx + 1 < shots.length) {
@@ -1067,7 +1089,6 @@ function FilmPlayer({
           ref={videoRef}
           autoPlay
           playsInline
-          muted
           onEnded={advance}
           onError={advance}
           onStalled={() => {
