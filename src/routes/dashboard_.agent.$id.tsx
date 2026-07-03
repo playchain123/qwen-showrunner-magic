@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX, Download, ImagePlus, Scissors } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
-import { generateStoryboard, submitVideo, pollVideo, generateVoice } from "@/lib/qwen.functions";
+import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateSceneImage } from "@/lib/qwen.functions";
 
 export const Route = createFileRoute("/dashboard_/agent/$id")({
   ssr: false,
@@ -18,6 +18,7 @@ type StoryCard = {
   done: boolean;
   videoUrl?: string;
   audioUrl?: string;
+  posterUrl?: string;
   visual?: string;
   caption: string;
   spokenLine: string;
