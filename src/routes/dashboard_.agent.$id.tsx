@@ -55,9 +55,10 @@ function AgentWorkspace() {
     ? Math.round(cards.reduce((s, c) => s + c.progress, 0) / cards.length)
     : 0;
   const allDone = cards.length > 0 && cards.every((c) => c.done);
-  const readyCount = cards.filter((c) => c.done && c.videoUrl).length;
+  const playableCards = getSequentialReadyCards(cards);
+  const readyCount = playableCards.length;
   const canPlay = readyCount >= 1;
-  const firstReady = cards.find((c) => c.done && c.videoUrl);
+  const firstReady = playableCards[0];
 
   // auth + seed
   useEffect(() => {
@@ -599,6 +600,15 @@ function VideoTimeline({ cards, activeIndex }: { cards: StoryCard[]; activeIndex
   );
 }
 
+function getSequentialReadyCards(cards: StoryCard[]) {
+  const ready: StoryCard[] = [];
+  for (const card of cards) {
+    if (!card.done || !card.videoUrl) break;
+    ready.push(card);
+  }
+  return ready;
+}
+
 /**
  * Cinematic FilmPlayer — professional AI edit on the client:
  *  - Single reliable <video> element with preload + guarded timing
@@ -617,7 +627,7 @@ function FilmPlayer({
   title: string;
   onClose: () => void;
 }) {
-  const shots = useMemo(() => cards.filter((c) => c.videoUrl && c.done), [cards]);
+  const shots = useMemo(() => getSequentialReadyCards(cards), [cards]);
   const [idx, setIdx] = useState(0);
   const [muted, setMuted] = useState(false);
   const [waitingNext, setWaitingNext] = useState(false);
