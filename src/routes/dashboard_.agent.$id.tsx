@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX, Download, ImagePlus, Scissors } from "lucide-react";
+import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX, Download, ImagePlus, BookOpen } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateSceneImage } from "@/lib/qwen.functions";
@@ -29,6 +29,7 @@ type StoryCard = {
   audioUrl?: string;
   posterUrl?: string;
   visual?: string;
+  location?: string;
   caption: string;
   spokenLine: string;
   character: string;
@@ -68,10 +69,11 @@ function AgentWorkspace() {
   const totalProgress = cards.length
     ? Math.round(cards.reduce((s, c) => s + c.progress, 0) / cards.length)
     : 0;
-  const allDone = cards.length > 0 && cards.every((c) => c.done);
-  const playableCards = getSequentialReadyCards(cards);
+  const renderedCount = cards.filter((c) => c.done && c.videoUrl).length;
+  const allDone = cards.length > 0 && renderedCount === cards.length;
+  const playableCards = getRenderedCards(cards);
   const readyCount = playableCards.length;
-  const canPlay = readyCount >= 1;
+  const canPlay = allDone;
   const firstReady = playableCards[0];
 
   // auth + seed
