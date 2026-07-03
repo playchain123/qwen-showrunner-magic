@@ -483,7 +483,7 @@ function AgentWorkspace() {
                   onClick={() => setPlayingFilm(true)}
                   className="flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium hover:bg-white/90"
                 >
-                  <Film className="h-3 w-3" /> Play Full Film
+                  <Film className="h-3 w-3" /> Play Full Movie {!allDone && `(${renderedCount}/${cards.length})`}
                 </button>
               )}
             </div>
@@ -497,7 +497,7 @@ function AgentWorkspace() {
                 <>
                   {/* Big stage */}
                   <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-neutral-950 border border-white/10">
-                    {allDone && firstReady ? (
+                    {canPlay && firstReady ? (
                       <button
                         onClick={() => setPlayingFilm(true)}
                         className="group absolute inset-0"
@@ -516,7 +516,11 @@ function AgentWorkspace() {
                             <Play className="h-6 w-6 ml-1" fill="currentColor" />
                           </div>
                           <div className="mt-4 text-white text-lg font-medium drop-shadow">{filmTitle}</div>
-                          <div className="mt-1 text-white/70 text-xs">Final cut ready · all {cards.length} scenes rendered · dialogue + score</div>
+                          <div className="mt-1 text-white/70 text-xs">
+                            {allDone
+                              ? `Final cut · all ${cards.length} scenes rendered · dialogue + score`
+                              : `Preview cut · ${renderedCount}/${cards.length} scenes rendered · plays end-to-end`}
+                          </div>
                         </div>
                       </button>
                     ) : (
