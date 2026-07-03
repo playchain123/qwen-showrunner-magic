@@ -806,7 +806,10 @@ function ContextPanel({ cards, title, logline, onScene }: { cards: StoryCard[]; 
 }
 
 function getRenderedCards(cards: StoryCard[]) {
-  return cards.filter((card) => card.done && Boolean(card.videoUrl));
+  // Any scene with a video OR poster can play — poster-only shots render as
+  // still frames with dialogue+BGM so the full movie always plays end-to-end
+  // even while later scenes are still rendering.
+  return cards.filter((card) => Boolean(card.videoUrl) || Boolean(card.posterUrl));
 }
 
 /**
