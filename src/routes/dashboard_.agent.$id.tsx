@@ -1143,3 +1143,16 @@ function playSceneAccent(ctx: AudioContext | null, cue: string) {
     // audio accent is optional
   }
 }
+function filterForGrade(grade?: string) {
+  const s = (grade || "").toLowerCase();
+  if (/teal.*orange|blockbuster|marvel|action/.test(s)) return "saturate(1.25) contrast(1.12) hue-rotate(-8deg)";
+  if (/bleach|desatur/.test(s)) return "saturate(0.55) contrast(1.35) brightness(1.05)";
+  if (/noir|black.*white|monochrome/.test(s)) return "grayscale(1) contrast(1.25) brightness(0.95)";
+  if (/warm|golden|sunset|amber/.test(s)) return "sepia(0.22) saturate(1.18) brightness(1.06) contrast(1.05)";
+  if (/cyber|neon|blade.*runner|cold|blue/.test(s)) return "saturate(1.35) contrast(1.15) hue-rotate(14deg)";
+  if (/vintage|film.*print|kodak|super.*8|grain/.test(s)) return "sepia(0.3) contrast(1.08) saturate(0.88) brightness(0.98)";
+  if (/anime|ghibli|pixar|animation/.test(s)) return "saturate(1.4) contrast(1.05) brightness(1.05)";
+  if (/dune|desert|earth/.test(s)) return "sepia(0.35) saturate(1.15) contrast(1.1) hue-rotate(-6deg)";
+  if (/horror|thriller|dark/.test(s)) return "contrast(1.3) brightness(0.85) saturate(0.85)";
+  return "contrast(1.06) saturate(1.08)";
+}
