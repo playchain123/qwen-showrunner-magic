@@ -72,7 +72,6 @@ function AgentWorkspace() {
   const renderedCount = cards.filter((c) => c.done && c.videoUrl).length;
   const allDone = cards.length > 0 && renderedCount === cards.length;
   const playableCards = getRenderedCards(cards);
-  const readyCount = playableCards.length;
   const canPlay = allDone;
   const firstReady = playableCards[0];
 
@@ -682,11 +681,12 @@ function SceneDetail({ card, index, total, onClose }: { card: StoryCard; index: 
           {card.visual && <p className="text-white/70 leading-relaxed">{card.visual}</p>}
           <div className="grid grid-cols-2 gap-3 text-xs text-white/70">
             <Detail label="Shot" value={card.shotType} />
+            <Detail label="Location" value={card.location} />
             <Detail label="Character" value={card.character} />
             <Detail label="Language" value={card.language} />
             <Detail label="Voice tone" value={card.voiceTone} />
             <Detail label="Pitch" value={card.pitch} />
-            <Detail label="Duration" value={`${card.durationSeconds || 7}s`} />
+            <Detail label="Duration" value={`${card.durationSeconds || 8}s`} />
             <Detail label="Color grade" value={card.colorGrade} />
             <Detail label="Editing note" value={card.editingNotes} />
             <Detail label="BGM" value={card.bgm} />
