@@ -478,6 +478,14 @@ function AgentWorkspace() {
                       </button>
                     ) : (
                       <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
+                        {cards.find((c) => c.posterUrl)?.posterUrl && (
+                          <img
+                            src={cards.find((c) => c.posterUrl)!.posterUrl}
+                            alt=""
+                            className="absolute inset-0 h-full w-full object-cover opacity-40"
+                          />
+                        )}
+                        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent" />
                         <div className="relative h-20 w-20">
                           <svg viewBox="0 0 36 36" className="h-20 w-20 -rotate-90">
                             <circle cx="18" cy="18" r="16" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
@@ -488,17 +496,28 @@ function AgentWorkspace() {
                           </svg>
                           <span className="absolute inset-0 flex items-center justify-center text-sm">{totalProgress}%</span>
                         </div>
-                        <div className="text-sm text-white/70">Building first playable shot…</div>
-                        <div className="text-[11px] text-white/40">Rendering video · casting voices · preparing timeline</div>
+                        <div className="relative text-sm text-white/80">Building first playable shot…</div>
+                        <div className="relative text-[11px] text-white/50">Storyboard posters appear first · then video renders in</div>
                       </div>
                     )}
                   </div>
 
-                  <VideoTimeline cards={cards} activeIndex={Math.max(0, readyCount - 1)} />
+                  <VideoTimeline cards={cards} activeIndex={Math.max(0, readyCount - 1)} onScene={setOpenScene} />
 
                   {referenceImages.length > 0 && (
                     <div>
-                      <div className="text-[11px] uppercase tracking-wider text-white/40 mb-2 flex items-center gap-1.5"><ImagePlus className="h-3 w-3" /> Reference images</div>
+                      <div className="text-[11px] uppercase tracking-wider text-white/40 mb-2 flex items-center gap-3">
+                        <span className="flex items-center gap-1.5"><ImagePlus className="h-3 w-3" /> Reference images</span>
+                        <label className="ml-auto flex items-center gap-2 text-white/60 normal-case tracking-normal">
+                          <span>Weight {Math.round(refWeight * 100)}%</span>
+                          <input
+                            type="range" min={0} max={100} step={5}
+                            value={Math.round(refWeight * 100)}
+                            onChange={(e) => setRefWeight(Number(e.target.value) / 100)}
+                            className="w-32 accent-white"
+                          />
+                        </label>
+                      </div>
                       <div className="flex gap-2 overflow-x-auto pb-1">
                         {referenceImages.map((r, i) => (
                           <div key={`${r.name}-${i}`} className="relative h-20 w-20 shrink-0 overflow-hidden rounded-md border border-white/10 bg-neutral-900">
@@ -520,15 +539,26 @@ function AgentWorkspace() {
                     <div className="text-[11px] uppercase tracking-wider text-white/40 mb-2">Timeline slides · {cards.filter(c=>c.done).length}/{cards.length}</div>
                     <div className="grid grid-cols-4 gap-2">
                       {cards.map((c, i) => (
-                        <div key={i} className="relative aspect-video rounded-md overflow-hidden bg-neutral-900 border border-white/5">
+                        <button key={i} onClick={() => setOpenScene(i)} className="relative aspect-video rounded-md overflow-hidden bg-neutral-900 border border-white/5 hover:border-white/30 transition text-left">
                           {c.videoUrl && c.done ? (
                             <video src={c.videoUrl} muted playsInline className="absolute inset-0 h-full w-full object-cover" />
+                          ) : c.posterUrl ? (
+                            <img src={c.posterUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
                           ) : (
                             <div className="absolute inset-0 flex items-center justify-center text-[10px] text-white/40">{c.progress}%</div>
                           )}
+                          {!c.done && (
+                            <div className="absolute inset-x-0 bottom-0 h-0.5 bg-white/10">
+                              <div className="h-full bg-emerald-400 transition-all" style={{ width: `${c.progress}%` }} />
+                            </div>
+                          )}
+                          <div className="absolute top-1 right-1 flex gap-1">
+                            {c.audioUrl && <span className="text-[9px] bg-black/70 text-white/80 px-1 rounded">🎙</span>}
+                            {c.bgm && <span className="text-[9px] bg-black/70 text-white/80 px-1 rounded">♪</span>}
+                          </div>
                           <div className="absolute bottom-1 left-1 text-[9px] text-white/80 bg-black/60 px-1 rounded">#{i + 1}{c.shotType ? ` · ${c.shotType}` : ""}</div>
                           <div className="absolute top-1 left-1 text-[9px] text-white/70 bg-black/60 px-1 rounded">{c.language || "dialogue"}</div>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   </div>
