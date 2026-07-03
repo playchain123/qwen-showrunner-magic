@@ -578,6 +578,37 @@ function MessageBubble({ msg }: { msg: ChatMsg }) {
   );
 }
 
+function VideoTimeline({ cards, activeIndex }: { cards: StoryCard[]; activeIndex: number }) {
+  const total = cards.reduce((sum, card) => sum + (card.durationSeconds || 7), 0) || cards.length * 7 || 1;
+  let cursor = 0;
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+      <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-wider text-white/40">
+        <span>Video timeline</span>
+        <span>{formatTime(total)} · {cards.length} scenes</span>
+      </div>
+      <div className="flex h-14 overflow-hidden rounded-md border border-white/10 bg-black">
+        {cards.map((card, index) => {
+          const start = cursor;
+          const duration = card.durationSeconds || 7;
+          cursor += duration;
+          return (
+            <div
+              key={index}
+              className={`relative border-r border-black/70 ${index === activeIndex ? "bg-white/20" : card.done ? "bg-white/12" : "bg-white/5"}`}
+              style={{ width: `${Math.max(8, (duration / total) * 100)}%` }}
+              title={`${card.title} · ${formatTime(start)}-${formatTime(start + duration)}`}
+            >
+              <div className={`absolute inset-x-1 top-1 h-2 rounded-sm ${card.done ? "bg-emerald-400" : "bg-white/20"}`} />
+              <div className="absolute bottom-1 left-1 right-1 truncate text-[10px] text-white/70">#{index + 1} {card.shotType || "shot"}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /**
  * Cinematic FilmPlayer — professional AI edit on the client:
  *  - Two <video> elements alternating for gapless CROSSFADE cuts
