@@ -621,7 +621,7 @@ function MessageBubble({ msg }: { msg: ChatMsg }) {
   );
 }
 
-function VideoTimeline({ cards, activeIndex }: { cards: StoryCard[]; activeIndex: number }) {
+function VideoTimeline({ cards, activeIndex, onScene }: { cards: StoryCard[]; activeIndex: number; onScene?: (i: number) => void }) {
   const total = cards.reduce((sum, card) => sum + (card.durationSeconds || 7), 0) || cards.length * 7 || 1;
   let cursor = 0;
   return (
@@ -630,21 +630,37 @@ function VideoTimeline({ cards, activeIndex }: { cards: StoryCard[]; activeIndex
         <span>Video timeline</span>
         <span>{formatTime(total)} · {cards.length} scenes</span>
       </div>
-      <div className="flex h-14 overflow-hidden rounded-md border border-white/10 bg-black">
+      <div className="flex h-20 overflow-hidden rounded-md border border-white/10 bg-black">
         {cards.map((card, index) => {
           const start = cursor;
           const duration = card.durationSeconds || 7;
           cursor += duration;
           return (
-            <div
+            <button
+              type="button"
+              onClick={() => onScene?.(index)}
               key={index}
-              className={`relative border-r border-black/70 ${index === activeIndex ? "bg-white/20" : card.done ? "bg-white/12" : "bg-white/5"}`}
+              className={`relative border-r border-black/70 overflow-hidden group ${index === activeIndex ? "ring-1 ring-inset ring-white/60" : ""}`}
               style={{ width: `${Math.max(8, (duration / total) * 100)}%` }}
               title={`${card.title} · ${formatTime(start)}-${formatTime(start + duration)}`}
             >
-              <div className={`absolute inset-x-1 top-1 h-2 rounded-sm ${card.done ? "bg-emerald-400" : "bg-white/20"}`} />
-              <div className="absolute bottom-1 left-1 right-1 truncate text-[10px] text-white/70">#{index + 1} {card.shotType || "shot"}</div>
-            </div>
+              {card.posterUrl || card.videoUrl ? (
+                card.videoUrl && card.done ? (
+                  <video src={card.videoUrl} muted playsInline className="absolute inset-0 h-full w-full object-cover opacity-80 group-hover:opacity-100" />
+                ) : (
+                  <img src={card.posterUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-80 group-hover:opacity-100" />
+                )
+              ) : (
+                <div className="absolute inset-0 bg-white/5" />
+              )}
+              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent" />
+              <div className={`absolute inset-x-1 top-1 h-1 rounded-sm ${card.done ? "bg-emerald-400" : "bg-white/40"}`}
+                   style={{ width: `${Math.max(8, card.progress)}%` }} />
+              <div className="absolute bottom-1 left-1 right-1 truncate text-[10px] text-white drop-shadow">#{index + 1} {card.shotType || "shot"}</div>
+              <div className="absolute top-1.5 right-1 flex gap-0.5">
+                {card.audioUrl && <span className="text-[8px] bg-black/70 text-white px-1 rounded">🎙</span>}
+              </div>
+            </button>
           );
         })}
       </div>
