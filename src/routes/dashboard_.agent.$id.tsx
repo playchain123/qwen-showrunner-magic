@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX } from "lucide-react";
+import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX, Download, ImagePlus, Scissors } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice } from "@/lib/qwen.functions";
@@ -11,16 +11,27 @@ export const Route = createFileRoute("/dashboard_/agent/$id")({
 });
 
 type ChatMsg = { role: "user" | "agent"; text: string; skills?: string[]; task?: string };
+type ReferenceImage = { name: string; dataUrl: string; description?: string };
 type StoryCard = {
   title: string;
   progress: number;
   done: boolean;
   videoUrl?: string;
   audioUrl?: string;
+  visual?: string;
   caption: string;
   spokenLine: string;
   character: string;
   shotType?: string;
+  language?: string;
+  voiceTone?: string;
+  pitch?: "low" | "medium" | "high";
+  bgm?: string;
+  sfx?: string;
+  durationSeconds?: number;
+  colorGrade?: string;
+  editingNotes?: string;
+  referenceImageDirection?: string;
 };
 
 function AgentWorkspace() {
@@ -34,7 +45,10 @@ function AgentWorkspace() {
   const [playingFilm, setPlayingFilm] = useState(false);
   const [filmTitle, setFilmTitle] = useState<string>("");
   const [logline, setLogline] = useState<string>("");
+  const [currentPrompt, setCurrentPrompt] = useState<string>("");
+  const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const uploadRef = useRef<HTMLInputElement>(null);
   const startedRef = useRef(false);
 
   const totalProgress = cards.length
@@ -43,6 +57,7 @@ function AgentWorkspace() {
   const allDone = cards.length > 0 && cards.every((c) => c.done);
   const readyCount = cards.filter((c) => c.done && c.videoUrl).length;
   const canPlay = readyCount >= 1;
+  const firstReady = cards.find((c) => c.done && c.videoUrl);
 
   // auth + seed
   useEffect(() => {
