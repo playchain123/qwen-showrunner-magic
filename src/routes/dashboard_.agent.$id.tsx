@@ -304,17 +304,7 @@ function AgentWorkspace() {
   async function handleReferenceFiles(files: FileList | null) {
     if (!files?.length) return;
     const images = Array.from(files).filter((file) => file.type.startsWith("image/")).slice(0, 8);
-    const loaded = await Promise.all(
-      images.map(
-        (file) =>
-          new Promise<ReferenceImage>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve({ name: file.name, dataUrl: String(reader.result), description: "character/style reference" });
-            reader.onerror = reject;
-            reader.readAsDataURL(file);
-          }),
-      ),
-    );
+    const loaded = await Promise.all(images.map((file) => imageFileToReferenceImage(file)));
     setReferenceImages((prev) => [...prev, ...loaded].slice(0, 8));
   }
 
@@ -639,6 +629,7 @@ function FilmPlayer({
   const scoreStopRef = useRef<(() => void) | null>(null);
 
   const current = shots[idx];
+  const currentSceneIndex = Math.max(0, cards.findIndex((c) => c.videoUrl === current?.videoUrl));
 
   // Start ambient score once (user gesture already happened — Play click)
   useEffect(() => {
@@ -816,13 +807,13 @@ function FilmPlayer({
         </div>
 
         <div className="absolute top-4 left-4 text-white/70 text-[11px] uppercase tracking-widest z-20">
-          {title} · Scene {idx + 1}/{cards.length}
+          {title} · Scene {currentSceneIndex + 1}/{cards.length}
         </div>
         <div className="absolute top-10 left-4 max-w-[70vw] text-white text-sm md:text-lg font-medium drop-shadow z-20">
           {current.title.replace(/^#\d+\s*/, "")}
         </div>
         <div className="absolute bottom-2 inset-x-4 z-20">
-          <VideoTimeline cards={cards} activeIndex={idx} />
+          <VideoTimeline cards={cards} activeIndex={currentSceneIndex} />
         </div>
       </div>
 
@@ -882,6 +873,30 @@ function downloadText(filename: string, text: string, type: string) {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+function imageFileToReferenceImage(file: File) {
+  return new Promise<ReferenceImage>((resolve, reject) => {
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = () => {
+      img.onload = () => {
+        const max = 720;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return reject(new Error("Could not process image"));
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve({ name: file.name, dataUrl: canvas.toDataURL("image/jpeg", 0.72), description: "character/style reference" });
+      };
+      img.onerror = reject;
+      img.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function slugify(value: string) {
