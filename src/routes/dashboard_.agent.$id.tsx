@@ -861,6 +861,10 @@ function FilmPlayer({
   const currentSceneIndex = Math.max(0, cards.findIndex((c) => c.videoUrl === current?.videoUrl));
   const bgmUrl = useMemo(() => pickBgm(cards[0]?.bgm || cards[0]?.colorGrade || title), [cards, title]);
 
+  useEffect(() => {
+    if (bgmRef.current) bgmRef.current.volume = 0.28;
+  }, [bgmUrl]);
+
   // Start ambient score once (user gesture already happened — Play click)
   useEffect(() => {
     const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
