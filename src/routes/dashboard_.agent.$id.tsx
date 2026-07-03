@@ -919,9 +919,8 @@ function FilmPlayer({
   useEffect(() => {
     const v = videoRef.current;
     if (v && current?.videoUrl) {
-      v.src = current.videoUrl;
+      if (v.src !== current.videoUrl) v.src = current.videoUrl;
       v.currentTime = 0;
-      v.load();
       v.play().catch(() => {});
     }
     const d = dialogueRef.current;
@@ -936,13 +935,19 @@ function FilmPlayer({
     playSceneAccent(audioCtxRef.current, current?.sfx || current?.bgm || "cinematic cut");
     const next = shots[idx + 1];
     if (next?.videoUrl) {
-      const link = document.createElement("link");
-      link.rel = "preload";
-      link.as = "video";
-      link.href = next.videoUrl;
-      document.head.appendChild(link);
+      // Warm the browser cache for the next clip so scene change doesn't flash black
+      const preload = document.createElement("video");
+      preload.src = next.videoUrl;
+      preload.preload = "auto";
+      preload.muted = true;
+      preload.style.position = "absolute";
+      preload.style.width = "1px";
+      preload.style.height = "1px";
+      preload.style.opacity = "0";
+      preload.style.pointerEvents = "none";
+      document.body.appendChild(preload);
       return () => {
-        link.remove();
+        preload.remove();
         if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
       };
     }
