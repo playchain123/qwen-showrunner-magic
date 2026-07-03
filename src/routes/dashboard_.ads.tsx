@@ -1,0 +1,324 @@
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useRef, useState } from "react";
+import { ArrowUp, Upload, Film, Play, Download } from "lucide-react";
+import { Sidebar, TopBar, MakersMark } from "./dashboard";
+import { supabase } from "@/integrations/supabase/client";
+import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateSceneImage } from "@/lib/qwen.functions";
+import { pickBgm } from "@/lib/free-sounds";
+
+export const Route = createFileRoute("/dashboard_/ads")({
+  ssr: false,
+  component: CinematicAds,
+});
+
+type BrandAsset = { kind: "product" | "logo" | "model"; name: string; dataUrl: string };
+type AdShot = {
+  title: string;
+  visual: string;
+  spokenLine: string;
+  progress: number;
+  done: boolean;
+  videoUrl?: string;
+  audioUrl?: string;
+  posterUrl?: string;
+  durationSeconds: number;
+  colorGrade?: string;
+  bgm?: string;
+};
+
+const TONES = [
+  { id: "luxury", label: "Luxury", desc: "Slow, refined, muted palette, gold accents" },
+  { id: "energetic", label: "Energetic", desc: "Fast cuts, bold colors, punchy score" },
+  { id: "emotional", label: "Emotional", desc: "Warm, cinematic, tender character focus" },
+  { id: "dramatic", label: "Dramatic", desc: "High contrast, teal-orange, cinematic hook" },
+];
+
+function CinematicAds() {
+  const navigate = useNavigate();
+  const [brand, setBrand] = useState("");
+  const [pitch, setPitch] = useState("");
+  const [tone, setTone] = useState<string>("dramatic");
+  const [cta, setCta] = useState("Discover more");
+  const [assets, setAssets] = useState<BrandAsset[]>([]);
+  const [shots, setShots] = useState<AdShot[]>([]);
+  const [running, setRunning] = useState(false);
+  const [status, setStatus] = useState("");
+  const [playing, setPlaying] = useState(false);
+  const uploadRef = useRef<HTMLInputElement>(null);
+
+  const allDone = shots.length > 0 && shots.every((s) => s.done);
+
+  async function handleUpload(files: FileList | null, kind: BrandAsset["kind"]) {
+    if (!files?.length) return;
+    const loaded = await Promise.all(
+      Array.from(files).filter((f) => f.type.startsWith("image/")).slice(0, 4).map((file) =>
+        new Promise<BrandAsset>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve({ kind, name: file.name, dataUrl: String(reader.result) });
+          reader.readAsDataURL(file);
+        })
+      )
+    );
+    setAssets((prev) => [...prev, ...loaded].slice(0, 6));
+  }
+
+  async function generate() {
+    if (!brand.trim() || !pitch.trim()) {
+      alert("Add a brand name and pitch first.");
+      return;
+    }
+    supabase.auth.getUser().then(({ data }) => {
+      if (!data.user) navigate({ to: "/auth", search: { mode: "login" } });
+    });
+    setRunning(true);
+    setShots([]);
+    setStatus("Writing ad storyboard…");
+    try {
+      const toneObj = TONES.find((t) => t.id === tone) || TONES[0];
+      const brief = `A ${toneObj.label.toLowerCase()} 15-30 second cinematic ad for ${brand}. Pitch: ${pitch}. Structure: 1) hook shot, 2) product/context, 3) emotional beat with talent, 4) CTA reveal ("${cta}"). Style: ${toneObj.desc}. No narrator voice-over — in-world dialogue only. Every shot MUST feature the brand's uploaded ${assets.some((a) => a.kind === "product") ? "product prominently" : "identity"}. Keep talent and product consistent across every shot.`;
+      const referenceBrief = assets.map((a) => ({ name: a.name, description: a.kind === "product" ? "Hero product — must appear in every shot" : a.kind === "logo" ? "Brand logo — subtle placement + endcard" : "Brand talent — same face across all shots" }));
+      const story = await generateStoryboard({ data: { prompt: brief, sceneCount: 5, learningContext: "", referenceImages: referenceBrief } });
+      const initShots: AdShot[] = story.scenes.map((s, i) => ({
+        title: `#${i + 1} ${s.title}`,
+        visual: s.visual,
+        spokenLine: s.spoken_line || s.dialogue?.replace(/^[^:]+:\s*/, "") || "",
+        progress: 5,
+        done: false,
+        durationSeconds: s.duration_seconds || 6,
+        colorGrade: s.color_grade,
+        bgm: s.bgm,
+      }));
+      setShots(initShots);
+      setStatus(`Rendering ${initShots.length} ad shots — product locked as reference…`);
+
+      await Promise.all(
+        story.scenes.map(async (s, idx) => {
+          try {
+            const imgPrompt = [s.visual || s.video_prompt, s.color_grade ? `Color grade: ${s.color_grade}` : "", `Brand: ${brand}. Hero product/logo/talent must remain identical to references.`].filter(Boolean).join("\n");
+            void generateSceneImage({ data: { prompt: imgPrompt, referenceImages: assets.map((a) => a.dataUrl), referenceWeight: 0.9 } })
+              .then((img) => setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, posterUrl: img.image_url } : sh))))
+              .catch(() => {});
+            const voiceP = s.spoken_line
+              ? generateVoice({ data: { text: s.spoken_line, voice: "Cherry", language: s.language || "English", tone: `commercial ad delivery, ${toneObj.label.toLowerCase()}`, pitch: s.pitch || "medium" } })
+                  .then((v) => setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, audioUrl: v.audio_url } : sh))))
+                  .catch(() => {})
+              : Promise.resolve();
+            const fullPrompt = [s.video_prompt, `Brand: ${brand}. Product/logo/talent from reference must appear.`, s.color_grade ? `Color grade: ${s.color_grade}` : ""].filter(Boolean).join("\n");
+            const { task_id } = await submitVideo({ data: { prompt: fullPrompt, size: "832*480", model: "wan2.2-t2v-plus" } });
+            let attempts = 0;
+            while (attempts < 180) {
+              await new Promise((r) => setTimeout(r, 2000));
+              attempts++;
+              const p = Math.min(10 + attempts * 3, 92);
+              setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, progress: p } : sh)));
+              const st = await pollVideo({ data: { task_id } });
+              if (st.status === "SUCCEEDED" && st.video_url) {
+                await voiceP;
+                setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, progress: 100, done: true, videoUrl: st.video_url } : sh)));
+                return;
+              }
+              if (st.status === "FAILED") throw new Error(st.error || "Task failed");
+            }
+            throw new Error("Timed out");
+          } catch (err) {
+            setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, visual: `${sh.visual}\n⚠ ${err instanceof Error ? err.message : String(err)}` } : sh)));
+          }
+        })
+      );
+      setStatus("Ad ready — press play to preview.");
+      setPlaying(true);
+    } catch (err) {
+      setStatus("Failed: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen flex bg-black text-white">
+      <Sidebar />
+      <div className="flex-1 flex flex-col">
+        <TopBar />
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-[420px_1fr] min-h-0">
+          {/* LEFT — brand brief */}
+          <div className="border-r border-white/10 p-6 space-y-5 overflow-y-auto">
+            <div className="flex items-center gap-2">
+              <MakersMark className="h-5 w-5" />
+              <span className="text-sm font-medium">Cinematic Ads</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/20 text-red-300">Brand</span>
+            </div>
+            <p className="text-xs text-white/60 leading-relaxed">Upload your product / logo / brand talent. We generate a 5-shot dramatic ad with your assets locked as references in every shot.</p>
+
+            <div>
+              <div className="text-[11px] uppercase tracking-widest text-white/40 mb-1">Brand</div>
+              <input value={brand} onChange={(e) => setBrand(e.target.value)} placeholder="e.g. Nova Athletics" className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm outline-none focus:border-white/30" />
+            </div>
+            <div>
+              <div className="text-[11px] uppercase tracking-widest text-white/40 mb-1">Pitch / product</div>
+              <textarea value={pitch} onChange={(e) => setPitch(e.target.value)} rows={3} placeholder="e.g. A carbon-plated running shoe for marathon athletes." className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm outline-none focus:border-white/30" />
+            </div>
+            <div>
+              <div className="text-[11px] uppercase tracking-widest text-white/40 mb-1">Tone</div>
+              <div className="grid grid-cols-2 gap-2">
+                {TONES.map((t) => (
+                  <button key={t.id} onClick={() => setTone(t.id)} className={`rounded-md border p-2 text-left text-xs ${tone === t.id ? "border-white bg-white/10" : "border-white/10 hover:border-white/30"}`}>
+                    <div className="font-medium">{t.label}</div>
+                    <div className="text-white/50 text-[10px] mt-0.5">{t.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="text-[11px] uppercase tracking-widest text-white/40 mb-1">Call to action</div>
+              <input value={cta} onChange={(e) => setCta(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm outline-none focus:border-white/30" />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[11px] uppercase tracking-widest text-white/40">Brand assets</div>
+                <div className="flex gap-1 text-[10px]">
+                  {(["product", "logo", "model"] as const).map((k) => (
+                    <button key={k} onClick={() => { if (uploadRef.current) { uploadRef.current.dataset.kind = k; uploadRef.current.click(); } }} className="flex items-center gap-1 rounded border border-white/10 px-2 py-1 hover:bg-white/10">
+                      <Upload className="h-3 w-3" /> {k}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <input ref={uploadRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => { const kind = (e.currentTarget.dataset.kind as BrandAsset["kind"]) || "product"; void handleUpload(e.target.files, kind); e.currentTarget.value = ""; }} />
+              <div className="grid grid-cols-3 gap-2">
+                {assets.map((a, i) => (
+                  <div key={i} className="relative aspect-square rounded-md overflow-hidden border border-white/10 bg-neutral-900">
+                    <img src={a.dataUrl} alt={a.name} className="h-full w-full object-cover" />
+                    <div className="absolute bottom-0 inset-x-0 bg-black/70 text-[9px] text-white/80 px-1 py-0.5 uppercase">{a.kind}</div>
+                  </div>
+                ))}
+                {assets.length === 0 && <div className="col-span-3 text-[11px] text-white/40 border border-dashed border-white/10 rounded-md p-4 text-center">Upload product photo, logo, and/or brand model.</div>}
+              </div>
+            </div>
+
+            <button disabled={running} onClick={generate} className="w-full h-11 rounded-md bg-white text-black text-sm font-medium disabled:opacity-60 flex items-center justify-center gap-2">
+              <ArrowUp className="h-4 w-4" /> {running ? "Rendering ad…" : "Generate cinematic ad"}
+            </button>
+            {status && <div className="text-[11px] text-white/60">{status}</div>}
+          </div>
+
+          {/* RIGHT — ad preview */}
+          <div className="flex flex-col min-h-0 overflow-y-auto p-6 space-y-4">
+            <div className="flex items-center gap-3 text-xs">
+              <span className="font-medium">Ad Preview</span>
+              <span className="text-white/40">·</span>
+              <span className="text-white/60">{brand || "Untitled brand"}</span>
+              {shots.length > 0 && shots.some((s) => s.done) && (
+                <button onClick={() => setPlaying(true)} className="ml-auto flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium">
+                  <Film className="h-3 w-3" /> {allDone ? "Play Ad" : `Play (${shots.filter((s) => s.done).length}/${shots.length})`}
+                </button>
+              )}
+            </div>
+            {shots.length === 0 ? (
+              <div className="flex-1 min-h-[300px] flex flex-col items-center justify-center text-center text-white/40 border border-white/10 rounded-xl">
+                <Film className="h-10 w-10 mb-3 opacity-40" />
+                <p className="text-sm">Your ad shots appear here as they render</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                {shots.map((s, i) => (
+                  <div key={i} className="relative aspect-video rounded-lg overflow-hidden border border-white/10 bg-neutral-950">
+                    {s.videoUrl && s.done ? (
+                      <video src={s.videoUrl} muted loop autoPlay playsInline className="absolute inset-0 h-full w-full object-cover" />
+                    ) : s.posterUrl ? (
+                      <img src={s.posterUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-80" />
+                    ) : (
+                      <div className="absolute inset-0 flex items-center justify-center text-[10px] text-white/40">{s.progress}%</div>
+                    )}
+                    {!s.done && <div className="absolute inset-x-0 bottom-0 h-1 bg-white/10"><div className="h-full bg-emerald-400" style={{ width: `${s.progress}%` }} /></div>}
+                    <div className="absolute top-1 left-1 text-[10px] text-white bg-black/60 px-1 rounded">#{i + 1}</div>
+                    {s.audioUrl && <audio src={s.audioUrl} className="hidden" />}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      {playing && <AdPlayer shots={shots} brand={brand} cta={cta} tone={tone} onClose={() => setPlaying(false)} />}
+    </div>
+  );
+}
+
+function AdPlayer({ shots, brand, cta, tone, onClose }: { shots: AdShot[]; brand: string; cta: string; tone: string; onClose: () => void }) {
+  const ready = shots.filter((s) => s.done && s.videoUrl);
+  const [idx, setIdx] = useState(0);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const dialogueRef = useRef<HTMLAudioElement>(null);
+  const bgmRef = useRef<HTMLAudioElement>(null);
+  const [downloading, setDownloading] = useState(false);
+  const recRef = useRef<MediaRecorder | null>(null);
+  const bgmUrl = pickBgm(tone);
+  const current = ready[idx];
+
+  function advance() {
+    if (idx + 1 >= ready.length) {
+      if (recRef.current && recRef.current.state !== "inactive") { try { recRef.current.stop(); } catch { /* noop */ } }
+      setTimeout(onClose, 1200);
+      return;
+    }
+    setIdx((i) => i + 1);
+  }
+
+  async function download() {
+    const v = videoRef.current;
+    if (!v) return;
+    try {
+      const stream = (v as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream?.();
+      if (!stream) { alert("Recording unsupported"); return; }
+      const rec = new MediaRecorder(stream, { mimeType: "video/webm" });
+      const chunks: Blob[] = [];
+      rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      rec.onstop = () => {
+        const blob = new Blob(chunks, { type: "video/webm" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `${brand.replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "ad"}.webm`;
+        a.click();
+        setDownloading(false);
+      };
+      recRef.current = rec;
+      rec.start(500);
+      setDownloading(true);
+      setIdx(0);
+    } catch { setDownloading(false); }
+  }
+
+  if (!current) return null;
+  return (
+    <div className="fixed inset-0 z-50 bg-black">
+      <button onClick={onClose} className="absolute top-4 right-4 z-30 text-white/70 hover:text-white text-sm">Close ✕</button>
+      <button onClick={download} disabled={downloading} className="absolute top-4 right-24 z-30 flex items-center gap-1 rounded-full bg-red-500/90 hover:bg-red-500 text-white text-[11px] px-3 py-1 disabled:opacity-60">
+        <Download className="h-3 w-3" /> {downloading ? "Recording…" : "Download .webm"}
+      </button>
+      <video ref={videoRef} key={idx} src={current.videoUrl} autoPlay playsInline muted onEnded={advance} className="absolute inset-0 h-full w-full object-cover" style={{ animation: `kbAd ${Math.max(4, current.durationSeconds)}s ease-out forwards` }} />
+      <audio ref={dialogueRef} src={current.audioUrl} autoPlay />
+      <audio ref={bgmRef} src={bgmUrl} autoPlay loop />
+      <div className="absolute inset-x-0 top-0 h-[5%] bg-black" />
+      <div className="absolute inset-x-0 bottom-0 h-[5%] bg-black" />
+      {idx === ready.length - 1 && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="text-center">
+            <div className="text-white text-6xl font-serif tracking-wide">{brand}</div>
+            <div className="mt-3 text-white/80 text-sm uppercase tracking-[0.4em]">{cta}</div>
+          </div>
+        </div>
+      )}
+      {current.spokenLine && (
+        <div className="absolute bottom-[15%] inset-x-0 text-center px-6">
+          <div className="inline-block bg-black/60 text-white text-xl px-6 py-3 rounded-md">{current.spokenLine}</div>
+        </div>
+      )}
+      <div className="absolute top-0 inset-x-0 h-0.5 bg-white/10"><div className="h-full bg-white/80" style={{ width: `${((idx + 1) / ready.length) * 100}%` }} /></div>
+      <div className="absolute top-4 left-4 text-white/70 text-[11px] uppercase tracking-widest z-20 flex items-center gap-2">
+        <Play className="h-3 w-3" /> {brand} · Cinematic Ad · {idx + 1}/{ready.length}
+      </div>
+      <style>{`@keyframes kbAd { 0% { transform: scale(1.03); } 100% { transform: scale(1.12); } }`}</style>
+    </div>
+  );
+}
