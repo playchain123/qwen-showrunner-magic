@@ -97,9 +97,12 @@ function DashboardHome() {
     });
   }, [navigate]);
 
-  function launch(seed: string) {
+  async function launch(seed: string) {
     const id = crypto.randomUUID().slice(0, 8);
-    sessionStorage.setItem(`makers:agent:${id}`, JSON.stringify({ prompt: seed, createdAt: Date.now() }));
+    const referenceImages = attach && attach.type.startsWith("image/")
+      ? [await fileToReferenceImage(attach)]
+      : [];
+    sessionStorage.setItem(`makers:agent:${id}`, JSON.stringify({ prompt: seed, referenceImages, createdAt: Date.now() }));
     navigate({ to: "/dashboard/agent/$id", params: { id } });
   }
 
@@ -144,7 +147,7 @@ function DashboardHome() {
                 </div>
                 <button
                   disabled={!prompt.trim()}
-                  onClick={() => launch(prompt.trim())}
+                  onClick={() => void launch(prompt.trim())}
                   className="h-9 w-9 rounded-full bg-white text-black flex items-center justify-center disabled:opacity-40"
                 >
                   <ArrowUp className="h-4 w-4" />
@@ -173,11 +176,20 @@ function DashboardHome() {
         <FeatureModal
           feature={openFeature}
           onClose={() => setOpenFeature(null)}
-          onProceed={(seed) => { setOpenFeature(null); launch(seed); }}
+          onProceed={(seed) => { setOpenFeature(null); void launch(seed); }}
         />
       )}
     </div>
   );
+}
+
+function fileToReferenceImage(file: File) {
+  return new Promise<{ name: string; dataUrl: string; description: string }>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve({ name: file.name, dataUrl: String(reader.result), description: "character/style reference" });
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 function FeatureModal({
