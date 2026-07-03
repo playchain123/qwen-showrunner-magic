@@ -5,6 +5,7 @@ const DASHSCOPE_BASE = "https://dashscope-intl.aliyuncs.com";
 const CHAT_URL = `${DASHSCOPE_BASE}/compatible-mode/v1/chat/completions`;
 const VIDEO_SUBMIT_URL = `${DASHSCOPE_BASE}/api/v1/services/aigc/video-generation/video-synthesis`;
 const TASK_URL = (id: string) => `${DASHSCOPE_BASE}/api/v1/tasks/${id}`;
+const LOVABLE_GATEWAY = "https://ai.gateway.lovable.dev";
 
 type Scene = {
   title: string;
@@ -192,11 +193,43 @@ export const generateVoice = createServerFn({ method: "POST" })
     };
 
     const mapGatewayVoice = (voice: string) => {
-      const pool = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"];
+      const female = ["nova", "shimmer", "sage"];
+      const male = ["onyx", "echo", "ash"];
+      const neutral = ["alloy", "fable"];
+      const tone = `${data.tone} ${voice}`.toLowerCase();
+      const pool = /female|woman|girl|mother|sister|queen|witch/.test(tone)
+        ? female
+        : /male|man|boy|father|brother|king|villain|hero|warrior/.test(tone)
+        ? male
+        : /child|kid|young/.test(tone)
+        ? female
+        : neutral;
       let hash = 0;
       for (let i = 0; i < voice.length; i++) hash = (hash * 31 + voice.charCodeAt(i)) >>> 0;
       return pool[hash % pool.length];
     };
+
+    const detectEmotion = (t: string) => {
+      const lower = t.toLowerCase();
+      if (/cry|sob|tear|grief|mourn/.test(lower)) return "sad, tearful, breath catching";
+      if (/whisper|hush|secret/.test(lower)) return "whispered, intimate, breathy";
+      if (/shout|scream|yell|rage/.test(lower)) return "shouting, forceful, urgent";
+      if (/laugh|joyful|excite|thrill/.test(lower)) return "joyful, animated, light";
+      if (/angry|furious|threat/.test(lower)) return "angry, tight, controlled fury";
+      if (/fear|scare|terrified/.test(lower)) return "fearful, trembling, quick breaths";
+      if (/love|tender|gentle/.test(lower)) return "tender, warm, soft";
+      if (/hope|inspire|motivat/.test(lower)) return "hopeful, uplifted, steady";
+      return "grounded, natural, in-the-moment acting";
+    };
+    const emotion = detectEmotion(`${data.text} ${data.tone}`);
+    const pitchWord = data.pitch === "low" ? "low chest resonance" : data.pitch === "high" ? "bright forward placement" : "balanced";
+    const richInstructions = [
+      `You are a professional on-screen film actor delivering an in-world line — never a narrator, never an announcer.`,
+      `Language: ${data.language}. Speak with clean native pronunciation, natural colloquial rhythm and human phrasing. No robotic cadence.`,
+      `Emotion: ${emotion}. Vocal placement: ${pitchWord}.`,
+      `Directorial note: ${data.tone}.`,
+      `Deliver with real breaths, micro-pauses, and dynamic pitch that matches the emotion.`,
+    ].join(" ");
 
     // Prefer Lovable AI Gateway TTS for more natural multilingual delivery.
     const lovKey = process.env.LOVABLE_API_KEY;
@@ -214,7 +247,7 @@ export const generateVoice = createServerFn({ method: "POST" })
             input: data.text,
             voice: mapGatewayVoice(data.voice),
             response_format: "mp3",
-            instructions: `Act as an on-screen film actor. Language: ${data.language}. Delivery: ${data.tone}. Pitch: ${data.pitch}. Speak with clean native human phrasing, natural emotion, no announcer voice, no narration, no robotic cadence.`,
+            instructions: richInstructions,
           }),
         });
         if (res.ok) {
@@ -263,6 +296,71 @@ export const generateVoice = createServerFn({ method: "POST" })
     }
 
     throw new Error("No TTS provider available");
+  });
+
+/** Generate a cinematic scene poster image via Lovable AI (Gemini image).
+ * Accepts optional reference images (data URLs or https URLs) so characters,
+ * wardrobe and setting stay consistent across the whole film. */
+export const generateSceneImage = createServerFn({ method: "POST" })
+  .inputValidator((input: unknown) =>
+    z
+      .object({
+        prompt: z.string().min(3),
+        referenceImages: z.array(z.string()).optional().default([]),
+        referenceWeight: z.number().min(0).max(1).optional().default(0.75),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }): Promise<{ image_url: string }> => {
+    const key = process.env.LOVABLE_API_KEY;
+    if (!key) throw new Error("LOVABLE_API_KEY not configured");
+    const weightPct = Math.round(data.referenceWeight * 100);
+    const guidance = data.referenceImages.length
+      ? `Match the provided reference image(s) at ~${weightPct}% strength: keep the SAME character face, hairstyle, wardrobe, ethnicity and body type. Preserve environmental continuity and color palette. Do not invent a new character.`
+      : ``;
+    const content: Array<Record<string, unknown>> = [
+      {
+        type: "text",
+        text: [
+          `Cinematic film still, 35mm anamorphic look, professional lighting, shallow depth of field, natural human subject, real photography look — NOT stylized illustration unless the prompt says animation.`,
+          guidance,
+          `SCENE: ${data.prompt}`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      },
+    ];
+    for (const ref of data.referenceImages.slice(0, 4)) {
+      content.push({ type: "image_url", image_url: { url: ref } });
+    }
+
+    const res = await fetch(`${LOVABLE_GATEWAY}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash-image",
+        messages: [{ role: "user", content }],
+        modalities: ["image", "text"],
+      }),
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(`Scene image failed (${res.status}): ${t.slice(0, 240)}`);
+    }
+    const j = (await res.json()) as {
+      choices?: Array<{
+        message?: {
+          images?: Array<{ image_url?: { url?: string } }>;
+          content?: unknown;
+        };
+      }>;
+    };
+    const url = j.choices?.[0]?.message?.images?.[0]?.image_url?.url;
+    if (!url) throw new Error("No image returned from gateway");
+    return { image_url: url };
   });
 
 /** Transcribe an audio URL with Paraformer-v2 to get word-level timing for subtitle sync. */
