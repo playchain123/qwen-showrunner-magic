@@ -383,9 +383,18 @@ function AgentWorkspace() {
                   className="w-full bg-transparent outline-none text-sm placeholder:text-white/40"
                 />
                 <div className="flex items-center justify-between mt-2">
-                  <button className="h-7 w-7 rounded-full border border-white/10 hover:bg-white/10 flex items-center justify-center">
+                  <input
+                    ref={uploadRef}
+                    type="file"
+                    multiple
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => void handleReferenceFiles(e.target.files)}
+                  />
+                  <button onClick={() => uploadRef.current?.click()} className="h-7 w-7 rounded-full border border-white/10 hover:bg-white/10 flex items-center justify-center" title="Add character reference images">
                     <Plus className="h-3.5 w-3.5" />
                   </button>
+                  {referenceImages.length > 0 && <span className="text-[11px] text-white/50">{referenceImages.length} refs</span>}
                   <div className="flex items-center gap-2">
                     <span className="text-[11px] text-white/50">Makers lite ▾</span>
                     <button onClick={send} className="h-7 w-7 rounded-full bg-white text-black flex items-center justify-center">
@@ -403,10 +412,20 @@ function AgentWorkspace() {
               <span className="font-medium text-white">Film Preview</span>
               <span className="text-white/40">·</span>
               <span className="text-white/60 truncate">{filmTitle || "Untitled"}</span>
+              {cards.length > 0 && (
+                <div className="ml-auto flex items-center gap-2">
+                  <button onClick={exportTimeline} className="flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1 text-[11px] text-white/75 hover:bg-white/10">
+                    <Scissors className="h-3 w-3" /> Timeline
+                  </button>
+                  <button onClick={exportProject} className="flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1 text-[11px] text-white/75 hover:bg-white/10">
+                    <Download className="h-3 w-3" /> Export
+                  </button>
+                </div>
+              )}
               {canPlay && (
                 <button
                   onClick={() => setPlayingFilm(true)}
-                  className="ml-auto flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium hover:bg-white/90"
+                  className="flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium hover:bg-white/90"
                 >
                   <Film className="h-3 w-3" /> {allDone ? "Play Film" : `Play (${readyCount}/${cards.length})`}
                 </button>
@@ -422,13 +441,13 @@ function AgentWorkspace() {
                 <>
                   {/* Big stage */}
                   <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-neutral-950 border border-white/10">
-                    {allDone ? (
+                    {firstReady ? (
                       <button
                         onClick={() => setPlayingFilm(true)}
                         className="group absolute inset-0"
                       >
                         <video
-                          src={cards[0].videoUrl}
+                          src={firstReady.videoUrl}
                           muted
                           playsInline
                           autoPlay
@@ -441,7 +460,7 @@ function AgentWorkspace() {
                             <Play className="h-6 w-6 ml-1" fill="currentColor" />
                           </div>
                           <div className="mt-4 text-white text-lg font-medium drop-shadow">{filmTitle}</div>
-                          <div className="mt-1 text-white/70 text-xs">~{cards.length * 6}s · {cards.length} shots · dialogue + score</div>
+                          <div className="mt-1 text-white/70 text-xs">{allDone ? "Final cut ready" : `Progressive playback ready · ${readyCount}/${cards.length} shots`} · dialogue + score</div>
                         </div>
                       </button>
                     ) : (
@@ -456,11 +475,26 @@ function AgentWorkspace() {
                           </svg>
                           <span className="absolute inset-0 flex items-center justify-center text-sm">{totalProgress}%</span>
                         </div>
-                        <div className="text-sm text-white/70">Assembling cinematic edit…</div>
-                        <div className="text-[11px] text-white/40">Rendering shots · casting voices · scoring music</div>
+                        <div className="text-sm text-white/70">Building first playable shot…</div>
+                        <div className="text-[11px] text-white/40">Rendering video · casting voices · preparing timeline</div>
                       </div>
                     )}
                   </div>
+
+                  <VideoTimeline cards={cards} activeIndex={Math.max(0, cards.findIndex((c) => c.videoUrl))} />
+
+                  {referenceImages.length > 0 && (
+                    <div>
+                      <div className="text-[11px] uppercase tracking-wider text-white/40 mb-2 flex items-center gap-1.5"><ImagePlus className="h-3 w-3" /> Reference images</div>
+                      <div className="flex gap-2 overflow-x-auto pb-1">
+                        {referenceImages.map((r, i) => (
+                          <div key={`${r.name}-${i}`} className="relative h-20 w-20 shrink-0 overflow-hidden rounded-md border border-white/10 bg-neutral-900">
+                            <img src={r.dataUrl} alt={r.name} className="h-full w-full object-cover" />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {logline && (
                     <p className="text-sm text-white/70 leading-relaxed italic border-l-2 border-white/20 pl-3">
@@ -470,7 +504,7 @@ function AgentWorkspace() {
 
                   {/* Shot filmstrip */}
                   <div>
-                    <div className="text-[11px] uppercase tracking-wider text-white/40 mb-2">Shot list · {cards.filter(c=>c.done).length}/{cards.length}</div>
+                    <div className="text-[11px] uppercase tracking-wider text-white/40 mb-2">Timeline slides · {cards.filter(c=>c.done).length}/{cards.length}</div>
                     <div className="grid grid-cols-4 gap-2">
                       {cards.map((c, i) => (
                         <div key={i} className="relative aspect-video rounded-md overflow-hidden bg-neutral-900 border border-white/5">
@@ -480,6 +514,7 @@ function AgentWorkspace() {
                             <div className="absolute inset-0 flex items-center justify-center text-[10px] text-white/40">{c.progress}%</div>
                           )}
                           <div className="absolute bottom-1 left-1 text-[9px] text-white/80 bg-black/60 px-1 rounded">#{i + 1}{c.shotType ? ` · ${c.shotType}` : ""}</div>
+                          <div className="absolute top-1 left-1 text-[9px] text-white/70 bg-black/60 px-1 rounded">{c.language || "dialogue"}</div>
                         </div>
                       ))}
                     </div>
