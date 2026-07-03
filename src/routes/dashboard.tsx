@@ -35,6 +35,9 @@ export function Sidebar() {
         <Link to="/dashboard/library" className="flex flex-col items-center gap-1 hover:text-white">
           <Library className="h-4 w-4" /><span>Library</span>
         </Link>
+        <Link to="/dashboard/ads" className="flex flex-col items-center gap-1 hover:text-white">
+          <Film className="h-4 w-4" /><span>Ads</span>
+        </Link>
       </nav>
     </aside>
   );
