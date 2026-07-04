@@ -5,6 +5,13 @@ import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateSceneImage } from "@/lib/qwen.functions";
 import { pickBgm } from "@/lib/free-sounds";
+import {
+  MAKERS_DEMO_LIMITS,
+  clampSceneCount,
+  getVideoPollDelayMs,
+  normalizeSceneDuration,
+  runWithConcurrency,
+} from "@/lib/makers-runtime";
 
 export const Route = createFileRoute("/dashboard_/agent/$id")({
   ssr: false,
@@ -193,7 +200,7 @@ function AgentWorkspace() {
           pitch: s.pitch,
           bgm: s.bgm,
           sfx: s.sfx,
-          durationSeconds: s.duration_seconds || 8,
+          durationSeconds: normalizeSceneDuration(s.duration_seconds),
           colorGrade: s.color_grade,
           editingNotes: s.editing_notes,
           referenceImageDirection: s.reference_image_direction,
@@ -204,8 +211,10 @@ function AgentWorkspace() {
 
       writeLearningContext(prompt, story.title, story.tone, story.scenes.map((s) => s.language).filter(Boolean).join(", "));
 
-      await Promise.all(
-        scenes.map(async (s, idx) => {
+      await runWithConcurrency(
+        scenes,
+        MAKERS_DEMO_LIMITS.maxParallelVideoJobs,
+        async (s, idx) => {
           try {
             // Assign a distinct Qwen3-TTS voice per character so actors sound different
             const voicePool = ["Cherry", "Ethan", "Serena", "Dylan", "Chelsie", "Jada", "Sunny"];
@@ -246,8 +255,6 @@ function AgentWorkspace() {
                 setCards((c) => c.map((card, i) => (i === idx ? { ...card, audioUrl: v.audio_url } : card)));
               })
               .catch(() => {});
-            const prevScene = scenes[idx - 1];
-            const nextScene = scenes[idx + 1];
             const fullPrompt = [
               s.video_prompt,
               (s as { location?: string }).location ? `Exact location continuity: ${(s as { location?: string }).location}` : "",
@@ -255,35 +262,15 @@ function AgentWorkspace() {
               s.editing_notes ? `Professional edit intent: ${s.editing_notes}` : "",
               s.color_grade ? `Color grade: ${s.color_grade}` : "",
               s.sfx ? `On-screen action must support these clean SFX cues: ${s.sfx}` : "",
-              prevScene ? `Continues DIRECTLY from previous shot: ${prevScene.visual}. Match wardrobe, lighting, character look and geography — no visual jump.` : "",
-              nextScene ? `Frames must LEAD INTO next shot: ${nextScene.visual}. Leave motion and eyeline heading toward it for a clean edit cut.` : "",
-              `Scene ${idx + 1}/${scenes.length}. Same short film, same 2-3 named characters throughout: ${scenes.map((sc) => sc.character).filter(Boolean).slice(0, 3).join(", ")}. Single continuous 8-second cinematic shot, in-world character acting with lip movement matching the spoken line "${s.spoken_line || s.dialogue}", NO narrator, NO black frames at start or end, seamless edit-ready plate.`,
+              `This is scene ${idx + 1} of ${scenes.length} in the same short film. Preserve the same characters, wardrobe, lighting mood, location geography, emotional continuity and storyline from the surrounding scenes. Render as one continuous ${normalizeSceneDuration(s.duration_seconds)}-second cinematic shot.`,
             ].filter(Boolean).join("\n");
-            // Dual-model chain: try wan2.2-t2v-plus (highest quality), fall
-            // back to happyhorse-1.1-t2v (cheaper, faster) on failure or when
-            // the account hits a spend/quota cap. Never let one model failure
-            // kill the scene.
-            let task_id = "";
-            let usedModel: "wan2.2-t2v-plus" | "happyhorse-1.1-t2v" = "wan2.2-t2v-plus";
-            try {
-              const r = await submitVideo({
-                data: { prompt: fullPrompt, size: "832*480", model: "wan2.2-t2v-plus" },
-              });
-              task_id = r.task_id;
-            } catch (primaryErr) {
-              usedModel = "happyhorse-1.1-t2v";
-              const r = await submitVideo({
-                data: { prompt: fullPrompt, size: "832*480", model: "happyhorse-1.1-t2v" },
-              });
-              task_id = r.task_id;
-              const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
-              setCards((c) => c.map((card, i) => (i === idx ? { ...card, caption: `${card.caption}\n↻ Fell back to Happy Horse (${msg.slice(0, 80)})` } : card)));
-            }
-            void usedModel;
+            const { task_id } = await submitVideo({
+              data: { prompt: fullPrompt, size: "832*480", model: "wan2.2-t2v-plus" },
+            });
             // poll
             let attempts = 0;
-            while (attempts < 180) {
-              await new Promise((r) => setTimeout(r, 2000));
+            while (attempts < MAKERS_DEMO_LIMITS.maxVideoPollAttempts) {
+              await new Promise((r) => setTimeout(r, getVideoPollDelayMs(attempts)));
               attempts++;
               const p = Math.min(10 + attempts * 3, 92);
               setCards((c) => c.map((card, i) => (i === idx ? { ...card, progress: p } : card)));
@@ -303,7 +290,7 @@ function AgentWorkspace() {
             setCards((c) => c.map((card, i) => (i === idx ? { ...card, caption: `${card.caption}\n⚠ ${msg}` } : card)));
             throw new Error(`Scene ${idx + 1} failed: ${msg}`);
           }
-        }),
+        },
       );
 
       setTasks((t) => t.map((task) => ({ ...task, done: true })));
@@ -1266,9 +1253,8 @@ function FilmPlayer({
 function chooseSceneCount(prompt: string) {
   const text = prompt.toLowerCase();
   const explicit = text.match(/(\d+)\s*(scene|scenes|slide|slides|shot|shots)/);
-  if (explicit) return Math.min(12, Math.max(4, Number(explicit[1])));
-  if (text.includes("fast") || text.includes("quick")) return 5;
-  return 8;
+  if (explicit) return clampSceneCount(Number(explicit[1]));
+  return MAKERS_DEMO_LIMITS.maxScenes;
 }
 
 function readLearningContext() {

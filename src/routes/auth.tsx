@@ -3,10 +3,6 @@ import { useState, useRef, useEffect, type FormEvent } from "react";
 import { z } from "zod";
 import { Eye, EyeOff, ArrowRight } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import authReel from "@/assets/auth-reel.mp4.asset.json";
-import auth2 from "@/assets/auth-2.mp4.asset.json";
-import auth3 from "@/assets/auth-3.mp4.asset.json";
-import auth4 from "@/assets/auth-4.mp4.asset.json";
 
 function Mark({ className = "h-6 w-6" }: { className?: string }) {
   return (
@@ -33,10 +29,10 @@ export const Route = createFileRoute("/auth")({
 });
 
 const reels = [
-  { url: authReel.url, title: "Who am I?", tag: "Cinematic short" },
-  { url: auth2.url, title: "The Interview", tag: "Portrait drama" },
-  { url: auth3.url, title: "Nightwalker", tag: "Cyberpunk teaser" },
-  { url: auth4.url, title: "Skyline", tag: "Epic wide shot" },
+  { url: "/videos/vid-1.mp4", title: "Who am I?", tag: "Cinematic short" },
+  { url: "/videos/vid-2.mp4", title: "The Interview", tag: "Portrait drama" },
+  { url: "/videos/vid-3.mp4", title: "Nightwalker", tag: "Cyberpunk teaser" },
+  { url: "/videos/vid-4.mp4", title: "Skyline", tag: "Epic wide shot" },
 ];
 
 function AuthPage() {

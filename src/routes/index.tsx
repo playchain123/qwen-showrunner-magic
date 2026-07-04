@@ -16,16 +16,22 @@ import slide1 from "@/assets/slide-1.jpg";
 import slide2 from "@/assets/slide-2.jpg";
 import slide3 from "@/assets/slide-3.jpg";
 import slide4 from "@/assets/slide-4.jpg";
-import vid1 from "@/assets/vid-1.mp4.asset.json";
-import vid2 from "@/assets/vid-2.mp4.asset.json";
-import vid3 from "@/assets/vid-3.mp4.asset.json";
-import vid4 from "@/assets/vid-4.mp4.asset.json";
-import vid5 from "@/assets/vid-5.mp4.asset.json";
-import vid6 from "@/assets/vid-6.mp4.asset.json";
-import mwm1 from "@/assets/mwm-1.mp4.asset.json";
-import mwm2 from "@/assets/mwm-2.mp4.asset.json";
-import mwm3 from "@/assets/mwm-3.mp4.asset.json";
-import mwm4 from "@/assets/mwm-4.mp4.asset.json";
+const LOCAL_VIDEOS = [
+  "/videos/vid-1.mp4",
+  "/videos/vid-2.mp4",
+  "/videos/vid-3.mp4",
+  "/videos/vid-4.mp4",
+  "/videos/vid-5.mp4",
+  "/videos/vid-6.mp4",
+] as const;
+const LOCAL_BACKGROUND_VIDEO = LOCAL_VIDEOS[0];
+const MADE_WITH_MAKERS_VIDEOS = [
+  "https://id-preview--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app/__l5e/assets-v1/35daab26-88ad-4a29-81e7-98be4c2418ea/mwm-1.mp4",
+  "https://id-preview--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app/__l5e/assets-v1/6d74569b-48ca-469d-a154-d12bf99ce53e/mwm-2.mp4",
+  "https://id-preview--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app/__l5e/assets-v1/a06b0e52-903c-4da3-ab72-e3824c502e45/mwm-3.mp4",
+  "https://id-preview--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app/__l5e/assets-v1/d84eef6e-5aef-4684-b084-e081d3744f0e/mwm-4.mp4",
+] as const;
+const HERO_VIDEO_HAS_BAKED_UI = false;
 
 export const Route = createFileRoute("/")({
   component: Index,
@@ -172,6 +178,8 @@ function HoverVideo({
   children?: React.ReactNode;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
+  const [activeSrc, setActiveSrc] = useState(src || LOCAL_BACKGROUND_VIDEO);
+  const [videoReady, setVideoReady] = useState(false);
   return (
     <div
       className={`group relative overflow-hidden bg-black ${className}`}
@@ -194,19 +202,73 @@ function HoverVideo({
         src={poster}
         alt=""
         loading="lazy"
-        className="absolute inset-0 h-full w-full object-cover transition-opacity duration-300 group-hover:opacity-0"
+        className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ${
+          videoReady ? "group-hover:opacity-0" : ""
+        }`}
       />
       <video
         ref={ref}
-        src={src}
+        src={activeSrc}
         muted
         loop
         playsInline
         preload="none"
-        className="absolute inset-0 h-full w-full object-cover opacity-0 group-hover:opacity-100 transition-opacity duration-300"
+        onCanPlay={() => setVideoReady(true)}
+        onError={() => {
+          setVideoReady(false);
+          if (activeSrc !== LOCAL_BACKGROUND_VIDEO) setActiveSrc(LOCAL_BACKGROUND_VIDEO);
+        }}
+        className={`absolute inset-0 h-full w-full object-cover opacity-0 transition-opacity duration-300 ${
+          videoReady ? "group-hover:opacity-100" : ""
+        }`}
       />
       {children}
     </div>
+  );
+}
+
+function AutoplayVideo({
+  src,
+  poster,
+  className = "",
+  fallbackSrc = LOCAL_BACKGROUND_VIDEO,
+}: {
+  src?: string;
+  poster: string;
+  className?: string;
+  fallbackSrc?: string | null;
+}) {
+  const [activeSrc, setActiveSrc] = useState(src || LOCAL_BACKGROUND_VIDEO);
+  const [videoReady, setVideoReady] = useState(false);
+
+  return (
+    <>
+      <img
+        src={poster}
+        alt=""
+        loading="lazy"
+        className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-500 ${
+          videoReady ? "opacity-0" : "opacity-100"
+        } ${className}`}
+      />
+      <video
+        src={activeSrc}
+        autoPlay
+        muted
+        loop
+        playsInline
+        preload="auto"
+        poster={poster}
+        onCanPlay={() => setVideoReady(true)}
+        onError={() => {
+          setVideoReady(false);
+          if (fallbackSrc && activeSrc !== fallbackSrc) setActiveSrc(fallbackSrc);
+        }}
+        className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-500 ${
+          videoReady ? "opacity-100" : "opacity-0"
+        } ${className}`}
+      />
+    </>
   );
 }
 
@@ -214,12 +276,12 @@ function ScenesGrid() {
   const [tab, setTab] = useState("Film");
   const tabs = ["Film", "Promo", "Performance Ad", "Product Ad", "Microdrama"];
   const scenes = [
-    { img: scene1, vid: vid1.url },
-    { img: scene2, vid: vid2.url },
-    { img: scene3, vid: vid3.url },
-    { img: scene4, vid: vid4.url },
-    { img: scene5, vid: vid5.url },
-    { img: scene6, vid: vid6.url },
+    { img: scene1, vid: LOCAL_VIDEOS[0] },
+    { img: scene2, vid: LOCAL_VIDEOS[1] },
+    { img: scene3, vid: LOCAL_VIDEOS[2] },
+    { img: scene4, vid: LOCAL_VIDEOS[3] },
+    { img: scene5, vid: LOCAL_VIDEOS[4] },
+    { img: scene6, vid: LOCAL_VIDEOS[5] },
   ];
 
   return (
@@ -512,7 +574,7 @@ function IntroducingMakers() {
         </div>
         <HoverVideo
           poster={slide3}
-          src={vid2.url}
+          src={LOCAL_VIDEOS[1]}
           className="aspect-video rounded-xl border border-white/10"
         >
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -528,9 +590,9 @@ function IntroducingMakers() {
 
 function MadeWithMakers() {
   const tiles = [
-    { vid: mwm2.url, title: "Nightline", caption: "Cyberpunk short" },
-    { vid: mwm3.url, title: "Ronin", caption: "Period piece" },
-    { vid: mwm4.url, title: "Horizon", caption: "Aerial vignette" },
+    { vid: MADE_WITH_MAKERS_VIDEOS[1], poster: slide1, title: "Nightline", caption: "Cyberpunk short" },
+    { vid: MADE_WITH_MAKERS_VIDEOS[2], poster: slide2, title: "Ronin", caption: "Period piece" },
+    { vid: MADE_WITH_MAKERS_VIDEOS[3], poster: slide4, title: "Horizon", caption: "Aerial vignette" },
   ];
   const categories = [
     "MAKERS ORIGINALS",
@@ -539,67 +601,67 @@ function MadeWithMakers() {
     "MUSIC VIDEOS",
   ];
   return (
-    <section className="relative py-16 md:py-24 px-6">
-      <div className="max-w-6xl mx-auto">
+    <section className="relative px-4 py-10 md:px-8 md:py-16">
+      <div className="mx-auto w-full max-w-[1500px]">
         {/* Hero autoplay video */}
-        <div className="relative aspect-[16/9] w-full rounded-2xl overflow-hidden bg-black">
-          <video
-            src={mwm1.url}
-            autoPlay
-            muted
-            loop
-            playsInline
-            className="absolute inset-0 h-full w-full object-cover"
+        <div className="relative min-h-[360px] w-full overflow-hidden rounded-[18px] bg-black md:aspect-[21/8] md:min-h-0">
+          <AutoplayVideo
+            src={MADE_WITH_MAKERS_VIDEOS[0]}
+            poster={slide3}
+            className="scale-[1.01] object-center"
+            fallbackSrc={null}
           />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
+          {!HERO_VIDEO_HAS_BAKED_UI && (
+            <>
+              <div className="absolute inset-0 bg-gradient-to-r from-black/55 via-black/10 to-black/35" />
+              <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/75 via-black/25 to-transparent" />
+            </>
+          )}
 
           {/* Bottom-left title + CTA */}
-          <div className="absolute bottom-8 left-8 md:bottom-12 md:left-12 right-8 flex flex-col md:flex-row md:items-end md:justify-between gap-6">
+          {!HERO_VIDEO_HAS_BAKED_UI && <div className="absolute inset-x-6 bottom-7 flex flex-col gap-7 md:inset-x-10 md:bottom-10 md:flex-row md:items-end md:justify-between lg:inset-x-14">
             <div>
-              <h2 className="font-serif-display text-4xl md:text-6xl text-white leading-[1.05]">
+              <h2 className="font-serif-display max-w-[980px] text-5xl leading-[0.96] text-white drop-shadow-2xl md:text-6xl lg:text-7xl">
                 Made with Makers
                 <br />
-                <span className="text-white/80">Building the next wave of drama</span>
+                <span className="text-white/90">Building the next wave of drama</span>
               </h2>
               <Link
                 to="/auth"
                 search={{ mode: "signup" }}
-                className="mt-6 inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-white text-black text-sm font-medium hover:bg-white/90 transition"
+                className="mt-7 inline-flex items-center gap-3 rounded-full bg-white px-6 py-3 text-base font-medium text-black shadow-xl transition hover:bg-white/90"
               >
                 Get Started <ArrowRight className="h-4 w-4" />
               </Link>
             </div>
-            <ul className="text-white text-sm md:text-base space-y-2 md:text-right">
+            <ul className="space-y-3 text-left text-xl font-semibold text-white drop-shadow-xl md:text-right md:text-2xl">
               {categories.map((c) => (
                 <li key={c} className="tracking-wide font-medium">
                   {c}
                 </li>
               ))}
             </ul>
-          </div>
+          </div>}
         </div>
 
         {/* Row of autoplay tiles */}
-        <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-5">
+        <div className="mt-8 grid grid-cols-1 gap-7 md:grid-cols-3">
           {tiles.map((t) => (
             <div
               key={t.title}
-              className="relative aspect-video rounded-xl overflow-hidden bg-black border border-white/10"
+              className="relative aspect-video overflow-hidden rounded-[14px] border border-white/10 bg-black shadow-2xl"
             >
-              <video
+              <AutoplayVideo
                 src={t.vid}
-                autoPlay
-                muted
-                loop
-                playsInline
-                className="absolute inset-0 h-full w-full object-cover"
+                poster={t.poster}
+                fallbackSrc={null}
               />
               <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
-              <div className="absolute bottom-4 left-4 right-4">
-                <p className="text-[10px] uppercase tracking-[0.3em] text-white/70 mb-1">
+              <div className="absolute inset-x-5 bottom-5">
+                <p className="mb-2 text-[11px] uppercase tracking-[0.35em] text-white/70">
                   {t.caption}
                 </p>
-                <h3 className="font-serif-display text-2xl text-white">{t.title}</h3>
+                <h3 className="font-serif-display text-3xl text-white drop-shadow-lg">{t.title}</h3>
               </div>
             </div>
           ))}

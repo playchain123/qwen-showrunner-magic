@@ -2,13 +2,18 @@ import { createFileRoute, Link, useNavigate, Outlet } from "@tanstack/react-rout
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Plus, Home, Library, Upload, Sparkles, Film, FileText, Video, Package, X, Heart, LogOut } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import vid1 from "@/assets/vid-1.mp4.asset.json";
-import vid2 from "@/assets/vid-2.mp4.asset.json";
-import vid3 from "@/assets/vid-3.mp4.asset.json";
-import vid4 from "@/assets/vid-4.mp4.asset.json";
-import vid5 from "@/assets/vid-5.mp4.asset.json";
-import vid6 from "@/assets/vid-6.mp4.asset.json";
-import explainerHero from "@/assets/explainer-hero.mp4.asset.json";
+import slide1 from "@/assets/slide-1.jpg";
+import slide2 from "@/assets/slide-2.jpg";
+import slide3 from "@/assets/slide-3.jpg";
+import slide4 from "@/assets/slide-4.jpg";
+
+const LOCAL_VIDEOS = [
+  "/videos/vid-1.mp4",
+  "/videos/vid-2.mp4",
+  "/videos/vid-3.mp4",
+  "/videos/vid-4.mp4",
+] as const;
+const LOCAL_BACKGROUND_VIDEO = LOCAL_VIDEOS[0];
 
 export const Route = createFileRoute("/dashboard")({
   ssr: false,
@@ -81,10 +86,10 @@ export function TopBar() {
 }
 
 const FEATURED = [
-  { id: "product-ads", label: "Product Ads", icon: Package, hero: vid1.url, title: "Short ad video", kind: "ad" },
-  { id: "ai-shorts", label: "Create AI shorts", icon: Film, hero: vid2.url, title: "AI short film", kind: "short" },
-  { id: "use-script", label: "Use my script", icon: FileText, hero: vid3.url, title: "Turn script into video", kind: "script" },
-  { id: "explainer", label: "Make explainer video", icon: Video, hero: explainerHero.url, title: "Explainer video", kind: "explainer" },
+  { id: "product-ads", label: "Product Ads", icon: Package, hero: LOCAL_VIDEOS[0], poster: slide1, title: "Short ad video", kind: "ad" },
+  { id: "ai-shorts", label: "Create AI shorts", icon: Film, hero: LOCAL_VIDEOS[1], poster: slide2, title: "AI short film", kind: "short" },
+  { id: "use-script", label: "Use my script", icon: FileText, hero: LOCAL_VIDEOS[2], poster: slide3, title: "Turn script into video", kind: "script" },
+  { id: "explainer", label: "Make explainer video", icon: Video, hero: LOCAL_VIDEOS[3], poster: slide4, title: "Explainer video", kind: "explainer" },
 ] as const;
 
 function DashboardHome() {
@@ -223,6 +228,8 @@ function FeatureModal({
   const [pace, setPace] = useState("fast paced");
   const [platform, setPlatform] = useState("YouTube");
   const [topic, setTopic] = useState("");
+  const [activeHero, setActiveHero] = useState(feature.hero || LOCAL_BACKGROUND_VIDEO);
+  const [heroReady, setHeroReady] = useState(false);
 
   function proceed() {
     const seed = `Create a ${duration} ${pace} ${feature.label.toLowerCase()} for ${platform} about ${topic || "my topic"}.`;
@@ -236,7 +243,25 @@ function FeatureModal({
           <X className="h-4 w-4" />
         </button>
         <div className="relative h-56 bg-black">
-          <video src={feature.hero} autoPlay muted loop playsInline className="absolute inset-0 h-full w-full object-cover" />
+          <img
+            src={feature.poster}
+            alt=""
+            className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-500 ${heroReady ? "opacity-0" : "opacity-100"}`}
+          />
+          <video
+            src={activeHero}
+            poster={feature.poster}
+            autoPlay
+            muted
+            loop
+            playsInline
+            onCanPlay={() => setHeroReady(true)}
+            onError={() => {
+              setHeroReady(false);
+              if (activeHero !== LOCAL_BACKGROUND_VIDEO) setActiveHero(LOCAL_BACKGROUND_VIDEO);
+            }}
+            className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-500 ${heroReady ? "opacity-100" : "opacity-0"}`}
+          />
           <div className="absolute inset-0 bg-gradient-to-t from-black via-black/30 to-transparent" />
           <div className="absolute bottom-4 left-6 flex items-center justify-between right-6">
             <h2 className="text-2xl font-semibold">{feature.title}</h2>

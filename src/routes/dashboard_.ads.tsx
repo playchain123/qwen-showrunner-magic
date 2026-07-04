@@ -5,6 +5,12 @@ import { Sidebar, TopBar, MakersMark } from "./dashboard";
 import { supabase } from "@/integrations/supabase/client";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateSceneImage } from "@/lib/qwen.functions";
 import { pickBgm } from "@/lib/free-sounds";
+import {
+  MAKERS_DEMO_LIMITS,
+  getVideoPollDelayMs,
+  normalizeSceneDuration,
+  runWithConcurrency,
+} from "@/lib/makers-runtime";
 
 export const Route = createFileRoute("/dashboard_/ads")({
   ssr: false,
@@ -77,22 +83,24 @@ function CinematicAds() {
       const toneObj = TONES.find((t) => t.id === tone) || TONES[0];
       const brief = `A ${toneObj.label.toLowerCase()} 15-30 second cinematic ad for ${brand}. Pitch: ${pitch}. Structure: 1) hook shot, 2) product/context, 3) emotional beat with talent, 4) CTA reveal ("${cta}"). Style: ${toneObj.desc}. No narrator voice-over — in-world dialogue only. Every shot MUST feature the brand's uploaded ${assets.some((a) => a.kind === "product") ? "product prominently" : "identity"}. Keep talent and product consistent across every shot.`;
       const referenceBrief = assets.map((a) => ({ name: a.name, description: a.kind === "product" ? "Hero product — must appear in every shot" : a.kind === "logo" ? "Brand logo — subtle placement + endcard" : "Brand talent — same face across all shots" }));
-      const story = await generateStoryboard({ data: { prompt: brief, sceneCount: 5, learningContext: "", referenceImages: referenceBrief } });
+      const story = await generateStoryboard({ data: { prompt: brief, sceneCount: MAKERS_DEMO_LIMITS.maxScenes, learningContext: "", referenceImages: referenceBrief } });
       const initShots: AdShot[] = story.scenes.map((s, i) => ({
         title: `#${i + 1} ${s.title}`,
         visual: s.visual,
         spokenLine: s.spoken_line || s.dialogue?.replace(/^[^:]+:\s*/, "") || "",
         progress: 5,
         done: false,
-        durationSeconds: s.duration_seconds || 6,
+        durationSeconds: normalizeSceneDuration(s.duration_seconds),
         colorGrade: s.color_grade,
         bgm: s.bgm,
       }));
       setShots(initShots);
       setStatus(`Rendering ${initShots.length} ad shots — product locked as reference…`);
 
-      await Promise.all(
-        story.scenes.map(async (s, idx) => {
+      await runWithConcurrency(
+        story.scenes,
+        MAKERS_DEMO_LIMITS.maxParallelVideoJobs,
+        async (s, idx) => {
           try {
             const imgPrompt = [s.visual || s.video_prompt, s.color_grade ? `Color grade: ${s.color_grade}` : "", `Brand: ${brand}. Hero product/logo/talent must remain identical to references.`].filter(Boolean).join("\n");
             void generateSceneImage({ data: { prompt: imgPrompt, referenceImages: assets.map((a) => a.dataUrl), referenceWeight: 0.9 } })
@@ -106,8 +114,8 @@ function CinematicAds() {
             const fullPrompt = [s.video_prompt, `Brand: ${brand}. Product/logo/talent from reference must appear.`, s.color_grade ? `Color grade: ${s.color_grade}` : ""].filter(Boolean).join("\n");
             const { task_id } = await submitVideo({ data: { prompt: fullPrompt, size: "832*480", model: "wan2.2-t2v-plus" } });
             let attempts = 0;
-            while (attempts < 180) {
-              await new Promise((r) => setTimeout(r, 2000));
+            while (attempts < MAKERS_DEMO_LIMITS.maxVideoPollAttempts) {
+              await new Promise((r) => setTimeout(r, getVideoPollDelayMs(attempts)));
               attempts++;
               const p = Math.min(10 + attempts * 3, 92);
               setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, progress: p } : sh)));
@@ -123,7 +131,7 @@ function CinematicAds() {
           } catch (err) {
             setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, visual: `${sh.visual}\n⚠ ${err instanceof Error ? err.message : String(err)}` } : sh)));
           }
-        })
+        },
       );
       setStatus("Ad ready — press play to preview.");
       setPlaying(true);
