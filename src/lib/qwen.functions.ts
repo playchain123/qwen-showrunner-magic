@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { clampSceneCount, normalizeSceneDuration } from "./makers-runtime";
+import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 
 const DASHSCOPE_BASE = "https://dashscope-intl.aliyuncs.com";
 const CHAT_URL = `${DASHSCOPE_BASE}/compatible-mode/v1/chat/completions`;
