@@ -11,6 +11,40 @@ const VIDEO_SUBMIT_URL = `${DASHSCOPE_BASE}/api/v1/services/aigc/video-generatio
 const TASK_URL = (id: string) => `${DASHSCOPE_BASE}/api/v1/tasks/${id}`;
 const LOVABLE_GATEWAY = "https://ai.gateway.lovable.dev";
 
+// Allow only trusted external hosts for URLs we forward to third-party AI
+// providers. Prevents SSRF-by-proxy against cloud-internal endpoints.
+const ALLOWED_MEDIA_HOSTS = new Set([
+  "dashscope-intl.aliyuncs.com",
+  "dashscope.aliyuncs.com",
+  "oss-cn-beijing.aliyuncs.com",
+  "oss-accelerate.aliyuncs.com",
+  "dashscope-result.oss-cn-beijing.aliyuncs.com",
+  "dashscope-result-sh.oss-cn-shanghai.aliyuncs.com",
+  "dashscope-result-wlcb.oss-cn-wulanchabu.aliyuncs.com",
+  "acecxckmvlaxygbvubub.supabase.co",
+]);
+
+function isSafeExternalUrl(value: string): boolean {
+  if (value.startsWith("data:image/") || value.startsWith("data:audio/")) return true;
+  try {
+    const u = new URL(value);
+    if (u.protocol !== "https:") return false;
+    return ALLOWED_MEDIA_HOSTS.has(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+const safeMediaUrl = z
+  .string()
+  .url()
+  .max(2048)
+  .refine(isSafeExternalUrl, {
+    message: "URL host is not on the allowlist for external media forwarding",
+  });
+
+const TASK_ID_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;
+
 function allowNonQwenFallbacks() {
   return process.env.ALLOW_NON_QWEN_FALLBACKS === "true";
 }
