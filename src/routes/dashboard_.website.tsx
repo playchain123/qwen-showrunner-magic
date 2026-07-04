@@ -37,6 +37,7 @@ type BeatPreview = WebsiteVideoBeat & {
   plannedDurationSeconds?: number;
   renderAsset?: WebsiteBeatRenderAsset;
   assetStatus?: "pending" | "generating" | "ready" | "failed";
+  assetSource?: WebsiteBeatRenderAsset["asset_source"];
   clipUrl?: string;
   motionSpec?: WebsiteBeatRenderAsset["motionGraphicSpec"];
   done?: boolean;
@@ -233,6 +234,7 @@ function WebsiteVideoPage() {
       scenes: renderedBeats.map((beat) => ({
         title: beat.beat_purpose,
         assetStatus: beat.assetStatus || "ready",
+        assetSource: beat.assetSource,
         clipUrl: beat.clipUrl,
         videoUrl: beat.clipUrl,
         motionSpec: beat.motionSpec,
@@ -253,6 +255,7 @@ function WebsiteVideoPage() {
       timeline: renderedBeats.map((beat) => ({
         title: beat.beat_purpose,
         assetStatus: beat.assetStatus || "ready",
+        assetSource: beat.assetSource,
         clipUrl: beat.clipUrl,
         videoUrl: beat.clipUrl,
         motionSpec: beat.motionSpec,
@@ -519,6 +522,7 @@ function WebsiteVideoPage() {
                       <div className="p-3 text-[11px] text-white/50 space-y-1">
                         {beat.screen_capture_spec && <div>Capture: {beat.screen_capture_spec.source_page}</div>}
                         {beat.motion_graphic_spec && <div>Motion: {beat.motion_graphic_spec.layout}</div>}
+                        {beat.assetSource === "fallback" && <div className="text-amber-300">Using fallback visual: {beat.renderAsset?.asset_error || "capture unavailable"}</div>}
                         {beat.renderAsset?.captureChoreography && <div>Choreography: {beat.renderAsset.captureChoreography.interaction_sequence.join(" -> ")}</div>}
                         {beat.renderAsset?.motionGraphicSpec && <div>Compiled layers: {beat.renderAsset.motionGraphicSpec.elements.length}</div>}
                         {beat.renderAsset?.brollPromptSpec && <div>B-roll prompt compiled</div>}
@@ -703,81 +707,6 @@ function WebsiteVideoPlayer({
   );
 }
 
-function WebsiteVideoFrame({
-  brandKit,
-  beat,
-  title,
-  progress,
-}: {
-  brandKit: WebsiteBrandKit;
-  beat: BeatPreview;
-  title: string;
-  progress: number;
-}) {
-  const primary = validColor(brandKit.brand.primary_color_hex, "#111111");
-  const secondary = validColor(brandKit.brand.secondary_color_hex, "#2a2a2a");
-  const accent = validColor(brandKit.brand.accent_color_hex, "#ffffff");
-  const neutral = validColor(brandKit.brand.neutral_color_hex, "#080808");
-  const shift = Math.round(progress * 28);
-  return (
-    <div
-      className="relative h-full w-full overflow-hidden"
-      style={{
-        background:
-          beat.production_method === "screen_capture"
-            ? `linear-gradient(135deg, ${neutral}, ${primary} 56%, ${secondary})`
-            : `radial-gradient(circle at ${30 + shift}% ${25 + shift / 2}%, ${accent}33, transparent 28%), linear-gradient(135deg, ${primary}, ${neutral} 62%, ${secondary})`,
-      }}
-    >
-      <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.07)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px)] bg-[size:42px_42px] opacity-20" />
-      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-black/25" />
-      <div
-        className="absolute rounded-[2rem] border border-white/15 bg-black/35 shadow-2xl shadow-black/50 backdrop-blur-sm"
-        style={{
-          left: beat.production_method === "screen_capture" ? `${8 + shift / 3}%` : `${52 - shift / 5}%`,
-          top: beat.production_method === "screen_capture" ? `${16 + shift / 6}%` : "13%",
-          width: beat.production_method === "screen_capture" ? "58%" : "36%",
-          height: beat.production_method === "screen_capture" ? "48%" : "54%",
-          transform: `translateY(${Math.sin(progress * Math.PI) * -10}px)`,
-        }}
-      >
-        <div className="h-8 border-b border-white/10 flex items-center gap-2 px-4">
-          <span className="h-2.5 w-2.5 rounded-full bg-red-400" />
-          <span className="h-2.5 w-2.5 rounded-full bg-yellow-300" />
-          <span className="h-2.5 w-2.5 rounded-full bg-green-400" />
-          <span className="ml-3 h-3 flex-1 rounded bg-white/10" />
-        </div>
-        <div className="p-5 space-y-3">
-          <div className="h-5 w-2/3 rounded bg-white/35" />
-          <div className="h-16 rounded-lg" style={{ background: `linear-gradient(90deg, ${accent}66, ${primary}66)` }} />
-          <div className="grid grid-cols-3 gap-2">
-            <span className="h-12 rounded bg-white/15" />
-            <span className="h-12 rounded bg-white/10" />
-            <span className="h-12 rounded bg-white/15" />
-          </div>
-        </div>
-      </div>
-      <div className="absolute left-8 right-8 bottom-8 md:left-12 md:right-12 md:bottom-12">
-        <div className="mb-5 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.28em] text-white/55">
-          <span>{beat.production_method.replace("_", " ")}</span>
-          <span>-</span>
-          <span>{formatTime(beat.start_seconds)} / {formatTime(beat.start_seconds + beat.duration_seconds)}</span>
-        </div>
-        <div className="max-w-3xl">
-          <div className="text-3xl md:text-5xl font-semibold leading-tight">{brandKit.brand.name}</div>
-          <div className="mt-2 text-xl md:text-3xl text-white/90 leading-tight">{beat.beat_purpose}</div>
-          <div className="mt-4 max-w-2xl text-sm md:text-lg leading-relaxed text-white/72">{beat.vo_line}</div>
-        </div>
-      </div>
-      <div className="absolute right-8 top-8 max-w-[34%] text-right">
-        <div className="text-[10px] uppercase tracking-[0.24em] text-white/45">Website Video</div>
-        <div className="mt-1 text-sm font-medium text-white/80">{title}</div>
-        <div className="mt-3 text-xs text-white/45 line-clamp-3">{brandKit.product.one_line_description}</div>
-      </div>
-    </div>
-  );
-}
-
 function normalizeUrlInput(value: string) {
   if (/^https?:\/\//i.test(value)) return value;
   return `https://${value}`;
@@ -851,6 +780,7 @@ function mergePipelineBeats(beats: WebsiteRenderPipeline["beats"]): BeatPreview[
     actualVoDurationSeconds: beat.actual_vo_duration_seconds,
     plannedDurationSeconds: beat.planned_duration_seconds,
     assetStatus: beat.asset_status,
+    assetSource: beat.render_asset.asset_source,
     clipUrl: beat.clip_url,
     motionSpec: beat.motion_spec,
     renderAsset: beat.render_asset,
@@ -914,6 +844,11 @@ async function renderWebsiteVideoDownload({
   if (!ctx) throw new Error("Canvas renderer unavailable.");
 
   const stream = canvas.captureStream(30);
+  const audioContext = createAudioContext();
+  const audioDestination = audioContext?.createMediaStreamDestination();
+  if (audioDestination) {
+    for (const track of audioDestination.stream.getAudioTracks()) stream.addTrack(track);
+  }
   const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9") ? "video/webm;codecs=vp9" : "video/webm";
   const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 5_000_000 });
   const chunks: Blob[] = [];
@@ -926,10 +861,13 @@ async function renderWebsiteVideoDownload({
 
   recorder.start(250);
   for (const beat of beats) {
-    await drawBeatFrames(ctx, canvas, brandKit, beat, title, getPreviewDuration(beat));
+    const audio = await playBeatAudioThroughDestination(beat.audioUrl, audioContext, audioDestination);
+    await drawBeatFrames(ctx, canvas, brandKit, beat, title, Math.max(2, beat.duration_seconds || getPreviewDuration(beat)));
+    stopBeatAudio(audio);
   }
   recorder.stop();
   await stopped;
+  await audioContext?.close().catch(() => undefined);
 
   const blob = new Blob(chunks, { type: mimeType });
   const url = URL.createObjectURL(blob);
@@ -1000,7 +938,20 @@ function drawBeatFrame(
   }
   ctx.globalAlpha = 1;
 
-  drawPanel(ctx, beat.production_method === "screen_capture" ? 110 + progress * 50 : 690 - progress * 30, 110, beat.production_method === "screen_capture" ? 690 : 420, 330, accent, primary);
+  drawMotionPanel({
+    ctx,
+    x: beat.production_method === "screen_capture" ? 110 + progress * 50 : 690 - progress * 30,
+    y: 110,
+    width: beat.production_method === "screen_capture" ? 690 : 420,
+    height: 330,
+    accent,
+    primary,
+    brandName: brandKit.brand.name,
+    headline: beat.beat_purpose,
+    subhead: beat.vo_line,
+    source: beat.assetSource || beat.renderAsset?.asset_source,
+    progress,
+  });
 
   const fade = ctx.createLinearGradient(0, height * 0.35, 0, height);
   fade.addColorStop(0, "rgba(0,0,0,0.05)");
@@ -1032,28 +983,100 @@ function drawBeatFrame(
   ctx.textAlign = "left";
 }
 
-function drawPanel(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, accent: string, primary: string) {
+function drawMotionPanel({
+  ctx,
+  x,
+  y,
+  width,
+  height,
+  accent,
+  primary,
+  brandName,
+  headline,
+  subhead,
+  source,
+  progress,
+}: {
+  ctx: CanvasRenderingContext2D;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  accent: string;
+  primary: string;
+  brandName: string;
+  headline: string;
+  subhead: string;
+  source?: WebsiteBeatRenderAsset["asset_source"];
+  progress: number;
+}) {
   ctx.save();
   ctx.fillStyle = "rgba(0,0,0,0.38)";
   ctx.strokeStyle = "rgba(255,255,255,0.18)";
   roundRect(ctx, x, y, width, height, 28);
   ctx.fill();
   ctx.stroke();
-  ctx.fillStyle = "rgba(255,255,255,0.18)";
-  roundRect(ctx, x + 34, y + 30, width * 0.68, 18, 9);
-  ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.66)";
+  ctx.font = "700 18px Arial";
+  ctx.fillText(brandName.toUpperCase(), x + 34, y + 42);
+  ctx.fillStyle = source === "fallback" ? "rgba(251,191,36,0.9)" : "rgba(255,255,255,0.42)";
+  ctx.font = "600 12px Arial";
+  ctx.fillText(source === "fallback" ? "FALLBACK MOTION GRAPHIC" : "COMPILED MOTION GRAPHIC", x + 34, y + 66);
   const blockGradient = ctx.createLinearGradient(x + 34, y + 78, x + width - 34, y + 78);
   blockGradient.addColorStop(0, `${accent}99`);
   blockGradient.addColorStop(1, `${primary}99`);
   ctx.fillStyle = blockGradient;
   roundRect(ctx, x + 34, y + 78, width - 68, 94, 18);
   ctx.fill();
-  ctx.fillStyle = "rgba(255,255,255,0.13)";
-  for (let i = 0; i < 3; i += 1) {
-    roundRect(ctx, x + 34 + i * ((width - 92) / 3), y + 204, (width - 118) / 3, 76, 16);
-    ctx.fill();
-  }
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "700 25px Arial";
+  wrapCanvasText(ctx, headline, x + 58, y + 124, width - 116, 30, 2);
+  ctx.fillStyle = "rgba(255,255,255,0.14)";
+  roundRect(ctx, x + 34 + progress * 20, y + 204, width - 68, 76, 16);
+  ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.78)";
+  ctx.font = "400 18px Arial";
+  wrapCanvasText(ctx, subhead, x + 58 + progress * 20, y + 232, width - 116, 23, 2);
   ctx.restore();
+}
+
+function createAudioContext() {
+  const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!Ctor) return null;
+  try {
+    return new Ctor();
+  } catch {
+    return null;
+  }
+}
+
+async function playBeatAudioThroughDestination(
+  audioUrl: string | undefined,
+  audioContext: AudioContext | null,
+  destination: MediaStreamAudioDestinationNode | undefined,
+) {
+  if (!audioUrl || !audioContext || !destination) return null;
+  try {
+    if (audioContext.state === "suspended") await audioContext.resume();
+    const audio = new Audio(audioUrl);
+    audio.crossOrigin = "anonymous";
+    audio.preload = "auto";
+    const source = audioContext.createMediaElementSource(audio);
+    source.connect(destination);
+    audio.currentTime = 0;
+    await audio.play();
+    return { audio, source };
+  } catch {
+    return null;
+  }
+}
+
+function stopBeatAudio(active: { audio: HTMLAudioElement; source: MediaElementAudioSourceNode } | null) {
+  if (!active) return;
+  active.audio.pause();
+  active.audio.removeAttribute("src");
+  active.audio.load();
+  active.source.disconnect();
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {

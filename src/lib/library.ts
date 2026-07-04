@@ -7,6 +7,7 @@ export type LibraryScene = {
   audioUrl?: string;
   posterUrl?: string;
   assetStatus?: "pending" | "generating" | "ready" | "failed";
+  assetSource?: "captured" | "generated" | "compiled" | "fallback";
   motionSpec?: Record<string, unknown>;
   visual?: string;
   location?: string;
@@ -272,6 +273,7 @@ function normalizeScenes(value: unknown): LibraryScene[] {
     audioUrl: stringField(scene.audioUrl),
     posterUrl: stringField(scene.posterUrl),
     assetStatus: normalizeAssetStatus(scene.assetStatus),
+    assetSource: normalizeAssetSource(scene.assetSource),
     motionSpec: isRecord(scene.motionSpec) ? scene.motionSpec : undefined,
     visual: stringField(scene.visual),
     location: stringField(scene.location),
@@ -301,6 +303,10 @@ function normalizeScenes(value: unknown): LibraryScene[] {
 
 function normalizeAssetStatus(value: unknown): LibraryScene["assetStatus"] {
   return value === "pending" || value === "generating" || value === "ready" || value === "failed" ? value : undefined;
+}
+
+function normalizeAssetSource(value: unknown): LibraryScene["assetSource"] {
+  return value === "captured" || value === "generated" || value === "compiled" || value === "fallback" ? value : undefined;
 }
 
 function appendGenerationLog(project: LibraryProject) {

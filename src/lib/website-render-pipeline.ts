@@ -44,6 +44,7 @@ export type WebsiteBeatRenderAsset = {
   beat_id: string;
   production_method: ProductionMethod;
   asset_status: "pending" | "generating" | "ready" | "failed";
+  asset_source: "captured" | "generated" | "compiled" | "fallback";
   clip_url?: string;
   motionGraphicSpec?: CompiledMotionSpec;
   captureChoreography?: CaptureChoreography;
@@ -125,6 +126,7 @@ export function compileBeatAsset(brandKit: WebsiteBrandKit, beat: WebsiteVideoBe
       beat_id: beat.beat_id,
       production_method: beat.production_method,
       asset_status: "ready",
+      asset_source: "fallback",
       captureChoreography: compileCaptureChoreography(beat),
       motionGraphicSpec: buildFallbackMotionCard(brandKit, beat, "Screen capture visual fallback"),
       asset_error: "No browser capture worker is attached in this runtime; using branded motion card fallback.",
@@ -135,6 +137,7 @@ export function compileBeatAsset(brandKit: WebsiteBrandKit, beat: WebsiteVideoBe
       beat_id: beat.beat_id,
       production_method: beat.production_method,
       asset_status: "ready",
+      asset_source: "fallback",
       brollPromptSpec: compileBrollPrompt(brandKit, beat),
       motionGraphicSpec: buildFallbackMotionCard(brandKit, beat, "AI b-roll visual fallback"),
       asset_error: "No async b-roll worker is attached in this runtime; using branded motion card fallback.",
@@ -144,6 +147,7 @@ export function compileBeatAsset(brandKit: WebsiteBrandKit, beat: WebsiteVideoBe
     beat_id: beat.beat_id,
     production_method: beat.production_method,
     asset_status: "ready",
+    asset_source: "compiled",
     motionGraphicSpec: compileMotionGraphic(brandKit, beat),
   };
 }

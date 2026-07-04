@@ -155,6 +155,11 @@ function LibraryPage() {
                       }`}>
                         {project.type === "ad_video" ? "Ad" : project.type === "website_video" ? "Website" : "Short Film"}
                       </span>
+                      {project.type === "website_video" && scenes[0]?.assetSource === "fallback" && (
+                        <span className="absolute right-2 top-2 rounded-full bg-amber-400/90 px-2 py-1 text-[10px] font-medium text-black">
+                          Fallback
+                        </span>
+                      )}
                       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition flex items-center justify-center opacity-0 group-hover:opacity-100">
                         <Play className="h-10 w-10 text-white" />
                       </div>
@@ -274,7 +279,7 @@ function LibraryProjectPlayer({
           <WebsiteBeatPreview
             {...buildWebsiteScenePreviewProps(project, scene, index, 0.35)}
             autoPlayVideo
-            muted
+            muted={muted}
             onEnded={onNext}
           />
         ) : (
@@ -294,6 +299,11 @@ function LibraryProjectPlayer({
           </>
         )}
         {scene.audioUrl && <audio key={scene.audioUrl} src={scene.audioUrl} autoPlay muted={muted} />}
+        {project.type === "website_video" && scene.assetSource === "fallback" && (
+          <div className="absolute top-32 left-4 z-10 rounded-full border border-amber-300/30 bg-amber-400/15 px-3 py-1 text-[11px] font-medium text-amber-200">
+            Using fallback visual
+          </div>
+        )}
         <div className="absolute inset-x-0 top-0 h-[5%] bg-black pointer-events-none" />
         <div className="absolute inset-x-0 bottom-0 h-[5%] bg-black pointer-events-none" />
         <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: "inset 0 0 200px rgba(0,0,0,0.75)" }} />

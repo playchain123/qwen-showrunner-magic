@@ -123,6 +123,8 @@ function MotionBeatCard({
   const headline = motionSpec?.elements.find((item) => item.type === "headline")?.content || beatPurpose;
   const subhead = motionSpec?.elements.find((item) => item.type === "subhead")?.content || voLine;
   const feature = motionSpec?.elements.find((item) => item.type === "feature_item" || item.type === "cta_button")?.content;
+  const logo = motionSpec?.elements.find((item) => item.type === "logo")?.content || brandName;
+  const fallbackNote = motionSpec?.background_treatment?.toLowerCase().includes("fallback");
 
   return (
     <div
@@ -137,29 +139,42 @@ function MotionBeatCard({
       <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.07)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px)] bg-[size:42px_42px] opacity-20" />
       <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-black/25" />
       <div
-        className="absolute rounded-[2rem] border border-white/15 bg-black/35 shadow-2xl shadow-black/50 backdrop-blur-sm"
+        className="absolute rounded-2xl border border-white/15 bg-black/35 p-5 shadow-2xl shadow-black/50 backdrop-blur-sm"
         style={{
-          left: productionMethod === "screen_capture" ? `${8 + shift / 3}%` : `${52 - shift / 5}%`,
-          top: productionMethod === "screen_capture" ? `${16 + shift / 6}%` : "13%",
-          width: productionMethod === "screen_capture" ? "58%" : "36%",
-          height: productionMethod === "screen_capture" ? "48%" : "54%",
+          left: productionMethod === "screen_capture" ? `${8 + shift / 3}%` : `${55 - shift / 5}%`,
+          top: productionMethod === "screen_capture" ? `${15 + shift / 6}%` : "14%",
+          width: productionMethod === "screen_capture" ? "52%" : "34%",
+          minHeight: productionMethod === "screen_capture" ? "44%" : "48%",
           transform: `translateY(${Math.sin(progress * Math.PI) * -10}px)`,
         }}
       >
-        <div className="h-8 border-b border-white/10 flex items-center gap-2 px-4">
-          <span className="h-2.5 w-2.5 rounded-full bg-red-400" />
-          <span className="h-2.5 w-2.5 rounded-full bg-yellow-300" />
-          <span className="h-2.5 w-2.5 rounded-full bg-green-400" />
-          <span className="ml-3 h-3 flex-1 rounded bg-white/10" />
-        </div>
-        <div className="p-5 space-y-3">
-          <div className="h-5 w-2/3 rounded bg-white/35" />
-          <div className="h-16 rounded-lg" style={{ background: `linear-gradient(90deg, ${accent}66, ${primary}66)` }} />
-          <div className="grid grid-cols-3 gap-2">
-            <span className="h-12 rounded bg-white/15" />
-            <span className="h-12 rounded bg-white/10" />
-            <span className="h-12 rounded bg-white/15" />
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate text-xs font-semibold uppercase tracking-[0.22em] text-white/55">{logo}</div>
+            <div className="mt-1 text-[10px] uppercase tracking-[0.2em] text-white/35">
+              {fallbackNote ? "Fallback motion graphic" : motionSpec?.layout?.replaceAll("_", " ") || "Compiled motion graphic"}
+            </div>
           </div>
+          <div className="h-10 w-10 shrink-0 rounded-full border border-white/20 flex items-center justify-center text-sm font-semibold" style={{ color: accent }}>
+            {brandName.slice(0, 1).toUpperCase()}
+          </div>
+        </div>
+        <div className="space-y-3">
+          {[headline, feature || subhead, fallbackNote ? "Live capture unavailable - using branded motion fallback" : description].filter(Boolean).slice(0, 3).map((item, index) => (
+            <div
+              key={`${item}-${index}`}
+              className="rounded-xl border border-white/10 p-3"
+              style={{
+                background: index === 0 ? `linear-gradient(90deg, ${accent}33, ${primary}44)` : "rgba(255,255,255,0.06)",
+                transform: `translateX(${Math.sin(progress * Math.PI + index) * 8}px)`,
+              }}
+            >
+              <div className="text-[10px] uppercase tracking-[0.2em] text-white/35">Layer {index + 1}</div>
+              <div className={`mt-1 leading-snug ${index === 0 ? "text-lg font-semibold text-white" : "text-sm text-white/72"}`}>
+                {item}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
       <div className="absolute left-8 right-8 bottom-8 md:left-12 md:right-12 md:bottom-12">
