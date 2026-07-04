@@ -56,6 +56,19 @@ function AuthPage() {
   const isSignup = mode === "signup";
   const navigate = useNavigate();
 
+  // Frontend Supabase env vars (injected at build time by Vite).
+  // Required in Lovable Cloud:
+  //   - VITE_SUPABASE_URL
+  //   - VITE_SUPABASE_PUBLISHABLE_KEY
+  // Server-only (NEVER expose to the browser):
+  //   - SUPABASE_SERVICE_ROLE_KEY
+  //   - SUPABASE_JWT_SECRET
+  const supabaseConfigured = Boolean(
+    import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+  );
+  const setupMessage =
+    "Supabase is not configured. Please connect Supabase or add the required environment variables.";
+
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -90,6 +103,10 @@ function AuthPage() {
     e.preventDefault();
     setError(null);
     setMsg(null);
+    if (!supabaseConfigured) {
+      setError(setupMessage);
+      return;
+    }
     const parsed = schema.safeParse({ name, email, password });
     if (!parsed.success) {
       setError(parsed.error.issues[0]?.message ?? "Invalid input");
@@ -115,7 +132,9 @@ function AuthPage() {
         navigate({ to: "/dashboard" });
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      const raw = err instanceof Error ? err.message : "Something went wrong";
+      // Translate the raw missing-env error into a clean setup message.
+      setError(/Missing Supabase environment variable/i.test(raw) ? setupMessage : raw);
     } finally {
       setLoading(false);
     }
@@ -180,10 +199,13 @@ function AuthPage() {
 
             {error && <p className="text-xs text-red-400 text-center">{error}</p>}
             {msg && <p className="text-xs text-emerald-400 text-center">{msg}</p>}
+            {!supabaseConfigured && !error && (
+              <p className="text-xs text-amber-400 text-center">{setupMessage}</p>
+            )}
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || !supabaseConfigured}
               className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-white text-black text-sm font-medium py-3 hover:bg-white/90 transition disabled:opacity-60"
             >
               {loading ? "Please wait…" : isSignup ? "Create account" : "Continue"}
