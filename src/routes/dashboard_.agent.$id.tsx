@@ -246,6 +246,8 @@ function AgentWorkspace() {
                 setCards((c) => c.map((card, i) => (i === idx ? { ...card, audioUrl: v.audio_url } : card)));
               })
               .catch(() => {});
+            const prevScene = scenes[idx - 1];
+            const nextScene = scenes[idx + 1];
             const fullPrompt = [
               s.video_prompt,
               (s as { location?: string }).location ? `Exact location continuity: ${(s as { location?: string }).location}` : "",
@@ -253,11 +255,31 @@ function AgentWorkspace() {
               s.editing_notes ? `Professional edit intent: ${s.editing_notes}` : "",
               s.color_grade ? `Color grade: ${s.color_grade}` : "",
               s.sfx ? `On-screen action must support these clean SFX cues: ${s.sfx}` : "",
-              `This is scene ${idx + 1} of ${scenes.length} in the same short film. Preserve the same characters, wardrobe, lighting mood, location geography, emotional continuity and storyline from the surrounding scenes. Render as one continuous 8-second cinematic shot.`,
+              prevScene ? `Continues DIRECTLY from previous shot: ${prevScene.visual}. Match wardrobe, lighting, character look and geography — no visual jump.` : "",
+              nextScene ? `Frames must LEAD INTO next shot: ${nextScene.visual}. Leave motion and eyeline heading toward it for a clean edit cut.` : "",
+              `Scene ${idx + 1}/${scenes.length}. Same short film, same 2-3 named characters throughout: ${scenes.map((sc) => sc.character).filter(Boolean).slice(0, 3).join(", ")}. Single continuous 8-second cinematic shot, in-world character acting with lip movement matching the spoken line "${s.spoken_line || s.dialogue}", NO narrator, NO black frames at start or end, seamless edit-ready plate.`,
             ].filter(Boolean).join("\n");
-            const { task_id } = await submitVideo({
-              data: { prompt: fullPrompt, size: "832*480", model: "wan2.2-t2v-plus" },
-            });
+            // Dual-model chain: try wan2.2-t2v-plus (highest quality), fall
+            // back to happyhorse-1.1-t2v (cheaper, faster) on failure or when
+            // the account hits a spend/quota cap. Never let one model failure
+            // kill the scene.
+            let task_id = "";
+            let usedModel: "wan2.2-t2v-plus" | "happyhorse-1.1-t2v" = "wan2.2-t2v-plus";
+            try {
+              const r = await submitVideo({
+                data: { prompt: fullPrompt, size: "832*480", model: "wan2.2-t2v-plus" },
+              });
+              task_id = r.task_id;
+            } catch (primaryErr) {
+              usedModel = "happyhorse-1.1-t2v";
+              const r = await submitVideo({
+                data: { prompt: fullPrompt, size: "832*480", model: "happyhorse-1.1-t2v" },
+              });
+              task_id = r.task_id;
+              const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
+              setCards((c) => c.map((card, i) => (i === idx ? { ...card, caption: `${card.caption}\n↻ Fell back to Happy Horse (${msg.slice(0, 80)})` } : card)));
+            }
+            void usedModel;
             // poll
             let attempts = 0;
             while (attempts < 180) {
