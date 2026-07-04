@@ -1,10 +1,24 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useRef, useState } from "react";
-import { ArrowUp, Upload, Film, Play, Download } from "lucide-react";
+import { ArrowUp, Upload, Film, Play, Download, Copy, Pencil } from "lucide-react";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
 import { supabase } from "@/integrations/supabase/client";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateSceneImage } from "@/lib/qwen.functions";
 import { pickBgm } from "@/lib/free-sounds";
+import { saveLibraryProject } from "@/lib/library";
+import {
+  buildAdVisualBible,
+  formatProductContinuity,
+  formatVisualBible,
+  validateAndRepairScenes,
+  CONTINUITY_NEGATIVE_PROMPT,
+} from "@/lib/continuity";
+import {
+  MAKERS_DEMO_LIMITS,
+  getVideoPollDelayMs,
+  normalizeSceneDuration,
+  runWithConcurrency,
+} from "@/lib/makers-runtime";
 
 export const Route = createFileRoute("/dashboard_/ads")({
   ssr: false,
@@ -25,6 +39,8 @@ type AdShot = {
   colorGrade?: string;
   bgm?: string;
 };
+type VideoModel = "happyhorse-1.1-t2v" | "wan2.2-t2v-plus" | "happyhorse-1.1-i2v" | "wan2.2-i2v-plus";
+type VideoAttempt = { model: VideoModel; imageUrl?: string };
 
 const TONES = [
   { id: "luxury", label: "Luxury", desc: "Slow, refined, muted palette, gold accents" },
@@ -45,6 +61,7 @@ function CinematicAds() {
   const [status, setStatus] = useState("");
   const [playing, setPlaying] = useState(false);
   const uploadRef = useRef<HTMLInputElement>(null);
+  const pitchRef = useRef<HTMLTextAreaElement>(null);
 
   const allDone = shots.length > 0 && shots.every((s) => s.done);
 
@@ -77,54 +94,125 @@ function CinematicAds() {
       const toneObj = TONES.find((t) => t.id === tone) || TONES[0];
       const brief = `A ${toneObj.label.toLowerCase()} 15-30 second cinematic ad for ${brand}. Pitch: ${pitch}. Structure: 1) hook shot, 2) product/context, 3) emotional beat with talent, 4) CTA reveal ("${cta}"). Style: ${toneObj.desc}. No narrator voice-over — in-world dialogue only. Every shot MUST feature the brand's uploaded ${assets.some((a) => a.kind === "product") ? "product prominently" : "identity"}. Keep talent and product consistent across every shot.`;
       const referenceBrief = assets.map((a) => ({ name: a.name, description: a.kind === "product" ? "Hero product — must appear in every shot" : a.kind === "logo" ? "Brand logo — subtle placement + endcard" : "Brand talent — same face across all shots" }));
-      const story = await generateStoryboard({ data: { prompt: brief, sceneCount: 5, learningContext: "", referenceImages: referenceBrief } });
+      const story = await generateStoryboard({ data: { prompt: brief, sceneCount: MAKERS_DEMO_LIMITS.maxScenes, learningContext: "", referenceImages: referenceBrief } });
+      const initialBible = buildAdVisualBible({
+        brand,
+        pitch,
+        toneLabel: toneObj.label,
+        toneDescription: toneObj.desc,
+        assets: assets.map((asset) => ({ kind: asset.kind, name: asset.name })),
+        scenes: story.scenes,
+      });
+      const repairedScenes = validateAndRepairScenes(story.scenes, initialBible, normalizeSceneDuration(undefined));
+      story.scenes = repairedScenes;
+      const visualBible = buildAdVisualBible({
+        brand,
+        pitch,
+        toneLabel: toneObj.label,
+        toneDescription: toneObj.desc,
+        assets: assets.map((asset) => ({ kind: asset.kind, name: asset.name })),
+        scenes: repairedScenes,
+      });
+      const productContinuity = formatProductContinuity(visualBible);
       const initShots: AdShot[] = story.scenes.map((s, i) => ({
         title: `#${i + 1} ${s.title}`,
         visual: s.visual,
         spokenLine: s.spoken_line || s.dialogue?.replace(/^[^:]+:\s*/, "") || "",
         progress: 5,
         done: false,
-        durationSeconds: s.duration_seconds || 6,
+        durationSeconds: normalizeSceneDuration(s.duration_seconds),
         colorGrade: s.color_grade,
         bgm: s.bgm,
       }));
       setShots(initShots);
       setStatus(`Rendering ${initShots.length} ad shots — product locked as reference…`);
 
-      await Promise.all(
-        story.scenes.map(async (s, idx) => {
+      await runWithConcurrency(
+        story.scenes,
+        MAKERS_DEMO_LIMITS.maxParallelVideoJobs,
+        async (s, idx) => {
           try {
-            const imgPrompt = [s.visual || s.video_prompt, s.color_grade ? `Color grade: ${s.color_grade}` : "", `Brand: ${brand}. Hero product/logo/talent must remain identical to references.`].filter(Boolean).join("\n");
-            void generateSceneImage({ data: { prompt: imgPrompt, referenceImages: assets.map((a) => a.dataUrl), referenceWeight: 0.9 } })
-              .then((img) => setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, posterUrl: img.image_url } : sh))))
-              .catch(() => {});
+            const imgPrompt = [productContinuity, s.visual || s.video_prompt, s.color_grade ? `Color grade: ${s.color_grade}` : "", `Brand: ${brand}. Hero product/logo/talent must remain identical to references.`, `Negative prompt: ${CONTINUITY_NEGATIVE_PROMPT}`].filter(Boolean).join("\n");
+            let storyboardStillUrl: string | undefined;
+            try {
+              const img = await generateSceneImage({ data: { prompt: imgPrompt, referenceImages: assets.map((a) => a.dataUrl), referenceWeight: 0.9 } });
+              storyboardStillUrl = img.image_url;
+              setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, posterUrl: img.image_url } : sh)));
+            } catch {
+              // T2V fallback below still carries the product bible.
+            }
             const voiceP = s.spoken_line
-              ? generateVoice({ data: { text: s.spoken_line, voice: "Cherry", language: s.language || "English", tone: `commercial ad delivery, ${toneObj.label.toLowerCase()}`, pitch: s.pitch || "medium" } })
+              ? generateVoice({ data: { text: s.spoken_line, voice: "Cherry", language: s.language || "English", tone: `premium YouTube ad voice-over, cinematic, emotional, natural, ${toneObj.label.toLowerCase()}`, pitch: s.pitch || "medium" } })
                   .then((v) => setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, audioUrl: v.audio_url } : sh))))
                   .catch(() => {})
               : Promise.resolve();
-            const fullPrompt = [s.video_prompt, `Brand: ${brand}. Product/logo/talent from reference must appear.`, s.color_grade ? `Color grade: ${s.color_grade}` : ""].filter(Boolean).join("\n");
-            const { task_id } = await submitVideo({ data: { prompt: fullPrompt, size: "832*480", model: "wan2.2-t2v-plus" } });
-            let attempts = 0;
-            while (attempts < 180) {
-              await new Promise((r) => setTimeout(r, 2000));
-              attempts++;
-              const p = Math.min(10 + attempts * 3, 92);
+            const fullPrompt = [productContinuity, `Project visual bible summary: ${formatVisualBible(visualBible)}`, s.video_prompt, `Brand: ${brand}. Product/logo/talent from reference must appear and remain identical.`, s.color_grade ? `Color grade: ${s.color_grade}` : "", `No product geometry changes, no logo drift, no package swap, no random colorway, no disconnected location style.`, `Negative prompt: ${CONTINUITY_NEGATIVE_PROMPT}`].filter(Boolean).join("\n");
+            const videoUrl = await submitAndPollAdVideo(fullPrompt, buildAdVideoAttempts(storyboardStillUrl), (p) => {
               setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, progress: p } : sh)));
-              const st = await pollVideo({ data: { task_id } });
-              if (st.status === "SUCCEEDED" && st.video_url) {
-                await voiceP;
-                setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, progress: 100, done: true, videoUrl: st.video_url } : sh)));
-                return;
-              }
-              if (st.status === "FAILED") throw new Error(st.error || "Task failed");
-            }
-            throw new Error("Timed out");
+            });
+            await voiceP;
+            setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, progress: 100, done: true, videoUrl } : sh)));
           } catch (err) {
             setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, visual: `${sh.visual}\n⚠ ${err instanceof Error ? err.message : String(err)}` } : sh)));
           }
-        })
+        },
       );
+      const finalShots = await new Promise<AdShot[]>((resolve) => {
+        setShots((current) => {
+          resolve(current);
+          return current;
+        });
+      });
+      const readyShots = finalShots.filter((shot) => shot.done && shot.videoUrl);
+      if (readyShots.length > 0) {
+        const now = new Date().toISOString();
+        saveLibraryProject({
+          id: `ad-${Date.now()}`,
+          type: "ad_video",
+          title: `${brand.trim()} - Cinematic Ad`,
+          createdAt: now,
+          updatedAt: now,
+          posterUrl: finalShots.find((shot) => shot.posterUrl)?.posterUrl,
+          finalVideoUrl: readyShots[0].videoUrl,
+          sceneVideos: readyShots.map((shot) => shot.videoUrl).filter((url): url is string => Boolean(url)),
+          durationSeconds: finalShots.reduce((sum, shot) => sum + (shot.durationSeconds || 0), 0),
+          brandName: brand.trim(),
+          productPitch: pitch.trim(),
+          cta: cta.trim(),
+          adTone: toneObj.label,
+          scenes: finalShots.map((shot) => ({
+            title: shot.title,
+            videoUrl: shot.videoUrl,
+            audioUrl: shot.audioUrl,
+            posterUrl: shot.posterUrl,
+            visual: shot.visual,
+            caption: shot.spokenLine,
+            spokenLine: shot.spokenLine,
+            character: brand.trim(),
+            shotType: "cinematic ad shot",
+            bgm: shot.bgm,
+            durationSeconds: shot.durationSeconds,
+            colorGrade: shot.colorGrade,
+          })),
+          timeline: finalShots.map((shot, index) => ({
+            title: `Ad shot ${index + 1}`,
+            videoUrl: shot.videoUrl,
+            audioUrl: shot.audioUrl,
+            posterUrl: shot.posterUrl,
+            visual: shot.visual,
+            spokenLine: shot.spokenLine,
+            durationSeconds: shot.durationSeconds,
+            colorGrade: shot.colorGrade,
+          })),
+          metadata: {
+            source: "ads",
+            tone,
+            toneDescription: toneObj.desc,
+            visualBible,
+            assets: assets.map((asset) => ({ kind: asset.kind, name: asset.name })),
+          },
+        });
+      }
       setStatus("Ad ready — press play to preview.");
       setPlaying(true);
     } catch (err) {
@@ -154,8 +242,29 @@ function CinematicAds() {
               <input value={brand} onChange={(e) => setBrand(e.target.value)} placeholder="e.g. Nova Athletics" className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm outline-none focus:border-white/30" />
             </div>
             <div>
-              <div className="text-[11px] uppercase tracking-widest text-white/40 mb-1">Pitch / product</div>
-              <textarea value={pitch} onChange={(e) => setPitch(e.target.value)} rows={3} placeholder="e.g. A carbon-plated running shoe for marathon athletes." className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm outline-none focus:border-white/30" />
+              <div className="mb-1 flex items-center justify-between">
+                <div className="text-[11px] uppercase tracking-widest text-white/40">Pitch / product</div>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => pitchRef.current?.focus()}
+                    className="h-7 w-7 rounded-md border border-white/10 text-white/60 hover:bg-white/10 hover:text-white flex items-center justify-center"
+                    title="Edit prompt"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!pitch.trim()}
+                    onClick={() => void navigator.clipboard?.writeText(pitch)}
+                    className="h-7 w-7 rounded-md border border-white/10 text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-40 flex items-center justify-center"
+                    title="Copy prompt"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+              <textarea ref={pitchRef} value={pitch} onChange={(e) => setPitch(e.target.value)} rows={3} placeholder="e.g. A carbon-plated running shoe for marathon athletes." className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm outline-none focus:border-white/30" />
             </div>
             <div>
               <div className="text-[11px] uppercase tracking-widest text-white/40 mb-1">Tone</div>
@@ -243,6 +352,49 @@ function CinematicAds() {
       {playing && <AdPlayer shots={shots} brand={brand} cta={cta} tone={tone} onClose={() => setPlaying(false)} />}
     </div>
   );
+}
+
+function buildAdVideoAttempts(storyboardStillUrl?: string): VideoAttempt[] {
+  const attempts: VideoAttempt[] = [];
+  if (storyboardStillUrl) {
+    attempts.push(
+      { model: "happyhorse-1.1-i2v", imageUrl: storyboardStillUrl },
+      { model: "wan2.2-i2v-plus", imageUrl: storyboardStillUrl },
+    );
+  }
+  attempts.push({ model: "happyhorse-1.1-t2v" }, { model: "wan2.2-t2v-plus" });
+  return attempts;
+}
+
+async function submitAndPollAdVideo(
+  prompt: string,
+  attempts: VideoAttempt[],
+  onProgress: (progress: number) => void,
+) {
+  const failures: string[] = [];
+  for (const attempt of attempts) {
+    try {
+      const { task_id } = await submitVideo({
+        data: {
+          prompt,
+          size: "832*480",
+          model: attempt.model,
+          imageUrl: attempt.imageUrl,
+        },
+      });
+      for (let pollAttempt = 0; pollAttempt < MAKERS_DEMO_LIMITS.maxVideoPollAttempts; pollAttempt++) {
+        await new Promise((r) => setTimeout(r, getVideoPollDelayMs(pollAttempt)));
+        onProgress(Math.min(10 + pollAttempt * 3, 92));
+        const status = await pollVideo({ data: { task_id } });
+        if (status.status === "SUCCEEDED" && status.video_url) return status.video_url;
+        if (status.status === "FAILED") throw new Error(status.error || "Task failed");
+      }
+      throw new Error("Timed out waiting for video");
+    } catch (err) {
+      failures.push(`${attempt.model}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  throw new Error(`All ad video engines failed. ${failures.join(" | ")}`);
 }
 
 function AdPlayer({ shots, brand, cta, tone, onClose }: { shots: AdShot[]; brand: string; cta: string; tone: string; onClose: () => void }) {

@@ -1,0 +1,36 @@
+edition: 3.0.0
+name: makers-qwen-showrunner
+access: default
+
+vars:
+  region: ap-southeast-1
+  serviceName: makers-qwen-backend
+  functionName: api
+
+resources:
+  makersBackend:
+    component: fc3
+    props:
+      region: ${vars.region}
+      functionName: ${vars.functionName}
+      description: Qwen-first backend orchestrator for Makers AI Showrunner
+      runtime: custom.debian10
+      code: ./dist
+      handler: index.handler
+      timeout: 120
+      memorySize: 1024
+      cpu: 1
+      diskSize: 512
+      instanceConcurrency: 10
+      environmentVariables:
+        NODE_ENV: production
+        DEMO_MODE: "true"
+        MAX_SCENES: "3"
+        MAX_PARALLEL_VIDEO_JOBS: "3"
+        MAX_VIDEO_SECONDS_PER_PROJECT: "15"
+        QWEN_REGION: ap-southeast-1
+        QWEN_SCRIPT_MODEL: qwen3.7-max
+        QWEN_FAST_MODEL: qwen-plus
+        QWEN_IMAGE_MODEL: qwen-image-2.0
+        QWEN_VIDEO_MODEL: wan2.2-t2v-plus
+        QWEN_TTS_MODEL: qwen3-tts-flash

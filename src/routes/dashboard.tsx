@@ -1,14 +1,19 @@
 import { createFileRoute, Link, useNavigate, Outlet } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Plus, Home, Library, Upload, Sparkles, Film, FileText, Video, Package, X, Heart, LogOut } from "lucide-react";
+import { ArrowUp, Plus, Home, Library, Upload, Sparkles, Film, FileText, Video, Package, X, Heart, LogOut, Copy, Pencil } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import vid1 from "@/assets/vid-1.mp4.asset.json";
-import vid2 from "@/assets/vid-2.mp4.asset.json";
-import vid3 from "@/assets/vid-3.mp4.asset.json";
-import vid4 from "@/assets/vid-4.mp4.asset.json";
-import vid5 from "@/assets/vid-5.mp4.asset.json";
-import vid6 from "@/assets/vid-6.mp4.asset.json";
-import explainerHero from "@/assets/explainer-hero.mp4.asset.json";
+import slide1 from "@/assets/slide-1.jpg";
+import slide2 from "@/assets/slide-2.jpg";
+import slide3 from "@/assets/slide-3.jpg";
+import slide4 from "@/assets/slide-4.jpg";
+
+const LOCAL_VIDEOS = [
+  "/videos/vid-1.mp4",
+  "/videos/vid-2.mp4",
+  "/videos/vid-3.mp4",
+  "/videos/vid-4.mp4",
+] as const;
+const LOCAL_BACKGROUND_VIDEO = LOCAL_VIDEOS[0];
 
 export const Route = createFileRoute("/dashboard")({
   ssr: false,
@@ -81,10 +86,42 @@ export function TopBar() {
 }
 
 const FEATURED = [
-  { id: "product-ads", label: "Product Ads", icon: Package, hero: vid1.url, title: "Short ad video", kind: "ad" },
-  { id: "ai-shorts", label: "Create AI shorts", icon: Film, hero: vid2.url, title: "AI short film", kind: "short" },
-  { id: "use-script", label: "Use my script", icon: FileText, hero: vid3.url, title: "Turn script into video", kind: "script" },
-  { id: "explainer", label: "Make explainer video", icon: Video, hero: explainerHero.url, title: "Explainer video", kind: "explainer" },
+  {
+    id: "product-ads",
+    label: "Product Ads",
+    icon: Package,
+    hero: "https://id-preview--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app/__l5e/assets-v1/6d74569b-48ca-469d-a154-d12bf99ce53e/mwm-2.mp4",
+    poster: slide1,
+    title: "Short ad video",
+    kind: "ad",
+  },
+  {
+    id: "ai-shorts",
+    label: "Create AI shorts",
+    icon: Film,
+    hero: "https://id-preview--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app/__l5e/assets-v1/a06b0e52-903c-4da3-ab72-e3824c502e45/mwm-3.mp4",
+    poster: slide2,
+    title: "AI short film",
+    kind: "short",
+  },
+  {
+    id: "use-script",
+    label: "Use my script",
+    icon: FileText,
+    hero: "https://id-preview--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app/__l5e/assets-v1/d84eef6e-5aef-4684-b084-e081d3744f0e/mwm-4.mp4",
+    poster: slide3,
+    title: "Turn script into video",
+    kind: "script",
+  },
+  {
+    id: "explainer",
+    label: "Make explainer video",
+    icon: Video,
+    hero: "https://id-preview--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app/__l5e/assets-v1/d1ca7aa7-ba96-4209-89b8-1b0573c27f84/explainer-hero.mp4",
+    poster: slide4,
+    title: "Explainer video",
+    kind: "explainer",
+  },
 ] as const;
 
 function DashboardHome() {
@@ -93,6 +130,7 @@ function DashboardHome() {
   const [openFeature, setOpenFeature] = useState<null | (typeof FEATURED)[number]>(null);
   const [attach, setAttach] = useState<File | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -124,6 +162,7 @@ function DashboardHome() {
             {/* prompt box */}
             <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
               <textarea
+                ref={promptRef}
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 placeholder="Plan a script, storyboard or video"
@@ -132,6 +171,21 @@ function DashboardHome() {
               />
               <div className="flex items-center justify-between mt-2">
                 <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => promptRef.current?.focus()}
+                    className="h-8 w-8 rounded-full border border-white/10 hover:bg-white/10 flex items-center justify-center disabled:opacity-40"
+                    title="Edit prompt"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button
+                    disabled={!prompt.trim()}
+                    onClick={() => void navigator.clipboard?.writeText(prompt)}
+                    className="h-8 w-8 rounded-full border border-white/10 hover:bg-white/10 flex items-center justify-center disabled:opacity-40"
+                    title="Copy prompt"
+                  >
+                    <Copy className="h-4 w-4" />
+                  </button>
                   <button
                     onClick={() => fileRef.current?.click()}
                     className="h-8 w-8 rounded-full border border-white/10 hover:bg-white/10 flex items-center justify-center"
@@ -223,6 +277,9 @@ function FeatureModal({
   const [pace, setPace] = useState("fast paced");
   const [platform, setPlatform] = useState("YouTube");
   const [topic, setTopic] = useState("");
+  const [activeHero, setActiveHero] = useState(feature.hero || LOCAL_BACKGROUND_VIDEO);
+  const [heroReady, setHeroReady] = useState(false);
+  const topicRef = useRef<HTMLTextAreaElement>(null);
 
   function proceed() {
     const seed = `Create a ${duration} ${pace} ${feature.label.toLowerCase()} for ${platform} about ${topic || "my topic"}.`;
@@ -236,7 +293,26 @@ function FeatureModal({
           <X className="h-4 w-4" />
         </button>
         <div className="relative h-56 bg-black">
-          <video src={feature.hero} autoPlay muted loop playsInline className="absolute inset-0 h-full w-full object-cover" />
+          <img
+            src={feature.poster}
+            alt=""
+            className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-500 ${heroReady ? "opacity-0" : "opacity-100"}`}
+          />
+          <video
+            src={activeHero}
+            poster={feature.poster}
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="metadata"
+            onCanPlay={() => setHeroReady(true)}
+            onError={() => {
+              setHeroReady(false);
+              if (activeHero !== LOCAL_BACKGROUND_VIDEO) setActiveHero(LOCAL_BACKGROUND_VIDEO);
+            }}
+            className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-500 ${heroReady ? "opacity-100" : "opacity-0"}`}
+          />
           <div className="absolute inset-0 bg-gradient-to-t from-black via-black/30 to-transparent" />
           <div className="absolute bottom-4 left-6 flex items-center justify-between right-6">
             <h2 className="text-2xl font-semibold">{feature.title}</h2>
@@ -254,12 +330,32 @@ function FeatureModal({
                 <Select value={platform} onChange={setPlatform} options={["YouTube", "TikTok", "Instagram", "X"]} />
                 <span>about</span>
               </div>
+              <div className="mt-4 flex items-center justify-end gap-1">
+                <button
+                  type="button"
+                  onClick={() => topicRef.current?.focus()}
+                  className="h-7 w-7 rounded-md border border-white/10 text-white/60 hover:bg-white/10 hover:text-white flex items-center justify-center"
+                  title="Edit prompt"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  disabled={!topic.trim()}
+                  onClick={() => void navigator.clipboard?.writeText(topic)}
+                  className="h-7 w-7 rounded-md border border-white/10 text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-40 flex items-center justify-center"
+                  title="Copy prompt"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                </button>
+              </div>
               <textarea
+                ref={topicRef}
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
                 placeholder="Type your topic here"
                 rows={3}
-                className="mt-4 w-full bg-white/[0.04] border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-white/30 resize-none"
+                className="mt-2 w-full bg-white/[0.04] border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-white/30 resize-none"
               />
               <p className="text-xs text-white/50 mt-5 mb-2">Settings:</p>
               <div className="flex flex-wrap gap-2">

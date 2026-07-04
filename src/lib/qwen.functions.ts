@@ -1,11 +1,52 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { clampSceneCount, normalizeSceneDuration } from "./makers-runtime";
 
 const DASHSCOPE_BASE = "https://dashscope-intl.aliyuncs.com";
 const CHAT_URL = `${DASHSCOPE_BASE}/compatible-mode/v1/chat/completions`;
 const VIDEO_SUBMIT_URL = `${DASHSCOPE_BASE}/api/v1/services/aigc/video-generation/video-synthesis`;
 const TASK_URL = (id: string) => `${DASHSCOPE_BASE}/api/v1/tasks/${id}`;
 const LOVABLE_GATEWAY = "https://ai.gateway.lovable.dev";
+
+function allowNonQwenFallbacks() {
+  return process.env.ALLOW_NON_QWEN_FALLBACKS === "true";
+}
+
+function qwenModel(name: string, fallback: string) {
+  return process.env[name] || fallback;
+}
+
+function qwenMaasGenerationUrl() {
+  const workspaceId = process.env.QWEN_WORKSPACE_ID;
+  const region = process.env.QWEN_REGION || "ap-southeast-1";
+  if (!workspaceId) return `${DASHSCOPE_BASE}/api/v1/services/aigc/multimodal-generation/generation`;
+  return `https://${workspaceId}.${region}.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation`;
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  label: string,
+) {
+  const started = Date.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    console.info(`[qwen] ${label} ${res.status} ${Date.now() - started}ms`);
+    return res;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[qwen] ${label} failed after ${Date.now() - started}ms: ${message}`);
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 type Scene = {
   title: string;
@@ -39,7 +80,7 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     z
       .object({
         prompt: z.string().min(1),
-        sceneCount: z.number().int().min(1).max(12).default(8),
+        sceneCount: z.number().int().min(1).max(3).default(3),
         learningContext: z.string().optional().default(""),
         referenceImages: z
           .array(z.object({ name: z.string(), description: z.string().optional().default("") }))
@@ -52,8 +93,10 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     const key = process.env.DASHSCOPE_API_KEY;
     if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
 
+    const sceneCount = clampSceneCount(data.sceneCount);
+    const sceneSeconds = normalizeSceneDuration(undefined);
     const system = [
-      `You are Makers, an AI showrunner + screenwriter + professional film editor trained in Adobe Premiere Pro, After Effects, DaVinci Resolve, cinematic camera blocking, color grading, VFX, SFX, Foley, trailer pacing, and short-drama continuity. Given a logline, produce a FULL cinematic short film script and shot-list of EXACTLY ${data.sceneCount} scenes (each scene is designed as an 8-second dramatic shot).`,
+      `You are Makers, an AI showrunner + screenwriter + professional film editor trained in Adobe Premiere Pro, After Effects, DaVinci Resolve, cinematic camera blocking, color grading, VFX, SFX, Foley, trailer pacing, and short-drama continuity. Given a logline, produce a concise cinematic short film script and shot-list of EXACTLY ${sceneCount} scenes. Each scene is designed as a ${sceneSeconds}-second dramatic shot and the full hackathon demo must stay under 15 seconds.`,
       `HARD RULES:`,
       `- Real short FILM, not narrated slideshow. NEVER use a narrator or voice-over. Every spoken line is an in-world character speaking on screen (no "Narrator:" ever).`,
       `- Reuse the same 2-3 named characters across scenes so the audience follows them.`,
@@ -63,8 +106,8 @@ export const generateStoryboard = createServerFn({ method: "POST" })
       `- Assign each scene a language, voice_tone, and pitch (low/medium/high) suitable for the character and emotion.`,
       `- Add clean bgm and sfx cues for each scene: realistic ambience, Foley, impacts, transitions, room tone, emotional score.`,
       `- Add professional editing_notes and color_grade for every scene: match cut, J-cut/L-cut, whip pan, speed ramp, rack focus, chromatic VFX, teal-orange grade, bleach bypass, warm film print, etc.`,
-      `- video_prompt is a cinematic 8-second shot description (~75 words): camera movement (dolly in / tracking / handheld / crane / static close-up), lens & lighting, exact location, subject action, character continuity, mood, environment ambience, VFX/SFX context, color grade. End every video_prompt with: "single continuous eight-second cinematic shot, film grain, shallow depth of field, 35mm, dramatic lighting, high detail, natural motion, real character performance".`,
-      `- spoken_line: 6-18 words, natural dramatic dialogue that fits an 8-second scene.`,
+      `- video_prompt is a cinematic ${sceneSeconds}-second shot description (~55 words): camera movement (dolly in / tracking / handheld / crane / static close-up), lens & lighting, exact location, subject action, character continuity, mood, environment ambience, VFX/SFX context, color grade. End every video_prompt with: "single continuous four-second cinematic shot, film grain, shallow depth of field, 35mm, dramatic lighting, high detail, natural motion, real character performance".`,
+      `- spoken_line: 4-12 words, natural dramatic dialogue that fits a ${sceneSeconds}-second scene.`,
       `- Long rich logline (3-4 sentences) and detailed tone.`,
       data.referenceImages.length
         ? `REFERENCE IMAGES PROVIDED: The user uploaded ${data.referenceImages.length} character/style reference image(s): ${data.referenceImages.map((r, i) => `#${i + 1} ${r.name}${r.description ? ` (${r.description})` : ""}`).join("; ")}. Keep characters, wardrobe, setting, and visual identity consistent with these references. Put the relevant reference guidance in reference_image_direction.`
@@ -74,7 +117,7 @@ export const generateStoryboard = createServerFn({ method: "POST" })
         : ``,
       ``,
       `Return ONLY strict JSON — no markdown:`,
-      `{"title":string,"logline":string,"tone":string,"scenes":Array<{"title":string,"visual":string,"dialogue":string,"location":string,"character":string,"spoken_line":string,"caption":string,"video_prompt":string,"shot_type":string,"language":string,"voice_tone":string,"pitch":"low"|"medium"|"high","bgm":string,"sfx":string,"duration_seconds":number,"color_grade":string,"editing_notes":string,"reference_image_direction":string}>}`,
+      `{"title":string,"logline":string,"tone":string,"scenes":Array<{"title":string,"visual":string,"dialogue":string,"location":string,"character":string,"spoken_line":string,"caption":string,"image_prompt":string,"video_prompt":string,"negative_prompt":string,"shot_type":string,"language":string,"voice_tone":string,"pitch":"low"|"medium"|"high","bgm":string,"sfx":string,"duration_seconds":number,"color_grade":string,"editing_notes":string,"reference_image_direction":string}>}`,
     ].join("\n");
 
     const messages = [
@@ -82,22 +125,20 @@ export const generateStoryboard = createServerFn({ method: "POST" })
       { role: "user", content: data.prompt },
     ];
 
-    // Qwen upstream frequently returns Cloudflare 524 (timeout) on large json_object
-    // completions. Retry with backoff across model tiers, then fall back to the
-    // Lovable AI Gateway (Gemini) so the pipeline never blocks on Qwen alone.
+    // Retry across Qwen model tiers. Non-Qwen fallback is opt-in so the
+    // hackathon path remains clearly Qwen-first.
     const attempts: Array<{ model: string; max_tokens: number }> = [
-      { model: "qwen3.7-max", max_tokens: 5000 },
-      { model: "qwen-plus", max_tokens: 4000 },
-      { model: "qwen-plus", max_tokens: 3000 },
+      { model: qwenModel("QWEN_SCRIPT_MODEL", "qwen3.7-max"), max_tokens: 3200 },
+      { model: qwenModel("QWEN_FAST_MODEL", "qwen-plus"), max_tokens: 2600 },
+      { model: qwenModel("QWEN_FAST_MODEL", "qwen-plus"), max_tokens: 2200 },
     ];
     let content = "";
     let lastErr = "";
     for (let i = 0; i < attempts.length; i++) {
       const { model, max_tokens } = attempts[i];
       try {
-        const controller = new AbortController();
-        const to = setTimeout(() => controller.abort(), 90_000);
-        const res = await fetch(CHAT_URL, {
+        console.info(`[qwen] storyboard attempt ${i + 1}/${attempts.length} model=${model} max_tokens=${max_tokens}`);
+        const res = await fetchWithTimeout(CHAT_URL, {
           method: "POST",
           headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -107,24 +148,27 @@ export const generateStoryboard = createServerFn({ method: "POST" })
             temperature: 0.8,
             max_tokens,
           }),
-          signal: controller.signal,
-        }).finally(() => clearTimeout(to));
+        }, 120_000, `storyboard ${model}`);
         if (res.ok) {
           const j = (await res.json()) as { choices: Array<{ message: { content: string } }> };
           content = j.choices?.[0]?.message?.content ?? "";
           if (content) break;
         } else {
-          lastErr = `Qwen ${model} (${res.status})`;
+          const body = await res.text().catch(() => "");
+          lastErr = `Qwen ${model} (${res.status}): ${body.slice(0, 200)}`;
+          console.warn(`[qwen] storyboard ${model} error: ${lastErr}`);
           if (res.status < 500 && res.status !== 429) break; // don't retry client errors
         }
       } catch (e) {
-        lastErr = `Qwen ${model} ${(e as Error).message}`;
+        const err = e as Error;
+        const causeMsg = err.cause instanceof Error ? ` cause=${err.cause.message}` : "";
+        lastErr = `Qwen ${model} ${err.message}${causeMsg}`;
+        console.warn(`[qwen] storyboard ${model} fetch exception: ${lastErr}`);
       }
-      await new Promise((r) => setTimeout(r, 1500 * (i + 1)));
+      await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
     }
 
-    // Fallback: Lovable AI Gateway (Gemini) — same JSON contract.
-    if (!content) {
+    if (!content && allowNonQwenFallbacks()) {
       const lovKey = process.env.LOVABLE_API_KEY;
       if (!lovKey) throw new Error(`Storyboard failed: ${lastErr || "Qwen unreachable"}`);
       const res = await fetch(`${LOVABLE_GATEWAY}/v1/chat/completions`, {
@@ -143,30 +187,42 @@ export const generateStoryboard = createServerFn({ method: "POST" })
       const j = (await res.json()) as { choices: Array<{ message: { content: string } }> };
       content = j.choices?.[0]?.message?.content ?? "{}";
     }
+    if (!content) throw new Error(`Storyboard failed: ${lastErr || "Qwen returned no content"}`);
 
     const parsed = JSON.parse(content || "{}") as Storyboard;
     if (!parsed.scenes || !Array.isArray(parsed.scenes)) {
       throw new Error("Storyboard missing scenes");
     }
+    parsed.scenes = parsed.scenes.slice(0, sceneCount).map((scene) => ({
+      ...scene,
+      duration_seconds: normalizeSceneDuration(scene.duration_seconds),
+    }));
     return parsed;
   });
 
-/** Submit a text-to-video task to Qwen Cloud (async). Returns task_id. */
+/** Submit a text-to-video or image-to-video task to Qwen Cloud (async). Returns task_id. */
 export const submitVideo = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
     z
       .object({
         prompt: z.string().min(3),
         size: z.string().default("1280*720"),
-        model: z.enum(["happyhorse-1.1-t2v", "wan2.2-t2v-plus"]).default("wan2.2-t2v-plus"),
+        model: z
+          .enum(["happyhorse-1.1-t2v", "wan2.2-t2v-plus", "happyhorse-1.1-i2v", "wan2.2-i2v-plus"])
+          .default("happyhorse-1.1-t2v"),
+        imageUrl: z.string().url().optional(),
       })
       .parse(input),
   )
   .handler(async ({ data }): Promise<{ task_id: string }> => {
     const key = process.env.DASHSCOPE_API_KEY;
     if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
+    const isImageToVideo = data.model.includes("-i2v");
+    if (isImageToVideo && !data.imageUrl) {
+      throw new Error(`${data.model} requires a storyboard still image`);
+    }
 
-    const res = await fetch(VIDEO_SUBMIT_URL, {
+    const res = await fetchWithTimeout(VIDEO_SUBMIT_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${key}`,
@@ -175,10 +231,12 @@ export const submitVideo = createServerFn({ method: "POST" })
       },
       body: JSON.stringify({
         model: data.model,
-        input: { prompt: data.prompt },
+        input: isImageToVideo
+          ? { prompt: data.prompt, img_url: data.imageUrl }
+          : { prompt: data.prompt },
         parameters: { size: data.size },
       }),
-    });
+    }, 60_000, `video submit ${data.model}`);
     if (!res.ok) {
       const t = await res.text();
       throw new Error(`Video submit failed (${res.status}): ${t.slice(0, 300)}`);
@@ -195,9 +253,9 @@ export const pollVideo = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<{ status: string; video_url?: string; error?: string }> => {
     const key = process.env.DASHSCOPE_API_KEY;
     if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
-    const res = await fetch(TASK_URL(data.task_id), {
+    const res = await fetchWithTimeout(TASK_URL(data.task_id), {
       headers: { Authorization: `Bearer ${key}` },
-    });
+    }, 20_000, "video poll");
     if (!res.ok) {
       const t = await res.text();
       throw new Error(`Poll failed (${res.status}): ${t.slice(0, 300)}`);
@@ -210,9 +268,8 @@ export const pollVideo = createServerFn({ method: "POST" })
   });
 
 /** Generate character voiceover for a dialogue line.
- * Uses Qwen3-TTS-Flash (per Qwen Cloud docs) with a per-character voice so
- * each actor sounds distinct. Falls back to Lovable AI Gateway TTS if the
- * DashScope call fails so the pipeline never blocks.
+ * Uses Qwen3-TTS-Flash with a per-character voice so each actor sounds
+ * distinct. Non-Qwen fallback is opt-in through ALLOW_NON_QWEN_FALLBACKS.
  * Returns a data URL (or hosted URL) playable in <audio>. */
 export const generateVoice = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
@@ -276,56 +333,25 @@ export const generateVoice = createServerFn({ method: "POST" })
       `Deliver with real breaths, micro-pauses, and dynamic pitch that matches the emotion.`,
     ].join(" ");
 
-    // Prefer Lovable AI Gateway TTS for more natural multilingual delivery.
-    const lovKey = process.env.LOVABLE_API_KEY;
-    if (lovKey) {
-      try {
-        const res = await fetch("https://ai.gateway.lovable.dev/v1/audio/speech", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${lovKey}`,
-            "Lovable-API-Key": lovKey,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "openai/gpt-4o-mini-tts",
-            input: data.text,
-            voice: mapGatewayVoice(data.voice),
-            response_format: "mp3",
-            instructions: richInstructions,
-          }),
-        });
-        if (res.ok) {
-          return { audio_url: toDataUrl(await res.arrayBuffer()), provider: "gateway-tts" };
-        }
-      } catch {
-        // fall through to Qwen
-      }
-    }
-
     const dashKey = process.env.DASHSCOPE_API_KEY;
     if (dashKey) {
       try {
-        // Qwen3-TTS-Flash via MultiModal Generation (synchronous)
-        const res = await fetch(
-          `${DASHSCOPE_BASE}/api/v1/services/aigc/multimodal-generation/generation`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${dashKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: "qwen3-tts-flash",
-              input: {
-                text: data.text,
-                voice: data.voice,
-                language_type: data.language,
-              },
-              parameters: { stream: false },
-            }),
+        const res = await fetchWithTimeout(qwenMaasGenerationUrl(), {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${dashKey}`,
+            "Content-Type": "application/json",
           },
-        );
+          body: JSON.stringify({
+            model: qwenModel("QWEN_TTS_MODEL", "qwen3-tts-flash"),
+            input: {
+              text: data.text,
+              voice: data.voice,
+              language_type: data.language,
+            },
+            parameters: { stream: false },
+          }),
+        }, 60_000, "qwen tts");
         if (res.ok) {
           const j = (await res.json()) as {
             output?: { audio?: { url?: string; data?: string } };
@@ -336,16 +362,42 @@ export const generateVoice = createServerFn({ method: "POST" })
           if (b64) return { audio_url: `data:audio/mpeg;base64,${b64}`, provider: "qwen3-tts-flash" };
         }
       } catch {
-        // fall through to gateway
+        // fall through to optional fallback
       }
     }
 
-    throw new Error("No TTS provider available");
+    if (allowNonQwenFallbacks()) {
+      const lovKey = process.env.LOVABLE_API_KEY;
+      if (lovKey) {
+        try {
+          const res = await fetchWithTimeout("https://ai.gateway.lovable.dev/v1/audio/speech", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${lovKey}`,
+              "Lovable-API-Key": lovKey,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "openai/gpt-4o-mini-tts",
+              input: data.text,
+              voice: mapGatewayVoice(data.voice),
+              response_format: "mp3",
+              instructions: richInstructions,
+            }),
+          }, 60_000, "gateway tts fallback");
+          if (res.ok) {
+            return { audio_url: toDataUrl(await res.arrayBuffer()), provider: "gateway-tts" };
+          }
+        } catch {
+          // provider error handled below
+        }
+      }
+    }
+
+    throw new Error("Qwen TTS provider unavailable");
   });
 
-/** Generate a cinematic scene poster image via Lovable AI (Gemini image).
- * Accepts optional reference images (data URLs or https URLs) so characters,
- * wardrobe and setting stay consistent across the whole film. */
+/** Generate a cinematic scene poster image via Qwen-Image. */
 export const generateSceneImage = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
     z
@@ -357,13 +409,20 @@ export const generateSceneImage = createServerFn({ method: "POST" })
       .parse(input),
   )
   .handler(async ({ data }): Promise<{ image_url: string }> => {
-    const key = process.env.LOVABLE_API_KEY;
-    if (!key) throw new Error("LOVABLE_API_KEY not configured");
+    const key = process.env.DASHSCOPE_API_KEY;
+    if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
     const weightPct = Math.round(data.referenceWeight * 100);
     const guidance = data.referenceImages.length
-      ? `Match the provided reference image(s) at ~${weightPct}% strength: keep the SAME character face, hairstyle, wardrobe, ethnicity and body type. Preserve environmental continuity and color palette. Do not invent a new character.`
+      ? `Reference guidance (${weightPct}%): keep the same character face, hairstyle, wardrobe, ethnicity, body type, environmental continuity and color palette from the uploaded references.`
       : ``;
-    const content: Array<Record<string, unknown>> = [
+    const prompt = [
+      "Cinematic film still, 35mm anamorphic look, professional lighting, shallow depth of field, natural human subject, real photography look.",
+      guidance,
+      `SCENE: ${data.prompt}`,
+      "No text, no watermark, no subtitles, no logos unless explicitly requested.",
+    ].filter(Boolean).join("\n");
+
+    const unusedLegacyContent: Array<Record<string, unknown>> = [
       {
         type: "text",
         text: [
@@ -376,35 +435,43 @@ export const generateSceneImage = createServerFn({ method: "POST" })
       },
     ];
     for (const ref of data.referenceImages.slice(0, 4)) {
-      content.push({ type: "image_url", image_url: { url: ref } });
+      unusedLegacyContent.push({ type: "image_url", image_url: { url: ref } });
     }
 
-    const res = await fetch(`${LOVABLE_GATEWAY}/v1/chat/completions`, {
+    const res = await fetchWithTimeout(qwenMaasGenerationUrl(), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash-image",
-        messages: [{ role: "user", content }],
-        modalities: ["image", "text"],
+        model: qwenModel("QWEN_IMAGE_MODEL", "qwen-image-2.0"),
+        input: {
+          messages: [
+            {
+              role: "user",
+              content: [{ text: prompt }],
+            },
+          ],
+        },
+        parameters: {
+          negative_prompt: "Low resolution, low quality, distorted limbs, malformed fingers, blurry faces, waxy skin, watermark, subtitles, text overlay.",
+          prompt_extend: true,
+          watermark: false,
+          size: process.env.QWEN_IMAGE_SIZE || "1664*928",
+          n: 1,
+        },
       }),
-    });
+    }, 90_000, "qwen image");
     if (!res.ok) {
       const t = await res.text();
-      throw new Error(`Scene image failed (${res.status}): ${t.slice(0, 240)}`);
+      throw new Error(`Qwen image failed (${res.status}): ${t.slice(0, 240)}`);
     }
     const j = (await res.json()) as {
-      choices?: Array<{
-        message?: {
-          images?: Array<{ image_url?: { url?: string } }>;
-          content?: unknown;
-        };
-      }>;
+      output?: { choices?: Array<{ message?: { content?: Array<{ image?: string }> } }> };
     };
-    const url = j.choices?.[0]?.message?.images?.[0]?.image_url?.url;
-    if (!url) throw new Error("No image returned from gateway");
+    const url = j.output?.choices?.[0]?.message?.content?.find((item) => item.image)?.image;
+    if (!url) throw new Error("No image returned from Qwen-Image");
     return { image_url: url };
   });
 

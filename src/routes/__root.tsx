@@ -77,14 +77,14 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Makers — The AI showrunner for short drama" },
+      { title: "Makers - The AI showrunner for short drama" },
       {
         name: "description",
         content:
           "Makers is an autonomous AI agent that writes, storyboards, shoots and edits short drama — end to end.",
       },
       { name: "author", content: "Makers" },
-      { property: "og:title", content: "Makers — The AI showrunner for short drama" },
+      { property: "og:title", content: "Makers - The AI showrunner for short drama" },
       {
         property: "og:description",
         content:
@@ -92,7 +92,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:title", content: "Makers — The AI showrunner for short drama" },
+      { name: "twitter:title", content: "Makers - The AI showrunner for short drama" },
       { name: "description", content: "Makers is an AI agent that autonomously creates short dramas from script to video." },
       { property: "og:description", content: "Makers is an AI agent that autonomously creates short dramas from script to video." },
       { name: "twitter:description", content: "Makers is an AI agent that autonomously creates short dramas from script to video." },
@@ -104,7 +104,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         rel: "stylesheet",
         href: appCss,
       },
-      { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
+      { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
+      { rel: "shortcut icon", href: "/favicon.ico" },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "" },
       {
@@ -123,6 +124,8 @@ function RootShell({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <head>
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        <link rel="shortcut icon" href="/favicon.ico" />
         <HeadContent />
       </head>
       <body>

@@ -1,10 +1,28 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX, Download, ImagePlus, BookOpen } from "lucide-react";
+import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX, Download, ImagePlus, BookOpen, Copy, Pencil } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateSceneImage } from "@/lib/qwen.functions";
 import { pickBgm } from "@/lib/free-sounds";
+import { saveLibraryProject } from "@/lib/library";
+import {
+  buildShortFilmVisualBible,
+  findCharacterBible,
+  formatCharacterLock,
+  formatSceneContinuity,
+  formatVisualBible,
+  validateAndRepairScenes,
+  CONTINUITY_NEGATIVE_PROMPT,
+  type VisualBible,
+} from "@/lib/continuity";
+import {
+  MAKERS_DEMO_LIMITS,
+  clampSceneCount,
+  getVideoPollDelayMs,
+  normalizeSceneDuration,
+  runWithConcurrency,
+} from "@/lib/makers-runtime";
 
 export const Route = createFileRoute("/dashboard_/agent/$id")({
   ssr: false,
@@ -13,7 +31,7 @@ export const Route = createFileRoute("/dashboard_/agent/$id")({
 
 type ChatMsg = { role: "user" | "agent"; text: string; skills?: string[]; task?: string };
 type ReferenceImage = { name: string; dataUrl: string; description?: string };
-type CharacterBible = {
+type CharacterSheetInput = {
   name: string;
   descriptor: string;
   skin: string;
@@ -43,12 +61,17 @@ type StoryCard = {
   colorGrade?: string;
   editingNotes?: string;
   referenceImageDirection?: string;
+  continuityPrompt?: string;
 };
+type VideoModel = "happyhorse-1.1-t2v" | "wan2.2-t2v-plus" | "happyhorse-1.1-i2v" | "wan2.2-i2v-plus";
+type VideoAttempt = { model: VideoModel; imageUrl?: string };
+const videoTaskCache = new Map<string, string>();
 
 function AgentWorkspace() {
   const { id } = Route.useParams();
   const navigate = useNavigate();
   const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [editingPrompt, setEditingPrompt] = useState<{ index: number; text: string } | null>(null);
   const [cards, setCards] = useState<StoryCard[]>([]);
   const [tasks, setTasks] = useState<{ text: string; done: boolean }[]>([]);
   const [input, setInput] = useState("");
@@ -56,6 +79,7 @@ function AgentWorkspace() {
   const [playingFilm, setPlayingFilm] = useState(false);
   const [filmTitle, setFilmTitle] = useState<string>("");
   const [logline, setLogline] = useState<string>("");
+  const [visualBible, setVisualBible] = useState<VisualBible | null>(null);
   const [currentPrompt, setCurrentPrompt] = useState<string>("");
   const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
   const [refWeight, setRefWeight] = useState<number>(0.75);
@@ -93,6 +117,7 @@ function AgentWorkspace() {
           tasks?: { text: string; done: boolean }[];
           filmTitle?: string;
           logline?: string;
+          visualBible?: VisualBible;
           referenceImages?: ReferenceImage[];
         };
         startedRef.current = true;
@@ -102,6 +127,7 @@ function AgentWorkspace() {
         setTasks(doc.tasks || []);
         setFilmTitle(doc.filmTitle || "");
         setLogline(doc.logline || "");
+        setVisualBible(doc.visualBible || null);
         setReferenceImages(doc.referenceImages || []);
         return;
       } catch {
@@ -132,6 +158,7 @@ function AgentWorkspace() {
           tasks,
           filmTitle,
           logline,
+          visualBible,
           referenceImages,
           updatedAt: Date.now(),
         }),
@@ -139,7 +166,7 @@ function AgentWorkspace() {
     } catch {
       // local restore is best-effort
     }
-  }, [id, currentPrompt, messages, cards, tasks, filmTitle, logline, referenceImages]);
+  }, [id, currentPrompt, messages, cards, tasks, filmTitle, logline, visualBible, referenceImages]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -153,12 +180,30 @@ function AgentWorkspace() {
     setTasks([]);
     setFilmTitle("");
     setLogline("");
+    setVisualBible(null);
     try {
       const sceneCount = chooseSceneCount(prompt);
       const learningContext = readLearningContext();
       const referenceBrief = refs.map((r) => ({ name: r.name, description: r.description || "user uploaded character/style reference image" }));
       // 1. Storyboard via Qwen — prompt-aware scene count with persistent learning context
       const story = await generateStoryboard({ data: { prompt, sceneCount, learningContext, referenceImages: referenceBrief } });
+      const initialBible = buildShortFilmVisualBible({
+        prompt,
+        title: story.title,
+        tone: story.tone,
+        scenes: story.scenes,
+        references: referenceBrief,
+      });
+      const repairedScenes = validateAndRepairScenes(story.scenes, initialBible, normalizeSceneDuration(undefined));
+      story.scenes = repairedScenes;
+      const bible = buildShortFilmVisualBible({
+        prompt,
+        title: story.title,
+        tone: story.tone,
+        scenes: repairedScenes,
+        references: referenceBrief,
+      });
+      setVisualBible(bible);
       setThinking(false);
       setFilmTitle(story.title);
       setLogline(story.logline);
@@ -174,6 +219,7 @@ function AgentWorkspace() {
       setTasks([
         { text: `Render ${story.scenes.length} cinematic shots`, done: false },
         { text: `Cast clean human dialogue voices`, done: false },
+        { text: `Lock visual bible: characters, world, palette, wardrobe`, done: true },
         { text: `Build context: storyline, shots, locations, dialogue, edit notes`, done: false },
       ]);
 
@@ -193,10 +239,16 @@ function AgentWorkspace() {
           pitch: s.pitch,
           bgm: s.bgm,
           sfx: s.sfx,
-          durationSeconds: s.duration_seconds || 8,
+          durationSeconds: normalizeSceneDuration(s.duration_seconds),
           colorGrade: s.color_grade,
           editingNotes: s.editing_notes,
           referenceImageDirection: s.reference_image_direction,
+          continuityPrompt: formatSceneContinuity({
+            bible,
+            sceneCharacter: s.character,
+            previousVisual: scenes[i - 1]?.visual || scenes[i - 1]?.video_prompt,
+            nextVisual: scenes[i + 1]?.visual || scenes[i + 1]?.video_prompt,
+          }),
           progress: 5,
           done: false,
         })),
@@ -204,8 +256,10 @@ function AgentWorkspace() {
 
       writeLearningContext(prompt, story.title, story.tone, story.scenes.map((s) => s.language).filter(Boolean).join(", "));
 
-      await Promise.all(
-        scenes.map(async (s, idx) => {
+      await runWithConcurrency(
+        scenes,
+        MAKERS_DEMO_LIMITS.maxParallelVideoJobs,
+        async (s, idx) => {
           try {
             // Assign a distinct Qwen3-TTS voice per character so actors sound different
             const voicePool = ["Cherry", "Ethan", "Serena", "Dylan", "Chelsie", "Jada", "Sunny"];
@@ -213,32 +267,53 @@ function AgentWorkspace() {
             let hash = 0;
             for (let i = 0; i < charKey.length; i++) hash = (hash * 31 + charKey.charCodeAt(i)) >>> 0;
             const chosenVoice = voicePool[hash % voicePool.length];
-            // Kick off a cinematic poster image per scene so the storyboard
-            // shows real thumbnails immediately, long before the video renders.
+            const previousScene = scenes[idx - 1];
+            const nextScene = scenes[idx + 1];
+            const characterRoster = buildCharacterRoster(scenes);
+            const characterLock = findCharacterBible(bible, s.character);
+            const continuityPrompt = formatSceneContinuity({
+              bible,
+              sceneCharacter: s.character,
+              previousVisual: previousScene?.visual || previousScene?.video_prompt,
+              nextVisual: nextScene?.visual || nextScene?.video_prompt,
+            });
+            const spokenLine = s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, "");
+
+            // Generate the storyboard still first. I2V animation of this Qwen-Image
+            // still is the continuity-first path; T2V remains the safety fallback.
             const imgPrompt = [
+              continuityPrompt,
               s.visual || s.video_prompt,
+              previousScene ? `Previous scene visual continuity: ${previousScene.visual || previousScene.video_prompt}` : "",
+              nextScene ? `Next scene visual setup: ${nextScene.visual || nextScene.video_prompt}` : "",
+              characterRoster ? `Recurring named characters, same identity every scene: ${characterRoster}` : "",
+              characterLock ? `Exact active character identity: ${formatCharacterLock(characterLock)}` : "",
               s.reference_image_direction ? `Reference note: ${s.reference_image_direction}` : "",
               s.color_grade ? `Color grade: ${s.color_grade}` : "",
               s.character ? `Featured character: ${s.character}` : "",
+              `Storyboard still for scene ${idx + 1} of ${scenes.length}; match wardrobe, lighting, geography, and emotional continuity.`,
+              `Negative prompt: ${CONTINUITY_NEGATIVE_PROMPT}`,
             ].filter(Boolean).join("\n");
-            void generateSceneImage({
-              data: {
-                prompt: imgPrompt,
-                referenceImages: refs.map((r) => r.dataUrl),
-                referenceWeight: refWeight,
-              },
-            })
-              .then((img) => {
-                setCards((c) => c.map((card, i) => (i === idx ? { ...card, posterUrl: img.image_url } : card)));
-              })
-              .catch(() => {});
-            // kick off voice + video in parallel
+            let storyboardStillUrl: string | undefined;
+            try {
+              const img = await generateSceneImage({
+                data: {
+                  prompt: imgPrompt,
+                  referenceImages: refs.map((r) => r.dataUrl),
+                  referenceWeight: refWeight,
+                },
+              });
+              storyboardStillUrl = img.image_url;
+              setCards((c) => c.map((card, i) => (i === idx ? { ...card, posterUrl: img.image_url, progress: 10 } : card)));
+            } catch {
+              // Poster generation improves continuity but should not block T2V fallback.
+            }
             const voiceP = generateVoice({
               data: {
-                text: s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, ""),
+                text: spokenLine,
                 voice: chosenVoice,
                 language: s.language || "English",
-                tone: s.voice_tone || "natural film dialogue",
+                tone: characterLock?.voiceStyle || s.voice_tone || "natural film dialogue",
                 pitch: s.pitch || "medium",
               },
             })
@@ -246,64 +321,37 @@ function AgentWorkspace() {
                 setCards((c) => c.map((card, i) => (i === idx ? { ...card, audioUrl: v.audio_url } : card)));
               })
               .catch(() => {});
-            const prevScene = scenes[idx - 1];
-            const nextScene = scenes[idx + 1];
             const fullPrompt = [
+              continuityPrompt,
               s.video_prompt,
+              `Project visual bible summary: ${formatVisualBible(bible)}`,
+              previousScene ? `Previous scene visual: ${previousScene.visual || previousScene.video_prompt}` : "",
+              nextScene ? `Next scene visual: ${nextScene.visual || nextScene.video_prompt}` : "",
+              characterRoster ? `Same 2-3 named characters repeated in every scene: ${characterRoster}. Keep face, wardrobe, body language and relationship continuity exact.` : "",
+              characterLock ? `Active character must remain identical: ${formatCharacterLock(characterLock)}` : "",
               (s as { location?: string }).location ? `Exact location continuity: ${(s as { location?: string }).location}` : "",
               s.reference_image_direction ? `Character/style reference: ${s.reference_image_direction}` : "",
               s.editing_notes ? `Professional edit intent: ${s.editing_notes}` : "",
               s.color_grade ? `Color grade: ${s.color_grade}` : "",
               s.sfx ? `On-screen action must support these clean SFX cues: ${s.sfx}` : "",
-              prevScene ? `Continues DIRECTLY from previous shot: ${prevScene.visual}. Match wardrobe, lighting, character look and geography — no visual jump.` : "",
-              nextScene ? `Frames must LEAD INTO next shot: ${nextScene.visual}. Leave motion and eyeline heading toward it for a clean edit cut.` : "",
-              `Scene ${idx + 1}/${scenes.length}. Same short film, same 2-3 named characters throughout: ${scenes.map((sc) => sc.character).filter(Boolean).slice(0, 3).join(", ")}. Single continuous 8-second cinematic shot, in-world character acting with lip movement matching the spoken line "${s.spoken_line || s.dialogue}", NO narrator, NO black frames at start or end, seamless edit-ready plate.`,
+              spokenLine ? `Lip-sync exactly to this spoken line, matching mouth movement and emotional delivery: "${spokenLine}"` : "",
+              `Scene ${idx + 1} of ${scenes.length}. Match wardrobe, lighting mood, geography, eyeline and motion continuity from the previous shot; stage the last movement so it leads naturally into the next cut. No black frames, no fade-to-black, no title cards, no watermarks, seamless edit-ready plate.`,
+              `Negative prompt: ${CONTINUITY_NEGATIVE_PROMPT}`,
+              `Render as one continuous ${normalizeSceneDuration(s.duration_seconds)}-second cinematic shot.`,
             ].filter(Boolean).join("\n");
-            // Dual-model chain: try wan2.2-t2v-plus (highest quality), fall
-            // back to happyhorse-1.1-t2v (cheaper, faster) on failure or when
-            // the account hits a spend/quota cap. Never let one model failure
-            // kill the scene.
-            let task_id = "";
-            let usedModel: "wan2.2-t2v-plus" | "happyhorse-1.1-t2v" = "wan2.2-t2v-plus";
-            try {
-              const r = await submitVideo({
-                data: { prompt: fullPrompt, size: "832*480", model: "wan2.2-t2v-plus" },
-              });
-              task_id = r.task_id;
-            } catch (primaryErr) {
-              usedModel = "happyhorse-1.1-t2v";
-              const r = await submitVideo({
-                data: { prompt: fullPrompt, size: "832*480", model: "happyhorse-1.1-t2v" },
-              });
-              task_id = r.task_id;
-              const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
-              setCards((c) => c.map((card, i) => (i === idx ? { ...card, caption: `${card.caption}\n↻ Fell back to Happy Horse (${msg.slice(0, 80)})` } : card)));
-            }
-            void usedModel;
-            // poll
-            let attempts = 0;
-            while (attempts < 180) {
-              await new Promise((r) => setTimeout(r, 2000));
-              attempts++;
-              const p = Math.min(10 + attempts * 3, 92);
-              setCards((c) => c.map((card, i) => (i === idx ? { ...card, progress: p } : card)));
-              const status = await pollVideo({ data: { task_id } });
-              if (status.status === "SUCCEEDED" && status.video_url) {
-                await voiceP;
-                setCards((c) =>
-                  c.map((card, i) => (i === idx ? { ...card, progress: 100, done: true, videoUrl: status.video_url } : card)),
-                );
-                return;
-              }
-              if (status.status === "FAILED") throw new Error(status.error || "Task failed");
-            }
-            throw new Error("Timed out waiting for video");
+            const videoUrl = await submitAndPollVideo(fullPrompt, buildVideoAttempts(storyboardStillUrl), (progress) => {
+              setCards((c) => c.map((card, i) => (i === idx ? { ...card, progress } : card)));
+            });
+            await voiceP;
+            setCards((c) =>
+              c.map((card, i) => (i === idx ? { ...card, progress: 100, done: true, videoUrl } : card)),
+            );
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
             setCards((c) => c.map((card, i) => (i === idx ? { ...card, caption: `${card.caption}\n⚠ ${msg}` } : card)));
             throw new Error(`Scene ${idx + 1} failed: ${msg}`);
           }
-        }),
+        },
       );
 
       setTasks((t) => t.map((task) => ({ ...task, done: true })));
@@ -315,39 +363,51 @@ function AgentWorkspace() {
       setTimeout(() => setPlayingFilm(true), 400);
       // Save to library
       try {
-        const key = "makers:library";
-        const existing = JSON.parse(localStorage.getItem(key) || "[]") as Array<Record<string, unknown>>;
         const finalCards = await new Promise<StoryCard[]>((resolve) => {
           setCards((c) => { resolve(c); return c; });
         });
-        existing.unshift({
+        const scenesForLibrary = finalCards.map((c) => ({
+          title: c.title,
+          videoUrl: c.videoUrl,
+          audioUrl: c.audioUrl,
+          posterUrl: c.posterUrl,
+          visual: c.visual,
+          location: c.location,
+          caption: c.caption,
+          spokenLine: c.spokenLine,
+          character: c.character,
+          shotType: c.shotType,
+          language: c.language,
+          voiceTone: c.voiceTone,
+          pitch: c.pitch,
+          bgm: c.bgm,
+          sfx: c.sfx,
+          durationSeconds: c.durationSeconds,
+          colorGrade: c.colorGrade,
+          editingNotes: c.editingNotes,
+          referenceImageDirection: c.referenceImageDirection,
+          continuityPrompt: c.continuityPrompt,
+        }));
+        saveLibraryProject({
           id,
+          type: "short_film",
           title: story.title,
           tone: story.tone,
           logline: story.logline,
-          createdAt: Date.now(),
-          scenes: finalCards.map((c) => ({
-            title: c.title,
-            videoUrl: c.videoUrl,
-            audioUrl: c.audioUrl,
-            visual: c.visual,
-            location: c.location,
-            caption: c.caption,
-            spokenLine: c.spokenLine,
-            character: c.character,
-            shotType: c.shotType,
-            language: c.language,
-            voiceTone: c.voiceTone,
-            pitch: c.pitch,
-            bgm: c.bgm,
-            sfx: c.sfx,
-            durationSeconds: c.durationSeconds,
-            colorGrade: c.colorGrade,
-            editingNotes: c.editingNotes,
-            referenceImageDirection: c.referenceImageDirection,
-          })),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          posterUrl: finalCards.find((c) => c.posterUrl)?.posterUrl,
+          finalVideoUrl: finalCards.find((c) => c.videoUrl)?.videoUrl,
+          sceneVideos: finalCards.map((c) => c.videoUrl).filter((url): url is string => Boolean(url)),
+          durationSeconds: finalCards.reduce((sum, c) => sum + (c.durationSeconds || 0), 0),
+          scenes: scenesForLibrary,
+          metadata: {
+            source: "agent",
+            prompt,
+            visualBible: bible,
+            referenceImages: refs.map((r) => ({ name: r.name, description: r.description })),
+          },
         });
-        localStorage.setItem(key, JSON.stringify(existing.slice(0, 30)));
       } catch { /* ignore */ }
     } catch (err: unknown) {
       setThinking(false);
@@ -357,11 +417,26 @@ function AgentWorkspace() {
   }
 
   function send() {
-    if (!input.trim()) return;
+    if (thinking || !input.trim()) return;
     const text = input.trim();
     setMessages((m) => [...m, { role: "user", text }]);
     setInput("");
     void runPipeline(text, referenceImages);
+  }
+
+  function copyPrompt(text: string) {
+    void navigator.clipboard?.writeText(text).catch(() => {
+      setInput(text);
+    });
+  }
+
+  function submitEditedPrompt(index: number, text: string) {
+    const nextText = text.trim();
+    if (thinking || !nextText) return;
+    setEditingPrompt(null);
+    setMessages((m) => [...m.slice(0, index), { ...m[index], text: nextText }]);
+    setInput("");
+    void runPipeline(nextText, referenceImages);
   }
 
   async function handleReferenceFiles(files: FileList | null) {
@@ -371,7 +446,7 @@ function AgentWorkspace() {
     setReferenceImages((prev) => [...prev, ...loaded].slice(0, 8));
   }
 
-  async function buildCharacterBible(b: CharacterBible) {
+  async function buildCharacterBible(b: CharacterSheetInput) {
     setBibleBusy(true);
     try {
       const lockedPrompt = [
@@ -398,7 +473,7 @@ function AgentWorkspace() {
   function exportProject() {
     downloadText(
       `${slugify(filmTitle || "makers-film")}-project.json`,
-      JSON.stringify({ id, prompt: currentPrompt, title: filmTitle, logline, referenceImages, scenes: cards }, null, 2),
+      JSON.stringify({ id, prompt: currentPrompt, title: filmTitle, logline, visualBible, referenceImages, scenes: cards }, null, 2),
       "application/json",
     );
   }
@@ -444,7 +519,17 @@ function AgentWorkspace() {
             <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6 flex flex-col justify-end">
               <div className="space-y-6">
                 {messages.map((m, i) => (
-                  <MessageBubble key={i} msg={m} />
+                  <MessageBubble
+                    key={i}
+                    msg={m}
+                    editingText={editingPrompt?.index === i ? editingPrompt.text : null}
+                    disabled={thinking}
+                    onCopy={() => copyPrompt(m.text)}
+                    onEdit={() => setEditingPrompt({ index: i, text: m.text })}
+                    onEditText={(text) => setEditingPrompt((current) => current?.index === i ? { ...current, text } : current)}
+                    onCancelEdit={() => setEditingPrompt(null)}
+                    onSubmitEdit={() => submitEditedPrompt(i, editingPrompt?.text || "")}
+                  />
                 ))}
                 {thinking && (
                   <div className="flex items-center gap-2 text-sm text-white/60">
@@ -478,7 +563,11 @@ function AgentWorkspace() {
                   {referenceImages.length > 0 && <span className="text-[11px] text-white/50">{referenceImages.length} refs</span>}
                   <div className="flex items-center gap-2">
                     <span className="text-[11px] text-white/50">Makers lite ▾</span>
-                    <button onClick={send} className="h-7 w-7 rounded-full bg-white text-black flex items-center justify-center">
+                    <button
+                      onClick={send}
+                      disabled={thinking || !input.trim()}
+                      className="h-7 w-7 rounded-full bg-white text-black flex items-center justify-center disabled:opacity-40"
+                    >
                       <ArrowUp className="h-3.5 w-3.5" />
                     </button>
                   </div>
@@ -527,14 +616,24 @@ function AgentWorkspace() {
                         onClick={() => setPlayingFilm(true)}
                         className="group absolute inset-0"
                       >
-                        <video
-                          src={firstReady.videoUrl}
-                          muted
-                          playsInline
-                          autoPlay
-                          loop
-                          className="absolute inset-0 h-full w-full object-cover opacity-70 group-hover:opacity-90 transition"
-                        />
+                        {firstReady.videoUrl ? (
+                          <video
+                            src={firstReady.videoUrl}
+                            muted
+                            playsInline
+                            autoPlay
+                            loop
+                            preload="metadata"
+                            poster={firstReady.posterUrl}
+                            className="absolute inset-0 h-full w-full object-cover opacity-70 group-hover:opacity-90 transition"
+                          />
+                        ) : firstReady.posterUrl ? (
+                          <img
+                            src={firstReady.posterUrl}
+                            alt=""
+                            className="absolute inset-0 h-full w-full object-cover opacity-70 group-hover:opacity-90 transition"
+                          />
+                        ) : null}
                         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40" />
                         <div className="absolute inset-0 flex flex-col items-center justify-center">
                           <div className="h-16 w-16 rounded-full bg-white text-black flex items-center justify-center shadow-2xl group-hover:scale-105 transition">
@@ -649,8 +748,8 @@ function AgentWorkspace() {
   );
 }
 
-function CharacterBibleModal({ busy, onClose, onBuild }: { busy: boolean; onClose: () => void; onBuild: (b: CharacterBible) => void }) {
-  const [b, setB] = useState<CharacterBible>({
+function CharacterBibleModal({ busy, onClose, onBuild }: { busy: boolean; onClose: () => void; onBuild: (b: CharacterSheetInput) => void }) {
+  const [b, setB] = useState<CharacterSheetInput>({
     name: "",
     descriptor: "Weathered detective, early 50s, stoic",
     skin: "#c9a888",
@@ -750,11 +849,80 @@ function Detail({ label, value }: { label: string; value?: string }) {
   );
 }
 
-function MessageBubble({ msg }: { msg: ChatMsg }) {
+function MessageBubble({
+  msg,
+  editingText,
+  disabled,
+  onCopy,
+  onEdit,
+  onEditText,
+  onCancelEdit,
+  onSubmitEdit,
+}: {
+  msg: ChatMsg;
+  editingText?: string | null;
+  disabled?: boolean;
+  onCopy?: () => void;
+  onEdit?: () => void;
+  onEditText?: (text: string) => void;
+  onCancelEdit?: () => void;
+  onSubmitEdit?: () => void;
+}) {
   if (msg.role === "user") {
+    if (editingText !== null && editingText !== undefined) {
+      return (
+        <div className="flex justify-end">
+          <div className="w-full max-w-[80%] rounded-2xl bg-white/15 px-4 py-3 text-sm">
+            <textarea
+              value={editingText}
+              onChange={(e) => onEditText?.(e.target.value)}
+              rows={Math.min(10, Math.max(3, Math.ceil(editingText.length / 80)))}
+              className="w-full resize-none bg-transparent text-white outline-none placeholder:text-white/35"
+              autoFocus
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={onCancelEdit}
+                className="rounded-full border border-white/15 px-4 py-2 text-xs font-medium text-white hover:bg-white/10"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={disabled || !editingText.trim()}
+                onClick={onSubmitEdit}
+                className="rounded-full bg-white px-4 py-2 text-xs font-medium text-black disabled:opacity-40"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
     return (
-      <div className="flex justify-end">
+      <div className="group flex flex-col items-end">
         <div className="max-w-[80%] rounded-2xl bg-white/10 px-4 py-2 text-sm">{msg.text}</div>
+        <div className="mt-1 flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onCopy}
+            title="Copy prompt"
+            className="h-8 w-8 rounded-lg bg-white/10 text-white/70 hover:bg-white/20 hover:text-white flex items-center justify-center"
+          >
+            <Copy className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={onEdit}
+            title="Edit and regenerate"
+            className="h-8 w-8 rounded-lg bg-white/10 text-white/70 hover:bg-white/20 hover:text-white disabled:opacity-40 flex items-center justify-center"
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
+        </div>
       </div>
     );
   }
@@ -943,6 +1111,71 @@ function getRenderedCards(cards: StoryCard[]) {
   // still frames with dialogue+BGM so the full movie always plays end-to-end
   // even while later scenes are still rendering.
   return cards.filter((card) => Boolean(card.videoUrl) || Boolean(card.posterUrl));
+}
+
+function buildCharacterRoster(scenes: Array<{ character?: string }>) {
+  const names = scenes
+    .map((scene) => scene.character?.trim())
+    .filter((name): name is string => Boolean(name));
+  return Array.from(new Set(names)).slice(0, 3).join(", ");
+}
+
+function buildVideoAttempts(storyboardStillUrl?: string): VideoAttempt[] {
+  const attempts: VideoAttempt[] = [];
+  if (storyboardStillUrl) {
+    attempts.push(
+      { model: "happyhorse-1.1-i2v", imageUrl: storyboardStillUrl },
+      { model: "wan2.2-i2v-plus", imageUrl: storyboardStillUrl },
+    );
+  }
+  attempts.push({ model: "happyhorse-1.1-t2v" }, { model: "wan2.2-t2v-plus" });
+  return attempts;
+}
+
+async function submitAndPollVideo(
+  prompt: string,
+  attempts: VideoAttempt[],
+  onProgress: (progress: number) => void,
+) {
+  const failures: string[] = [];
+  for (const attempt of attempts) {
+    try {
+      const cacheKey = JSON.stringify({
+        model: attempt.model,
+        imageUrl: attempt.imageUrl || "",
+        size: "832*480",
+        prompt,
+      });
+      let task_id = videoTaskCache.get(cacheKey);
+      if (!task_id) {
+        const submitted = await submitVideo({
+          data: {
+            prompt,
+            size: "832*480",
+            model: attempt.model,
+            imageUrl: attempt.imageUrl,
+          },
+        });
+        task_id = submitted.task_id;
+        videoTaskCache.set(cacheKey, task_id);
+      }
+      for (let pollAttempt = 0; pollAttempt < MAKERS_DEMO_LIMITS.maxVideoPollAttempts; pollAttempt++) {
+        await new Promise((r) => setTimeout(r, getVideoPollDelayMs(pollAttempt)));
+        onProgress(Math.min(10 + pollAttempt * 3, 92));
+        const status = await pollVideo({ data: { task_id } });
+        if (status.status === "SUCCEEDED" && status.video_url) return status.video_url;
+        if (status.status === "FAILED") {
+          videoTaskCache.delete(cacheKey);
+          throw new Error(status.error || "Task failed");
+        }
+      }
+      throw new Error("Timed out waiting for video");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      failures.push(`${attempt.model}: ${message}`);
+    }
+  }
+  throw new Error(`All video engines failed. ${failures.join(" | ")}`);
 }
 
 /**
@@ -1266,9 +1499,8 @@ function FilmPlayer({
 function chooseSceneCount(prompt: string) {
   const text = prompt.toLowerCase();
   const explicit = text.match(/(\d+)\s*(scene|scenes|slide|slides|shot|shots)/);
-  if (explicit) return Math.min(12, Math.max(4, Number(explicit[1])));
-  if (text.includes("fast") || text.includes("quick")) return 5;
-  return 8;
+  if (explicit) return clampSceneCount(Number(explicit[1]));
+  return MAKERS_DEMO_LIMITS.maxScenes;
 }
 
 function readLearningContext() {
