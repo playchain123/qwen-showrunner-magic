@@ -92,15 +92,36 @@ export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => z.object({ url: z.string().url() }).parse(input))
   .handler(async ({ data }): Promise<WebsiteBrandKit> => {
     const normalizedUrl = normalizeUrl(data.url);
-    const res = await fetch(normalizedUrl, {
-      headers: {
-        "User-Agent": "Makers Website-to-Video Brand Extractor/1.0",
-        Accept: "text/html,application/xhtml+xml",
-      },
-    });
-    if (!res.ok) throw new Error(`Could not fetch website (${res.status})`);
-    const html = await res.text();
-    return extractBrandKitFromHtml(normalizedUrl, html);
+    const candidates = buildFetchCandidates(normalizedUrl);
+    const failures: string[] = [];
+    for (const candidate of candidates) {
+      try {
+        const res = await fetch(candidate, {
+          redirect: "follow",
+          headers: {
+            "User-Agent": "Mozilla/5.0 (compatible; Makers Website-to-Video Brand Extractor/1.0)",
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+          },
+        });
+        if (!res.ok) {
+          failures.push(`${candidate} HTTP ${res.status}`);
+          continue;
+        }
+        const contentType = res.headers.get("content-type") || "";
+        const html = await res.text();
+        if (!html.trim()) {
+          failures.push(`${candidate} returned empty body`);
+          continue;
+        }
+        const kit = extractBrandKitFromHtml(candidate, html);
+        if (!/html|text|xml/i.test(contentType)) kit.confidence_flags.push("content_type_not_html");
+        return kit;
+      } catch (err) {
+        failures.push(`${candidate} ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return buildFallbackBrandKit(normalizedUrl, failures);
   });
 
 export function buildWebsiteVideoPlan({
@@ -264,6 +285,75 @@ function extractBrandKitFromHtml(url: string, html: string): WebsiteBrandKit {
     source_url: url,
     extracted_at: new Date().toISOString(),
   };
+}
+
+function buildFallbackBrandKit(url: string, failures: string[]): WebsiteBrandKit {
+  const parsed = new URL(url);
+  const domain = parsed.hostname.replace(/^www\./, "");
+  const brandName = titleCase(domain.split(".")[0].replace(/[-_]+/g, " "));
+  return {
+    brand: {
+      name: brandName,
+      tagline: null,
+      primary_color_hex: "#ffffff",
+      secondary_color_hex: "#111111",
+      accent_color_hex: "#3b82f6",
+      neutral_color_hex: "#0a0a0a",
+      heading_typeface: "Inter",
+      body_typeface: "Inter",
+      logo_asset_path: null,
+      voice_tone: "clear, confident, product-focused",
+    },
+    product: {
+      one_line_description: `${brandName} website video plan generated from the submitted URL. Live content extraction was unavailable, so verify claims before final render.`,
+      primary_use_cases: [
+        "Introduce the website and brand promise",
+        "Walk viewers through the visible product pages",
+        "Create a polished promo structure ready for screen capture",
+      ],
+      key_features: [
+        { name: "Website Overview", benefit: "Use the homepage and available pages as the source of truth during capture." },
+        { name: "Brand Promo", benefit: "Build a consistent motion-graphics and screen-capture plan around the submitted domain." },
+        { name: "CTA Flow", benefit: "End with a clear visit-and-explore call to action." },
+      ],
+      pricing_signal: null,
+      social_proof: [],
+    },
+    site_map: [
+      { page: url, purpose: "homepage overview", capture_worthy: true },
+      { page: new URL("/pricing", url).toString(), purpose: "pricing or plan check", capture_worthy: true },
+      { page: new URL("/features", url).toString(), purpose: "feature deep-dive", capture_worthy: true },
+    ],
+    confidence_flags: [
+      "live_fetch_failed",
+      "fallback_brand_kit_used",
+      "verify_claims_before_render",
+      ...failures.slice(0, 3).map((failure) => `fetch_attempt: ${failure.slice(0, 120)}`),
+    ],
+    source_url: url,
+    extracted_at: new Date().toISOString(),
+  };
+}
+
+function buildFetchCandidates(url: string) {
+  const parsed = new URL(url);
+  const variants = new Set<string>();
+  variants.add(parsed.toString());
+  const https = new URL(parsed.toString());
+  https.protocol = "https:";
+  variants.add(https.toString());
+  const http = new URL(parsed.toString());
+  http.protocol = "http:";
+  variants.add(http.toString());
+  if (!parsed.hostname.startsWith("www.")) {
+    const withWww = new URL(parsed.toString());
+    withWww.hostname = `www.${parsed.hostname}`;
+    variants.add(withWww.toString());
+    const withWwwHttp = new URL(withWww.toString());
+    withWwwHttp.protocol = "http:";
+    variants.add(withWwwHttp.toString());
+  }
+  return Array.from(variants);
 }
 
 function getTemplate(type: WebsiteVideoType) {

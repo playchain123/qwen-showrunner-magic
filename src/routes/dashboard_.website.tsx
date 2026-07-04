@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, Copy, Download, ExternalLink, Film, Globe, Pencil, Play, Volume2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, ArrowRight, ArrowUp, Check, Copy, Download, ExternalLink, Film, Globe, Pencil, Play, Volume2, X } from "lucide-react";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
 import { generateVoice } from "@/lib/qwen.functions";
 import { saveLibraryProject } from "@/lib/library";
@@ -41,8 +41,12 @@ function WebsiteVideoPage() {
   const [plan, setPlan] = useState<WebsiteVideoPlan | null>(null);
   const [beats, setBeats] = useState<BeatPreview[]>([]);
   const [running, setRunning] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [status, setStatus] = useState("");
   const [playing, setPlaying] = useState<BeatPreview | null>(null);
+  const [showVideoPlayer, setShowVideoPlayer] = useState(false);
+  const [editingBeat, setEditingBeat] = useState<{ beatId: string; text: string } | null>(null);
+  const [regeneratingBeatId, setRegeneratingBeatId] = useState<string | null>(null);
   const urlRef = useRef<HTMLInputElement>(null);
 
   const selectedType = useMemo(() => VIDEO_TYPES.find((type) => type.id === videoType) || VIDEO_TYPES[1], [videoType]);
@@ -61,13 +65,20 @@ function WebsiteVideoPage() {
     setBeats([]);
     setStatus("Extracting brand kit from website...");
     try {
+      const safeDuration = clampDuration(targetDuration);
+      if (safeDuration !== targetDuration) {
+        setTargetDuration(safeDuration);
+        setStatus(`Target duration adjusted to ${safeDuration}s. Extracting brand kit from website...`);
+      }
       const kit = await extractWebsiteBrandKit({ data: { url: normalizeUrlInput(url.trim()) } });
       setBrandKit(kit);
-      setStatus("Building website-to-video production plan...");
+      setStatus(kit.confidence_flags.includes("fallback_brand_kit_used")
+        ? "Website fetch was blocked/unavailable. Building a fallback plan from the domain..."
+        : "Building website-to-video production plan...");
       const nextPlan = buildWebsiteVideoPlan({
         brandKit: kit,
         videoType,
-        targetDurationSeconds: targetDuration,
+        targetDurationSeconds: safeDuration,
         availableAiBroll: true,
         clientStyleProfile: readWebsiteStyleMemory(kit.brand.name),
       });
@@ -101,6 +112,59 @@ function WebsiteVideoPage() {
       setStatus(`Failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function regenerateBeat(beatId: string, text: string) {
+    const nextText = text.trim();
+    if (!nextText) return;
+    const beat = beats.find((item) => item.beat_id === beatId);
+    if (!beat || !brandKit) return;
+    setRegeneratingBeatId(beatId);
+    setStatus("Regenerating this video beat...");
+    try {
+      let audioUrl = beat.audioUrl;
+      try {
+        const voice = await generateVoice({
+          data: {
+            text: nextText,
+            voice: beats.findIndex((item) => item.beat_id === beatId) % 2 === 0 ? "Cherry" : "Ethan",
+            language: "English",
+            tone: brandKit.brand.voice_tone,
+            pitch: "medium",
+          },
+        });
+        audioUrl = voice.audio_url;
+      } catch {
+        audioUrl = beat.audioUrl;
+      }
+      const nextBeats = beats.map((item) => (item.beat_id === beatId ? { ...item, vo_line: nextText, audioUrl, done: true, progress: 100 } : item));
+      setBeats(nextBeats);
+      setPlan((current) =>
+        current ? { ...current, beats: current.beats.map((item) => (item.beat_id === beatId ? { ...item, vo_line: nextText } : item)) } : current,
+      );
+      setEditingBeat(null);
+      setStatus("Beat updated. Preview or download the regenerated website video.");
+    } finally {
+      setRegeneratingBeatId(null);
+    }
+  }
+
+  async function downloadVideo() {
+    if (!brandKit || beats.length === 0) return;
+    setDownloading(true);
+    setStatus("Rendering website video download...");
+    try {
+      await renderWebsiteVideoDownload({
+        brandKit,
+        beats,
+        title: `${brandKit.brand.name} - ${selectedType.label}`,
+      });
+      setStatus("Video download ready.");
+    } catch (err) {
+      setStatus(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setDownloading(false);
     }
   }
 
@@ -210,8 +274,10 @@ function WebsiteVideoPage() {
                 max={240}
                 value={targetDuration}
                 onChange={(e) => setTargetDuration(Number(e.target.value))}
+                onBlur={() => setTargetDuration((value) => clampDuration(value))}
                 className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm outline-none focus:border-white/30"
               />
+              <div className="mt-1 text-[10px] text-white/35">Valid website videos are 180-240 seconds.</div>
             </div>
 
             <button disabled={running} onClick={generate} className="w-full h-11 rounded-md bg-white text-black text-sm font-medium disabled:opacity-60 flex items-center justify-center gap-2">
@@ -249,12 +315,27 @@ function WebsiteVideoPage() {
               <span className="text-white/40">-</span>
               <span className="text-white/60">{selectedType.label}</span>
               {plan && (
-                <button
-                  onClick={() => downloadText(`${slugify(brandKit?.brand.name || "website")}-website-video-plan.json`, JSON.stringify({ brandKit, plan }, null, 2), "application/json")}
-                  className="ml-auto flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium"
-                >
-                  <Download className="h-3 w-3" /> Export Plan
-                </button>
+                <div className="ml-auto flex items-center gap-2">
+                  <button
+                    onClick={() => setShowVideoPlayer(true)}
+                    className="flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[11px] font-medium hover:bg-white/15"
+                  >
+                    <Play className="h-3 w-3" /> Play Video
+                  </button>
+                  <button
+                    disabled={downloading}
+                    onClick={() => void downloadVideo()}
+                    className="flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium disabled:opacity-60"
+                  >
+                    <Download className="h-3 w-3" /> {downloading ? "Rendering" : "Download Video"}
+                  </button>
+                  <button
+                    onClick={() => downloadText(`${slugify(brandKit?.brand.name || "website")}-website-video-plan.json`, JSON.stringify({ brandKit, plan }, null, 2), "application/json")}
+                    className="flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1 text-[11px] font-medium text-white/70 hover:text-white"
+                  >
+                    <Download className="h-3 w-3" /> Plan
+                  </button>
+                </div>
               )}
             </div>
 
@@ -271,6 +352,32 @@ function WebsiteVideoPage() {
                   <Stat label="Lint Score" value={`${Math.round(plan.production_value_self_check.score * 100)}%`} />
                   <Stat label="Verdict" value={plan.production_value_self_check.verdict} />
                 </div>
+                <div className="rounded-xl border border-white/10 bg-white/[0.03] overflow-hidden">
+                  <div className="aspect-video bg-neutral-950 relative">
+                    {brandKit && beats[0] ? (
+                      <WebsiteVideoFrame brandKit={brandKit} beat={beats[0]} title={`${brandKit.brand.name} - ${selectedType.label}`} progress={0.25} />
+                    ) : (
+                      <div className="h-full flex items-center justify-center text-white/40">
+                        <Film className="h-8 w-8" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="p-4 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium">{brandKit?.brand.name || "Website"} video preview</div>
+                      <div className="text-[11px] text-white/45">Generated from the selected video type, brand kit, beat visuals, and voice-over.</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => setShowVideoPlayer(true)} className="h-9 rounded-md bg-white text-black px-4 text-xs font-medium flex items-center gap-2">
+                        <Play className="h-3.5 w-3.5" /> Play Video
+                      </button>
+                      <button disabled={downloading} onClick={() => void downloadVideo()} className="h-9 rounded-md border border-white/15 px-4 text-xs font-medium flex items-center gap-2 disabled:opacity-60">
+                        <Download className="h-3.5 w-3.5" /> Download
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                   {beats.map((beat, index) => (
                     <div key={beat.beat_id} className="rounded-lg border border-white/10 bg-white/[0.03] overflow-hidden">
@@ -281,19 +388,49 @@ function WebsiteVideoPage() {
                         </div>
                         <div>
                           <div className="text-xl font-semibold">{beat.beat_purpose}</div>
-                          <div className="mt-2 text-xs text-white/55 leading-relaxed line-clamp-3">{beat.vo_line}</div>
+                          {editingBeat?.beatId === beat.beat_id ? (
+                            <textarea
+                              value={editingBeat.text}
+                              onChange={(event) => setEditingBeat({ beatId: beat.beat_id, text: event.target.value })}
+                              className="mt-3 h-24 w-full resize-none rounded-md border border-white/15 bg-black/40 p-3 text-xs leading-relaxed outline-none focus:border-white/35"
+                            />
+                          ) : (
+                            <div className="mt-2 text-xs text-white/55 leading-relaxed line-clamp-3">{beat.vo_line}</div>
+                          )}
                         </div>
                         <div className="flex items-center justify-between text-[11px] text-white/45">
                           <span>{beat.transition_out}</span>
-                          <button onClick={() => setPlaying(beat)} className="flex items-center gap-1 hover:text-white">
-                            {beat.audioUrl ? <Volume2 className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />} Preview
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => void navigator.clipboard?.writeText(beat.vo_line)} className="flex items-center gap-1 hover:text-white" title="Copy beat prompt">
+                              <Copy className="h-3.5 w-3.5" /> Copy
+                            </button>
+                            <button onClick={() => setEditingBeat({ beatId: beat.beat_id, text: beat.vo_line })} className="flex items-center gap-1 hover:text-white" title="Edit this beat">
+                              <Pencil className="h-3.5 w-3.5" /> Edit
+                            </button>
+                            <button onClick={() => setPlaying(beat)} className="flex items-center gap-1 hover:text-white">
+                              {beat.audioUrl ? <Volume2 className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />} Preview
+                            </button>
+                          </div>
                         </div>
                       </div>
                       <div className="p-3 text-[11px] text-white/50 space-y-1">
                         {beat.screen_capture_spec && <div>Capture: {beat.screen_capture_spec.source_page}</div>}
                         {beat.motion_graphic_spec && <div>Motion: {beat.motion_graphic_spec.layout}</div>}
                         {beat.done && <div className="flex items-center gap-1 text-emerald-300"><Check className="h-3 w-3" /> Voice ready</div>}
+                        {editingBeat?.beatId === beat.beat_id && (
+                          <div className="pt-2 flex justify-end gap-2">
+                            <button onClick={() => setEditingBeat(null)} className="h-8 rounded-md border border-white/15 px-3 text-xs text-white/70 hover:text-white">
+                              Cancel
+                            </button>
+                            <button
+                              disabled={regeneratingBeatId === beat.beat_id}
+                              onClick={() => void regenerateBeat(beat.beat_id, editingBeat.text)}
+                              className="h-8 rounded-md bg-white px-3 text-xs font-medium text-black disabled:opacity-60"
+                            >
+                              {regeneratingBeatId === beat.beat_id ? "Regenerating" : "Regenerate Beat"}
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -304,6 +441,16 @@ function WebsiteVideoPage() {
         </div>
       </div>
       {playing && <BeatModal beat={playing} onClose={() => setPlaying(null)} />}
+      {showVideoPlayer && brandKit && beats.length > 0 && (
+        <WebsiteVideoPlayer
+          brandKit={brandKit}
+          beats={beats}
+          title={`${brandKit.brand.name} - ${selectedType.label}`}
+          onClose={() => setShowVideoPlayer(false)}
+          onDownload={() => void downloadVideo()}
+          downloading={downloading}
+        />
+      )}
     </div>
   );
 }
@@ -335,9 +482,174 @@ function BeatModal({ beat, onClose }: { beat: BeatPreview; onClose: () => void }
   );
 }
 
+function WebsiteVideoPlayer({
+  brandKit,
+  beats,
+  title,
+  onClose,
+  onDownload,
+  downloading,
+}: {
+  brandKit: WebsiteBrandKit;
+  beats: BeatPreview[];
+  title: string;
+  onClose: () => void;
+  onDownload: () => void;
+  downloading: boolean;
+}) {
+  const [index, setIndex] = useState(0);
+  const [progress, setProgress] = useState(0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const beat = beats[index] || beats[0];
+
+  useEffect(() => {
+    setProgress(0);
+    const startedAt = performance.now();
+    const durationMs = getPreviewDuration(beat) * 1000;
+    let frame = 0;
+    const tick = () => {
+      const elapsed = performance.now() - startedAt;
+      const nextProgress = Math.min(1, elapsed / durationMs);
+      setProgress(nextProgress);
+      if (nextProgress >= 1) {
+        setIndex((current) => (current + 1) % beats.length);
+        return;
+      }
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [beat, beats.length]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = 0;
+    void audio.play().catch(() => undefined);
+  }, [beat.audioUrl]);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/95 flex flex-col">
+      <div className="h-14 border-b border-white/10 flex items-center justify-between px-5">
+        <div>
+          <div className="text-sm font-medium">{title}</div>
+          <div className="text-[11px] text-white/40">
+            Beat {index + 1} of {beats.length} - {beat.beat_purpose}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setIndex((value) => (value - 1 + beats.length) % beats.length)} className="h-9 w-9 rounded-md border border-white/15 flex items-center justify-center text-white/70 hover:text-white">
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <button onClick={() => setIndex((value) => (value + 1) % beats.length)} className="h-9 w-9 rounded-md border border-white/15 flex items-center justify-center text-white/70 hover:text-white">
+            <ArrowRight className="h-4 w-4" />
+          </button>
+          <button disabled={downloading} onClick={onDownload} className="h-9 rounded-md bg-white px-4 text-xs font-medium text-black disabled:opacity-60 flex items-center gap-2">
+            <Download className="h-3.5 w-3.5" /> {downloading ? "Rendering" : "Download"}
+          </button>
+          <button onClick={onClose} className="h-9 w-9 rounded-md border border-white/15 flex items-center justify-center text-white/70 hover:text-white">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+      <div className="flex-1 min-h-0 p-5 flex items-center justify-center">
+        <div className="w-full max-w-6xl aspect-video rounded-xl overflow-hidden border border-white/10 shadow-2xl shadow-black">
+          <WebsiteVideoFrame brandKit={brandKit} beat={beat} title={title} progress={progress} />
+        </div>
+      </div>
+      <div className="px-5 pb-5">
+        <div className="h-1 rounded-full bg-white/10 overflow-hidden">
+          <div className="h-full bg-white transition-[width] duration-100" style={{ width: `${Math.round(progress * 100)}%` }} />
+        </div>
+      </div>
+      {beat.audioUrl && <audio ref={audioRef} src={beat.audioUrl} />}
+    </div>
+  );
+}
+
+function WebsiteVideoFrame({
+  brandKit,
+  beat,
+  title,
+  progress,
+}: {
+  brandKit: WebsiteBrandKit;
+  beat: BeatPreview;
+  title: string;
+  progress: number;
+}) {
+  const primary = validColor(brandKit.brand.primary_color_hex, "#111111");
+  const secondary = validColor(brandKit.brand.secondary_color_hex, "#2a2a2a");
+  const accent = validColor(brandKit.brand.accent_color_hex, "#ffffff");
+  const neutral = validColor(brandKit.brand.neutral_color_hex, "#080808");
+  const shift = Math.round(progress * 28);
+  return (
+    <div
+      className="relative h-full w-full overflow-hidden"
+      style={{
+        background:
+          beat.production_method === "screen_capture"
+            ? `linear-gradient(135deg, ${neutral}, ${primary} 56%, ${secondary})`
+            : `radial-gradient(circle at ${30 + shift}% ${25 + shift / 2}%, ${accent}33, transparent 28%), linear-gradient(135deg, ${primary}, ${neutral} 62%, ${secondary})`,
+      }}
+    >
+      <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.07)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px)] bg-[size:42px_42px] opacity-20" />
+      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-black/25" />
+      <div
+        className="absolute rounded-[2rem] border border-white/15 bg-black/35 shadow-2xl shadow-black/50 backdrop-blur-sm"
+        style={{
+          left: beat.production_method === "screen_capture" ? `${8 + shift / 3}%` : `${52 - shift / 5}%`,
+          top: beat.production_method === "screen_capture" ? `${16 + shift / 6}%` : "13%",
+          width: beat.production_method === "screen_capture" ? "58%" : "36%",
+          height: beat.production_method === "screen_capture" ? "48%" : "54%",
+          transform: `translateY(${Math.sin(progress * Math.PI) * -10}px)`,
+        }}
+      >
+        <div className="h-8 border-b border-white/10 flex items-center gap-2 px-4">
+          <span className="h-2.5 w-2.5 rounded-full bg-red-400" />
+          <span className="h-2.5 w-2.5 rounded-full bg-yellow-300" />
+          <span className="h-2.5 w-2.5 rounded-full bg-green-400" />
+          <span className="ml-3 h-3 flex-1 rounded bg-white/10" />
+        </div>
+        <div className="p-5 space-y-3">
+          <div className="h-5 w-2/3 rounded bg-white/35" />
+          <div className="h-16 rounded-lg" style={{ background: `linear-gradient(90deg, ${accent}66, ${primary}66)` }} />
+          <div className="grid grid-cols-3 gap-2">
+            <span className="h-12 rounded bg-white/15" />
+            <span className="h-12 rounded bg-white/10" />
+            <span className="h-12 rounded bg-white/15" />
+          </div>
+        </div>
+      </div>
+      <div className="absolute left-8 right-8 bottom-8 md:left-12 md:right-12 md:bottom-12">
+        <div className="mb-5 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.28em] text-white/55">
+          <span>{beat.production_method.replace("_", " ")}</span>
+          <span>-</span>
+          <span>{formatTime(beat.start_seconds)} / {formatTime(beat.start_seconds + beat.duration_seconds)}</span>
+        </div>
+        <div className="max-w-3xl">
+          <div className="text-3xl md:text-5xl font-semibold leading-tight">{brandKit.brand.name}</div>
+          <div className="mt-2 text-xl md:text-3xl text-white/90 leading-tight">{beat.beat_purpose}</div>
+          <div className="mt-4 max-w-2xl text-sm md:text-lg leading-relaxed text-white/72">{beat.vo_line}</div>
+        </div>
+      </div>
+      <div className="absolute right-8 top-8 max-w-[34%] text-right">
+        <div className="text-[10px] uppercase tracking-[0.24em] text-white/45">Website Video</div>
+        <div className="mt-1 text-sm font-medium text-white/80">{title}</div>
+        <div className="mt-3 text-xs text-white/45 line-clamp-3">{brandKit.product.one_line_description}</div>
+      </div>
+    </div>
+  );
+}
+
 function normalizeUrlInput(value: string) {
   if (/^https?:\/\//i.test(value)) return value;
   return `https://${value}`;
+}
+
+function clampDuration(value: number) {
+  if (!Number.isFinite(value)) return 180;
+  return Math.min(240, Math.max(180, Math.round(value)));
 }
 
 function readWebsiteStyleMemory(brand: string) {
@@ -381,4 +693,212 @@ function formatTime(seconds: number) {
   const m = Math.floor(safe / 60);
   const s = safe % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function getPreviewDuration(beat: WebsiteVideoBeat) {
+  return Math.min(8, Math.max(4, Math.round(beat.duration_seconds / 18)));
+}
+
+function validColor(value: string | null | undefined, fallback: string) {
+  return value && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+}
+
+async function renderWebsiteVideoDownload({
+  brandKit,
+  beats,
+  title,
+}: {
+  brandKit: WebsiteBrandKit;
+  beats: BeatPreview[];
+  title: string;
+}) {
+  if (typeof MediaRecorder === "undefined") {
+    throw new Error("This browser cannot record video. Try Chrome or Edge.");
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = 1280;
+  canvas.height = 720;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas renderer unavailable.");
+
+  const stream = canvas.captureStream(30);
+  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9") ? "video/webm;codecs=vp9" : "video/webm";
+  const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 5_000_000 });
+  const chunks: Blob[] = [];
+  recorder.ondataavailable = (event) => {
+    if (event.data.size > 0) chunks.push(event.data);
+  };
+  const stopped = new Promise<void>((resolve) => {
+    recorder.onstop = () => resolve();
+  });
+
+  recorder.start(250);
+  for (const beat of beats) {
+    await drawBeatFrames(ctx, canvas, brandKit, beat, title, getPreviewDuration(beat));
+  }
+  recorder.stop();
+  await stopped;
+
+  const blob = new Blob(chunks, { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${slugify(title)}.webm`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function drawBeatFrames(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  brandKit: WebsiteBrandKit,
+  beat: BeatPreview,
+  title: string,
+  durationSeconds: number,
+) {
+  const fps = 30;
+  const totalFrames = Math.max(1, Math.round(durationSeconds * fps));
+  for (let frame = 0; frame < totalFrames; frame += 1) {
+    drawBeatFrame(ctx, canvas, brandKit, beat, title, frame / totalFrames);
+    await sleep(1000 / fps);
+  }
+}
+
+function drawBeatFrame(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  brandKit: WebsiteBrandKit,
+  beat: BeatPreview,
+  title: string,
+  progress: number,
+) {
+  const width = canvas.width;
+  const height = canvas.height;
+  const primary = validColor(brandKit.brand.primary_color_hex, "#111111");
+  const secondary = validColor(brandKit.brand.secondary_color_hex, "#2a2a2a");
+  const accent = validColor(brandKit.brand.accent_color_hex, "#ffffff");
+  const neutral = validColor(brandKit.brand.neutral_color_hex, "#080808");
+  const gradient = ctx.createLinearGradient(0, 0, width, height);
+  gradient.addColorStop(0, beat.production_method === "screen_capture" ? neutral : primary);
+  gradient.addColorStop(0.58, primary);
+  gradient.addColorStop(1, secondary);
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.globalAlpha = 0.18;
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1;
+  for (let x = -60 + progress * 60; x < width; x += 48) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+    ctx.stroke();
+  }
+  for (let y = -60 + progress * 60; y < height; y += 48) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  drawPanel(ctx, beat.production_method === "screen_capture" ? 110 + progress * 50 : 690 - progress * 30, 110, beat.production_method === "screen_capture" ? 690 : 420, 330, accent, primary);
+
+  const fade = ctx.createLinearGradient(0, height * 0.35, 0, height);
+  fade.addColorStop(0, "rgba(0,0,0,0.05)");
+  fade.addColorStop(1, "rgba(0,0,0,0.86)");
+  ctx.fillStyle = fade;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.font = "600 18px Arial";
+  ctx.fillText(beat.production_method.replace("_", " ").toUpperCase(), 76, 470);
+  ctx.fillText(`${formatTime(beat.start_seconds)} - ${formatTime(beat.start_seconds + beat.duration_seconds)}`, 76, 500);
+
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "700 54px Georgia";
+  ctx.fillText(brandKit.brand.name, 76, 570);
+  ctx.font = "500 34px Arial";
+  wrapCanvasText(ctx, beat.beat_purpose, 76, 618, 760, 40);
+  ctx.font = "400 25px Arial";
+  ctx.fillStyle = "rgba(255,255,255,0.78)";
+  wrapCanvasText(ctx, beat.vo_line, 76, 662, 820, 30, 2);
+
+  ctx.font = "600 17px Arial";
+  ctx.fillStyle = "rgba(255,255,255,0.58)";
+  ctx.textAlign = "right";
+  ctx.fillText(title, width - 76, 80);
+  ctx.font = "400 18px Arial";
+  wrapCanvasText(ctx, brandKit.product.one_line_description, width - 420, 112, 344, 24, 3, "right");
+  ctx.textAlign = "left";
+}
+
+function drawPanel(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, accent: string, primary: string) {
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.38)";
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  roundRect(ctx, x, y, width, height, 28);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,0.18)";
+  roundRect(ctx, x + 34, y + 30, width * 0.68, 18, 9);
+  ctx.fill();
+  const blockGradient = ctx.createLinearGradient(x + 34, y + 78, x + width - 34, y + 78);
+  blockGradient.addColorStop(0, `${accent}99`);
+  blockGradient.addColorStop(1, `${primary}99`);
+  ctx.fillStyle = blockGradient;
+  roundRect(ctx, x + 34, y + 78, width - 68, 94, 18);
+  ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.13)";
+  for (let i = 0; i < 3; i += 1) {
+    roundRect(ctx, x + 34 + i * ((width - 92) / 3), y + 204, (width - 118) / 3, 76, 16);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + width, y, x + width, y + height, radius);
+  ctx.arcTo(x + width, y + height, x, y + height, radius);
+  ctx.arcTo(x, y + height, x, y, radius);
+  ctx.arcTo(x, y, x + width, y, radius);
+  ctx.closePath();
+}
+
+function wrapCanvasText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  lineHeight: number,
+  maxLines = 3,
+  align: CanvasTextAlign = "left",
+) {
+  const originalAlign = ctx.textAlign;
+  ctx.textAlign = align;
+  const words = text.split(/\s+/).filter(Boolean);
+  let line = "";
+  let lines = 0;
+  for (const word of words) {
+    const test = line ? `${line} ${word}` : word;
+    if (ctx.measureText(test).width > maxWidth && line) {
+      ctx.fillText(line, align === "right" ? x + maxWidth : x, y + lines * lineHeight);
+      line = word;
+      lines += 1;
+      if (lines >= maxLines) break;
+    } else {
+      line = test;
+    }
+  }
+  if (line && lines < maxLines) ctx.fillText(line, align === "right" ? x + maxWidth : x, y + lines * lineHeight);
+  ctx.textAlign = originalAlign;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
