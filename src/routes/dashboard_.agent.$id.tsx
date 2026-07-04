@@ -5,6 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateSceneImage } from "@/lib/qwen.functions";
 import { pickBgm } from "@/lib/free-sounds";
+import { saveLibraryProject } from "@/lib/library";
 import {
   MAKERS_DEMO_LIMITS,
   clampSceneCount,
@@ -307,39 +308,49 @@ function AgentWorkspace() {
       setTimeout(() => setPlayingFilm(true), 400);
       // Save to library
       try {
-        const key = "makers:library";
-        const existing = JSON.parse(localStorage.getItem(key) || "[]") as Array<Record<string, unknown>>;
         const finalCards = await new Promise<StoryCard[]>((resolve) => {
           setCards((c) => { resolve(c); return c; });
         });
-        existing.unshift({
+        const scenesForLibrary = finalCards.map((c) => ({
+          title: c.title,
+          videoUrl: c.videoUrl,
+          audioUrl: c.audioUrl,
+          posterUrl: c.posterUrl,
+          visual: c.visual,
+          location: c.location,
+          caption: c.caption,
+          spokenLine: c.spokenLine,
+          character: c.character,
+          shotType: c.shotType,
+          language: c.language,
+          voiceTone: c.voiceTone,
+          pitch: c.pitch,
+          bgm: c.bgm,
+          sfx: c.sfx,
+          durationSeconds: c.durationSeconds,
+          colorGrade: c.colorGrade,
+          editingNotes: c.editingNotes,
+          referenceImageDirection: c.referenceImageDirection,
+        }));
+        saveLibraryProject({
           id,
+          type: "short_film",
           title: story.title,
           tone: story.tone,
           logline: story.logline,
-          createdAt: Date.now(),
-          scenes: finalCards.map((c) => ({
-            title: c.title,
-            videoUrl: c.videoUrl,
-            audioUrl: c.audioUrl,
-            visual: c.visual,
-            location: c.location,
-            caption: c.caption,
-            spokenLine: c.spokenLine,
-            character: c.character,
-            shotType: c.shotType,
-            language: c.language,
-            voiceTone: c.voiceTone,
-            pitch: c.pitch,
-            bgm: c.bgm,
-            sfx: c.sfx,
-            durationSeconds: c.durationSeconds,
-            colorGrade: c.colorGrade,
-            editingNotes: c.editingNotes,
-            referenceImageDirection: c.referenceImageDirection,
-          })),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          posterUrl: finalCards.find((c) => c.posterUrl)?.posterUrl,
+          finalVideoUrl: finalCards.find((c) => c.videoUrl)?.videoUrl,
+          sceneVideos: finalCards.map((c) => c.videoUrl).filter((url): url is string => Boolean(url)),
+          durationSeconds: finalCards.reduce((sum, c) => sum + (c.durationSeconds || 0), 0),
+          scenes: scenesForLibrary,
+          metadata: {
+            source: "agent",
+            prompt,
+            referenceImages: refs.map((r) => ({ name: r.name, description: r.description })),
+          },
         });
-        localStorage.setItem(key, JSON.stringify(existing.slice(0, 30)));
       } catch { /* ignore */ }
     } catch (err: unknown) {
       setThinking(false);

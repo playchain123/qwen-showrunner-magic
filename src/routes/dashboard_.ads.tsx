@@ -5,6 +5,7 @@ import { Sidebar, TopBar, MakersMark } from "./dashboard";
 import { supabase } from "@/integrations/supabase/client";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateSceneImage } from "@/lib/qwen.functions";
 import { pickBgm } from "@/lib/free-sounds";
+import { saveLibraryProject } from "@/lib/library";
 import {
   MAKERS_DEMO_LIMITS,
   getVideoPollDelayMs,
@@ -133,6 +134,61 @@ function CinematicAds() {
           }
         },
       );
+      const finalShots = await new Promise<AdShot[]>((resolve) => {
+        setShots((current) => {
+          resolve(current);
+          return current;
+        });
+      });
+      const readyShots = finalShots.filter((shot) => shot.done && shot.videoUrl);
+      if (readyShots.length > 0) {
+        const now = new Date().toISOString();
+        saveLibraryProject({
+          id: `ad-${Date.now()}`,
+          type: "ad_video",
+          title: `${brand.trim()} - Cinematic Ad`,
+          createdAt: now,
+          updatedAt: now,
+          posterUrl: finalShots.find((shot) => shot.posterUrl)?.posterUrl,
+          finalVideoUrl: readyShots[0].videoUrl,
+          sceneVideos: readyShots.map((shot) => shot.videoUrl).filter((url): url is string => Boolean(url)),
+          durationSeconds: finalShots.reduce((sum, shot) => sum + (shot.durationSeconds || 0), 0),
+          brandName: brand.trim(),
+          productPitch: pitch.trim(),
+          cta: cta.trim(),
+          adTone: toneObj.label,
+          scenes: finalShots.map((shot) => ({
+            title: shot.title,
+            videoUrl: shot.videoUrl,
+            audioUrl: shot.audioUrl,
+            posterUrl: shot.posterUrl,
+            visual: shot.visual,
+            caption: shot.spokenLine,
+            spokenLine: shot.spokenLine,
+            character: brand.trim(),
+            shotType: "cinematic ad shot",
+            bgm: shot.bgm,
+            durationSeconds: shot.durationSeconds,
+            colorGrade: shot.colorGrade,
+          })),
+          timeline: finalShots.map((shot, index) => ({
+            title: `Ad shot ${index + 1}`,
+            videoUrl: shot.videoUrl,
+            audioUrl: shot.audioUrl,
+            posterUrl: shot.posterUrl,
+            visual: shot.visual,
+            spokenLine: shot.spokenLine,
+            durationSeconds: shot.durationSeconds,
+            colorGrade: shot.colorGrade,
+          })),
+          metadata: {
+            source: "ads",
+            tone,
+            toneDescription: toneObj.desc,
+            assets: assets.map((asset) => ({ kind: asset.kind, name: asset.name })),
+          },
+        });
+      }
       setStatus("Ad ready — press play to preview.");
       setPlaying(true);
     } catch (err) {
