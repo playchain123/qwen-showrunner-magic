@@ -35,9 +35,14 @@ function createSupabaseFetch(supabaseKey: string): typeof fetch {
 // Server-only secrets must never be exposed here:
 //   - SUPABASE_SERVICE_ROLE_KEY
 //   - SUPABASE_JWT_SECRET
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+function readPublicEnv(value: string | undefined): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+const supabaseUrl = readPublicEnv(import.meta.env.VITE_SUPABASE_URL);
 const supabasePublishableKey =
-  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
+  readPublicEnv(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY) ||
+  readPublicEnv(import.meta.env.VITE_SUPABASE_ANON_KEY);
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabasePublishableKey);
 
@@ -46,7 +51,7 @@ if (!isSupabaseConfigured && import.meta.env.DEV) {
 }
 
 function createSupabaseClient(): SupabaseClient<Database> | null {
-  if (!supabaseUrl || !supabasePublishableKey) return null;
+  if (!isSupabaseConfigured) return null;
 
   return createClient<Database>(supabaseUrl, supabasePublishableKey, {
     global: {
