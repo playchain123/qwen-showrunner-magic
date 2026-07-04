@@ -57,8 +57,8 @@ export async function gradeClip(inputUrl: string): Promise<string> {
   await ff.deleteFile(inName).catch(() => {});
   await ff.deleteFile(outName).catch(() => {});
 
-  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBuffer);
-  const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
+  const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   const blob = new Blob([arrayBuffer], { type: "video/mp4" });
   return URL.createObjectURL(blob);
 }
@@ -97,8 +97,8 @@ export async function concatClips(clipUrls: string[]): Promise<string> {
   await ff.deleteFile(listName).catch(() => {});
   await ff.deleteFile(outName).catch(() => {});
 
-  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBuffer);
-  const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
+  const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   const blob = new Blob([arrayBuffer], { type: "video/mp4" });
   return URL.createObjectURL(blob);
 }
