@@ -3,8 +3,11 @@ export type LibraryProjectType = "short_film" | "ad_video" | "website_video";
 export type LibraryScene = {
   title: string;
   videoUrl?: string;
+  clipUrl?: string;
   audioUrl?: string;
   posterUrl?: string;
+  assetStatus?: "pending" | "generating" | "ready" | "failed";
+  motionSpec?: Record<string, unknown>;
   visual?: string;
   location?: string;
   caption?: string;
@@ -260,8 +263,11 @@ function normalizeScenes(value: unknown): LibraryScene[] {
   return value.filter(isRecord).map((scene) => ({
     title: stringField(scene.title) || "Untitled shot",
     videoUrl: stringField(scene.videoUrl),
+    clipUrl: stringField(scene.clipUrl),
     audioUrl: stringField(scene.audioUrl),
     posterUrl: stringField(scene.posterUrl),
+    assetStatus: normalizeAssetStatus(scene.assetStatus),
+    motionSpec: isRecord(scene.motionSpec) ? scene.motionSpec : undefined,
     visual: stringField(scene.visual),
     location: stringField(scene.location),
     caption: stringField(scene.caption),
@@ -281,6 +287,10 @@ function normalizeScenes(value: unknown): LibraryScene[] {
     critiqueResult: isQualityResult(scene.critiqueResult) ? scene.critiqueResult : undefined,
     agentTrace: Array.isArray(scene.agentTrace) ? scene.agentTrace.filter(isRecord).map(normalizeTrace) : undefined,
   }));
+}
+
+function normalizeAssetStatus(value: unknown): LibraryScene["assetStatus"] {
+  return value === "pending" || value === "generating" || value === "ready" || value === "failed" ? value : undefined;
 }
 
 function appendGenerationLog(project: LibraryProject) {

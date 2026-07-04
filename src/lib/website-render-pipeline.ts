@@ -43,15 +43,21 @@ export type BrollPromptSpec = {
 export type WebsiteBeatRenderAsset = {
   beat_id: string;
   production_method: ProductionMethod;
+  asset_status: "pending" | "generating" | "ready" | "failed";
+  clip_url?: string;
   motionGraphicSpec?: CompiledMotionSpec;
   captureChoreography?: CaptureChoreography;
   brollPromptSpec?: BrollPromptSpec;
   voAudioUrl?: string;
+  asset_error?: string;
 };
 
 export type RenderableWebsiteBeat = WebsiteVideoBeat & {
   planned_duration_seconds: number;
   actual_vo_duration_seconds: number;
+  asset_status: "pending" | "generating" | "ready" | "failed";
+  clip_url?: string;
+  motion_spec?: CompiledMotionSpec;
   vo_audio_url?: string;
   render_asset: WebsiteBeatRenderAsset;
 };
@@ -92,6 +98,9 @@ export function buildWebsiteRenderPipeline({
       ...beat,
       planned_duration_seconds: beat.duration_seconds,
       actual_vo_duration_seconds: beat.actualVoDurationSeconds || estimateVoiceDurationSeconds(beat.vo_line),
+      asset_status: renderAsset.asset_status,
+      clip_url: renderAsset.clip_url,
+      motion_spec: renderAsset.motionGraphicSpec,
       vo_audio_url: beat.audioUrl,
       render_asset: {
         ...renderAsset,
@@ -115,19 +124,26 @@ export function compileBeatAsset(brandKit: WebsiteBrandKit, beat: WebsiteVideoBe
     return {
       beat_id: beat.beat_id,
       production_method: beat.production_method,
+      asset_status: "ready",
       captureChoreography: compileCaptureChoreography(beat),
+      motionGraphicSpec: buildFallbackMotionCard(brandKit, beat, "Screen capture visual fallback"),
+      asset_error: "No browser capture worker is attached in this runtime; using branded motion card fallback.",
     };
   }
   if (beat.production_method === "ai_broll") {
     return {
       beat_id: beat.beat_id,
       production_method: beat.production_method,
+      asset_status: "ready",
       brollPromptSpec: compileBrollPrompt(brandKit, beat),
+      motionGraphicSpec: buildFallbackMotionCard(brandKit, beat, "AI b-roll visual fallback"),
+      asset_error: "No async b-roll worker is attached in this runtime; using branded motion card fallback.",
     };
   }
   return {
     beat_id: beat.beat_id,
     production_method: beat.production_method,
+    asset_status: "ready",
     motionGraphicSpec: compileMotionGraphic(brandKit, beat),
   };
 }
@@ -230,6 +246,44 @@ export function compileBrollPrompt(brandKit: WebsiteBrandKit, beat: WebsiteVideo
   };
 }
 
+export function buildFallbackMotionCard(brandKit: WebsiteBrandKit, beat: WebsiteVideoBeat, reason = "Fallback visual card"): CompiledMotionSpec {
+  return {
+    beat_id: beat.beat_id,
+    layout: "full_frame_headline",
+    elements: [
+      {
+        type: "headline",
+        content: beat.beat_purpose || brandKit.brand.name,
+        enter_animation: "fade_rise",
+        enter_frame: 4,
+        exit_frame: null,
+        color_token: "accent",
+        typeface_token: "heading",
+      },
+      {
+        type: "subhead",
+        content: fitCopy(beat.vo_line, 150),
+        enter_animation: "mask_wipe",
+        enter_frame: 20,
+        exit_frame: null,
+        color_token: "neutral",
+        typeface_token: "body",
+      },
+      {
+        type: "cta_button",
+        content: reason,
+        enter_animation: "scale_overshoot",
+        enter_frame: 38,
+        exit_frame: null,
+        color_token: "primary",
+        typeface_token: "body",
+      },
+    ],
+    easing_family: "ease_out_expo",
+    background_treatment: `solid ${brandKit.brand.neutral_color_hex}; branded fallback with ${brandKit.brand.primary_color_hex}`,
+  };
+}
+
 export function reconcileWebsiteTimeline(beats: RenderableWebsiteBeat[]): RenderableWebsiteBeat[] {
   let cursor = 0;
   return beats.map((beat) => {
@@ -256,8 +310,8 @@ export function buildRenderChecklist(beats: RenderableWebsiteBeat[], assets: Rec
   return [
     {
       id: "motion_graphics_compiled",
-      ok: beats.filter((beat) => beat.production_method === "motion_graphic").every((beat) => Boolean(assets[beat.beat_id]?.motionGraphicSpec?.elements.length)),
-      note: "Every motion graphic beat has renderable elements.",
+      ok: beats.every((beat) => Boolean(assets[beat.beat_id]?.motionGraphicSpec?.elements.length || assets[beat.beat_id]?.clip_url)),
+      note: "Every beat has either a clip URL or renderable motion card.",
     },
     {
       id: "capture_choreography_compiled",
@@ -273,6 +327,11 @@ export function buildRenderChecklist(beats: RenderableWebsiteBeat[], assets: Rec
       id: "broll_prompts_compiled",
       ok: beats.filter((beat) => beat.production_method === "ai_broll").every((beat) => Boolean(assets[beat.beat_id]?.brollPromptSpec?.positive_prompt)),
       note: "Every AI b-roll beat has a scoped generation prompt.",
+    },
+    {
+      id: "asset_status_ready",
+      ok: beats.every((beat) => beat.asset_status === "ready" && Boolean(beat.clip_url || beat.motion_spec)),
+      note: "Every completed beat has asset_status ready and a visual asset.",
     },
     {
       id: "audio_timing_reconciled",

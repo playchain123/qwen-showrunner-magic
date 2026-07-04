@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, ArrowUp, Check, Copy, Download, ExternalLink, Film, Globe, Pencil, Play, Volume2, X } from "lucide-react";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
+import { WebsiteBeatPreview } from "@/components/website-beat-preview";
 import { generateVoice } from "@/lib/qwen.functions";
 import { saveLibraryProject } from "@/lib/library";
 import {
@@ -30,6 +31,9 @@ type BeatPreview = WebsiteVideoBeat & {
   actualVoDurationSeconds?: number;
   plannedDurationSeconds?: number;
   renderAsset?: WebsiteBeatRenderAsset;
+  assetStatus?: "pending" | "generating" | "ready" | "failed";
+  clipUrl?: string;
+  motionSpec?: WebsiteBeatRenderAsset["motionGraphicSpec"];
   done?: boolean;
   progress?: number;
 };
@@ -205,6 +209,10 @@ function WebsiteVideoPage() {
       productPitch: kit.product.one_line_description,
       scenes: renderedBeats.map((beat) => ({
         title: beat.beat_purpose,
+        assetStatus: beat.assetStatus || "ready",
+        clipUrl: beat.clipUrl,
+        videoUrl: beat.clipUrl,
+        motionSpec: beat.motionSpec,
         visual: `${beat.production_method}: ${beat.screen_capture_spec?.interaction_sequence.join(", ") || beat.motion_graphic_spec?.layout || "AI B-roll context"}`,
         caption: beat.vo_line,
         spokenLine: beat.vo_line,
@@ -216,6 +224,10 @@ function WebsiteVideoPage() {
       })),
       timeline: renderedBeats.map((beat) => ({
         title: beat.beat_purpose,
+        assetStatus: beat.assetStatus || "ready",
+        clipUrl: beat.clipUrl,
+        videoUrl: beat.clipUrl,
+        motionSpec: beat.motionSpec,
         caption: beat.vo_line,
         spokenLine: beat.vo_line,
         audioUrl: beat.audioUrl,
@@ -399,7 +411,21 @@ function WebsiteVideoPage() {
                 <div className="rounded-xl border border-white/10 bg-white/[0.03] overflow-hidden">
                   <div className="aspect-video bg-neutral-950 relative">
                     {brandKit && beats[0] ? (
-                      <WebsiteVideoFrame brandKit={brandKit} beat={beats[0]} title={`${brandKit.brand.name} - ${selectedType.label}`} progress={0.25} />
+                      <WebsiteBeatPreview
+                        brandName={brandKit.brand.name}
+                        title={`${brandKit.brand.name} - ${selectedType.label}`}
+                        description={brandKit.product.one_line_description}
+                        productionMethod={beats[0].production_method}
+                        beatPurpose={beats[0].beat_purpose}
+                        voLine={beats[0].vo_line}
+                        startSeconds={beats[0].start_seconds}
+                        durationSeconds={beats[0].duration_seconds}
+                        progress={0.25}
+                        colors={brandColors(brandKit)}
+                        assetStatus={beats[0].assetStatus}
+                        clipUrl={beats[0].clipUrl}
+                        motionSpec={beats[0].motionSpec}
+                      />
                     ) : (
                       <div className="h-full flex items-center justify-center text-white/40">
                         <Film className="h-8 w-8" />
@@ -488,7 +514,7 @@ function WebsiteVideoPage() {
           </div>
         </div>
       </div>
-      {playing && <BeatModal beat={playing} onClose={() => setPlaying(null)} />}
+      {playing && brandKit && <BeatModal beat={playing} brandKit={brandKit} title={`${brandKit.brand.name} - ${selectedType.label}`} onClose={() => setPlaying(null)} />}
       {showVideoPlayer && brandKit && beats.length > 0 && (
         <WebsiteVideoPlayer
           brandKit={brandKit}
@@ -512,7 +538,7 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function BeatModal({ beat, onClose }: { beat: BeatPreview; onClose: () => void }) {
+function BeatModal({ beat, brandKit, title, onClose }: { beat: BeatPreview; brandKit: WebsiteBrandKit; title: string; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-6">
       <div className="w-full max-w-2xl rounded-xl border border-white/10 bg-[#0b0b0b] p-5">
@@ -520,9 +546,24 @@ function BeatModal({ beat, onClose }: { beat: BeatPreview; onClose: () => void }
           <div className="font-medium">{beat.beat_purpose}</div>
           <button onClick={onClose} className="text-sm text-white/50 hover:text-white">Close</button>
         </div>
-        <div className="mt-4 rounded-lg bg-white/[0.03] border border-white/10 p-5">
-          <div className="text-xs uppercase tracking-widest text-white/40">{beat.production_method.replace("_", " ")}</div>
-          <div className="mt-3 text-xl font-semibold">{beat.vo_line}</div>
+        <div className="mt-4 aspect-video rounded-lg bg-white/[0.03] border border-white/10 overflow-hidden">
+          <WebsiteBeatPreview
+            brandName={brandKit.brand.name}
+            title={title}
+            description={brandKit.product.one_line_description}
+            productionMethod={beat.production_method}
+            beatPurpose={beat.beat_purpose}
+            voLine={beat.vo_line}
+            startSeconds={beat.start_seconds}
+            durationSeconds={beat.duration_seconds}
+            progress={0.35}
+            colors={brandColors(brandKit)}
+            assetStatus={beat.assetStatus}
+            clipUrl={beat.clipUrl}
+            motionSpec={beat.motionSpec}
+          />
+        </div>
+        <div className="mt-4">
           {beat.audioUrl && <audio src={beat.audioUrl} controls autoPlay className="mt-5 w-full" />}
         </div>
       </div>
@@ -602,7 +643,21 @@ function WebsiteVideoPlayer({
       </div>
       <div className="flex-1 min-h-0 p-5 flex items-center justify-center">
         <div className="w-full max-w-6xl aspect-video rounded-xl overflow-hidden border border-white/10 shadow-2xl shadow-black">
-          <WebsiteVideoFrame brandKit={brandKit} beat={beat} title={title} progress={progress} />
+          <WebsiteBeatPreview
+            brandName={brandKit.brand.name}
+            title={title}
+            description={brandKit.product.one_line_description}
+            productionMethod={beat.production_method}
+            beatPurpose={beat.beat_purpose}
+            voLine={beat.vo_line}
+            startSeconds={beat.start_seconds}
+            durationSeconds={beat.duration_seconds}
+            progress={progress}
+            colors={brandColors(brandKit)}
+            assetStatus={beat.assetStatus}
+            clipUrl={beat.clipUrl}
+            motionSpec={beat.motionSpec}
+          />
         </div>
       </div>
       <div className="px-5 pb-5">
@@ -757,10 +812,22 @@ function mergePipelineBeats(beats: WebsiteRenderPipeline["beats"]): BeatPreview[
     audioUrl: beat.vo_audio_url,
     actualVoDurationSeconds: beat.actual_vo_duration_seconds,
     plannedDurationSeconds: beat.planned_duration_seconds,
+    assetStatus: beat.asset_status,
+    clipUrl: beat.clip_url,
+    motionSpec: beat.motion_spec,
     renderAsset: beat.render_asset,
     done: true,
     progress: 100,
   }));
+}
+
+function brandColors(brandKit: WebsiteBrandKit) {
+  return {
+    primary: brandKit.brand.primary_color_hex,
+    secondary: brandKit.brand.secondary_color_hex,
+    accent: brandKit.brand.accent_color_hex,
+    neutral: brandKit.brand.neutral_color_hex,
+  };
 }
 
 function resolveAudioDurationSeconds(audioUrl: string | undefined, fallbackText: string) {

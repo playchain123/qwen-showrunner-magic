@@ -3,7 +3,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Film, RefreshCw, Trash2, Play, Download, Scissors, Volume2, VolumeX, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar } from "./dashboard";
+import { WebsiteBeatPreview } from "@/components/website-beat-preview";
 import { readLibraryProjects, writeSceneReview, type LibraryProject, type LibraryProjectType, type LibraryScene } from "@/lib/library";
+import type { CompiledMotionSpec } from "@/lib/website-render-pipeline";
 
 export const Route = createFileRoute("/dashboard_/library")({
   ssr: false,
@@ -141,6 +143,8 @@ function LibraryPage() {
                         <img src={coverPoster} alt="" className="absolute inset-0 h-full w-full object-cover" />
                       ) : coverVideo ? (
                         <video src={coverVideo} muted playsInline preload="none" className="absolute inset-0 h-full w-full object-cover" />
+                      ) : project.type === "website_video" && scenes[0]?.motionSpec ? (
+                        <WebsiteBeatPreview {...buildWebsiteScenePreviewProps(project, scenes[0], 0, 0.2)} />
                       ) : (
                         <div className="absolute inset-0 flex items-center justify-center text-white/30">
                           <Film className="h-8 w-8" />
@@ -217,11 +221,13 @@ function LibraryProjectPlayer({
   const [reviewed, setReviewed] = useState<string>("");
   const videoRef = useRef<HTMLVideoElement>(null);
   const fallbackRef = useRef<number | null>(null);
+  const isWebsiteScene = project.type === "website_video";
 
   useEffect(() => {
     const video = videoRef.current;
-    if (video && scene?.videoUrl) {
-      video.src = scene.videoUrl;
+    const clip = scene?.videoUrl || scene?.clipUrl;
+    if (video && clip) {
+      video.src = clip;
       video.currentTime = 0;
       video.load();
       video.play().catch(() => {});
@@ -231,7 +237,7 @@ function LibraryProjectPlayer({
     return () => {
       if (fallbackRef.current) window.clearTimeout(fallbackRef.current);
     };
-  }, [scene?.videoUrl, scene?.durationSeconds, onNext]);
+  }, [scene?.videoUrl, scene?.clipUrl, scene?.durationSeconds, onNext]);
 
   if (!scene) return null;
 
@@ -264,18 +270,29 @@ function LibraryProjectPlayer({
         {reviewed && <span className="rounded-full bg-black/60 px-2 py-1 text-[10px] text-white/60">Logged {reviewed}</span>}
       </div>
       <div className="relative h-screen w-screen overflow-hidden bg-black">
-        {scene.posterUrl && <img src={scene.posterUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-80" />}
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          preload="metadata"
-          poster={scene.posterUrl}
-          onEnded={onNext}
-          onError={onNext}
-          className="absolute inset-0 h-full w-full object-cover"
-        />
+        {isWebsiteScene ? (
+          <WebsiteBeatPreview
+            {...buildWebsiteScenePreviewProps(project, scene, index, 0.35)}
+            autoPlayVideo
+            muted
+            onEnded={onNext}
+          />
+        ) : (
+          <>
+            {scene.posterUrl && <img src={scene.posterUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-80" />}
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              preload="metadata"
+              poster={scene.posterUrl}
+              onEnded={onNext}
+              onError={onNext}
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          </>
+        )}
         {scene.audioUrl && <audio key={scene.audioUrl} src={scene.audioUrl} autoPlay muted={muted} />}
         <div className="absolute inset-x-0 top-0 h-[5%] bg-black pointer-events-none" />
         <div className="absolute inset-x-0 bottom-0 h-[5%] bg-black pointer-events-none" />
@@ -315,15 +332,16 @@ function LibraryTimeline({ scenes, activeIndex }: { scenes: LibraryScene[]; acti
         {scenes.map((scene, index) => {
           const start = cursor;
           const duration = scene.durationSeconds || 7;
+          const hasVisual = Boolean(scene.videoUrl || scene.clipUrl || scene.motionSpec);
           cursor += duration;
           return (
             <div
               key={index}
-              className={`relative border-r border-black/70 ${index === activeIndex ? "bg-white/25" : scene.videoUrl ? "bg-white/12" : "bg-white/5"}`}
+              className={`relative border-r border-black/70 ${index === activeIndex ? "bg-white/25" : hasVisual ? "bg-white/12" : "bg-white/5"}`}
               style={{ width: `${Math.max(8, (duration / total) * 100)}%` }}
               title={`${scene.title} - ${formatTime(start)}-${formatTime(start + duration)}`}
             >
-              <div className={`absolute inset-x-1 top-1 h-2 rounded-sm ${scene.videoUrl ? "bg-emerald-400" : "bg-white/20"}`} />
+              <div className={`absolute inset-x-1 top-1 h-2 rounded-sm ${hasVisual ? "bg-emerald-400" : "bg-white/20"}`} />
               <div className="absolute bottom-1 left-1 right-1 truncate text-[10px] text-white/70">#{index + 1} {scene.shotType || "shot"}</div>
             </div>
           );
@@ -331,6 +349,43 @@ function LibraryTimeline({ scenes, activeIndex }: { scenes: LibraryScene[]; acti
       </div>
     </div>
   );
+}
+
+function buildWebsiteScenePreviewProps(project: LibraryProject, scene: LibraryScene, index: number, progress: number) {
+  const metadata = project.metadata || {};
+  const brandKit = metadata.brandKit as
+    | {
+        brand?: {
+          name?: string;
+          primary_color_hex?: string;
+          secondary_color_hex?: string;
+          accent_color_hex?: string;
+          neutral_color_hex?: string;
+        };
+        product?: { one_line_description?: string };
+      }
+    | undefined;
+  const brandName = brandKit?.brand?.name || project.title.replace(/\s+-\s+.*$/, "") || "Website";
+  return {
+    brandName,
+    title: project.title,
+    description: brandKit?.product?.one_line_description || project.productPitch || project.websiteUrl,
+    productionMethod: scene.shotType || "motion_graphic",
+    beatPurpose: scene.title,
+    voLine: scene.spokenLine || scene.caption,
+    startSeconds: 0,
+    durationSeconds: scene.durationSeconds || 7,
+    progress,
+    colors: {
+      primary: brandKit?.brand?.primary_color_hex,
+      secondary: brandKit?.brand?.secondary_color_hex,
+      accent: brandKit?.brand?.accent_color_hex,
+      neutral: brandKit?.brand?.neutral_color_hex,
+    },
+    assetStatus: scene.assetStatus || (scene.clipUrl || scene.videoUrl || scene.motionSpec ? "ready" as const : "pending" as const),
+    clipUrl: scene.clipUrl || scene.videoUrl,
+    motionSpec: scene.motionSpec as CompiledMotionSpec | undefined,
+  };
 }
 
 function getProjectScenes(project: LibraryProject): LibraryScene[] {
