@@ -1,4 +1,4 @@
-export type LibraryProjectType = "short_film" | "ad_video";
+export type LibraryProjectType = "short_film" | "ad_video" | "website_video";
 
 export type LibraryScene = {
   title: string;
@@ -40,6 +40,8 @@ export type LibraryProject = {
   productPitch?: string;
   cta?: string;
   adTone?: string;
+  websiteUrl?: string;
+  videoType?: string;
   scenes?: LibraryScene[];
   timeline?: LibraryScene[];
   metadata?: Record<string, unknown>;
@@ -67,9 +69,11 @@ export function saveLibraryProject(project: LibraryProject, limit = 50) {
 function normalizeLibraryProject(raw: Record<string, unknown>): LibraryProject | null {
   const scenes = normalizeScenes(raw.scenes);
   const timeline = normalizeScenes(raw.timeline);
-  const typed = raw.type === "ad_video" || raw.type === "short_film";
+  const typed = raw.type === "ad_video" || raw.type === "short_film" || raw.type === "website_video";
   const type: LibraryProjectType = typed
     ? raw.type
+    : raw.websiteUrl || raw.videoType
+    ? "website_video"
     : raw.brandName || raw.productPitch || raw.cta || raw.adTone
     ? "ad_video"
     : "short_film";
@@ -84,6 +88,8 @@ function normalizeLibraryProject(raw: Record<string, unknown>): LibraryProject |
       ? raw.title
       : type === "ad_video"
       ? `${typeof raw.brandName === "string" && raw.brandName.trim() ? raw.brandName : "Untitled Brand"} Ad`
+      : type === "website_video"
+      ? `${typeof raw.websiteUrl === "string" && raw.websiteUrl.trim() ? raw.websiteUrl : "Website"} Video`
       : "Untitled Film";
 
   if (!id || !title) return null;
@@ -108,6 +114,8 @@ function normalizeLibraryProject(raw: Record<string, unknown>): LibraryProject |
     productPitch: stringField(raw.productPitch),
     cta: stringField(raw.cta),
     adTone: stringField(raw.adTone),
+    websiteUrl: stringField(raw.websiteUrl),
+    videoType: stringField(raw.videoType),
     scenes: projectScenes,
     timeline,
     metadata: isRecord(raw.metadata) ? raw.metadata : undefined,

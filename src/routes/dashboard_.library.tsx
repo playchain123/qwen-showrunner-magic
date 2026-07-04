@@ -23,6 +23,7 @@ function LibraryPage() {
       all: projects.length,
       short_film: projects.filter((project) => project.type === "short_film").length,
       ad_video: projects.filter((project) => project.type === "ad_video").length,
+      website_video: projects.filter((project) => project.type === "website_video").length,
     }),
     [projects],
   );
@@ -60,7 +61,7 @@ function LibraryPage() {
       return [
         `SCENE ${index + 1}: ${scene.title.replace(/^#\d+\s*/, "")}`,
         `TIME: ${formatTime(start)} - ${formatTime(end)}`,
-        `TYPE: ${project.type === "ad_video" ? "Cinematic Ad" : "AI Short Film"}`,
+        `TYPE: ${project.type === "ad_video" ? "Cinematic Ad" : project.type === "website_video" ? "Website Video" : "AI Short Film"}`,
         `SHOT: ${scene.shotType || "cinematic"}`,
         `DIALOGUE: ${scene.character ? `${scene.character}: ` : ""}${scene.spokenLine || scene.caption || ""}`,
         `VOICE: ${scene.language || "English"}, ${scene.voiceTone || "natural"}, ${scene.pitch || "medium"} pitch`,
@@ -93,6 +94,7 @@ function LibraryPage() {
               { id: "all" as const, label: "All", count: counts.all },
               { id: "short_film" as const, label: "Short Films", count: counts.short_film },
               { id: "ad_video" as const, label: "Ads", count: counts.ad_video },
+              { id: "website_video" as const, label: "Website", count: counts.website_video },
             ].map((item) => (
               <button
                 key={item.id}
@@ -114,7 +116,7 @@ function LibraryPage() {
             </div>
           ) : filteredProjects.length === 0 ? (
             <div className="text-white/50 text-sm border border-white/10 rounded-xl p-10 text-center">
-              No {filter === "ad_video" ? "ads" : "short films"} saved yet.
+              No {filter === "ad_video" ? "ads" : filter === "website_video" ? "website videos" : "short films"} saved yet.
             </div>
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
@@ -125,6 +127,8 @@ function LibraryPage() {
                 const duration = project.durationSeconds || scenes.reduce((sum, scene) => sum + (scene.durationSeconds || 7), 0);
                 const meta = project.type === "ad_video"
                   ? project.brandName || project.adTone || "Cinematic Ad"
+                  : project.type === "website_video"
+                  ? project.websiteUrl || project.videoType || "Website Video"
                   : project.tone || project.genre || "AI Short Film";
 
                 return (
@@ -143,9 +147,9 @@ function LibraryPage() {
                         </div>
                       )}
                       <span className={`absolute left-2 top-2 rounded-full px-2 py-1 text-[10px] font-medium ${
-                        project.type === "ad_video" ? "bg-red-500/80 text-white" : "bg-blue-500/80 text-white"
+                        project.type === "ad_video" ? "bg-red-500/80 text-white" : project.type === "website_video" ? "bg-emerald-500/80 text-white" : "bg-blue-500/80 text-white"
                       }`}>
-                        {project.type === "ad_video" ? "Ad" : "Short Film"}
+                        {project.type === "ad_video" ? "Ad" : project.type === "website_video" ? "Website" : "Short Film"}
                       </span>
                       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition flex items-center justify-center opacity-0 group-hover:opacity-100">
                         <Play className="h-10 w-10 text-white" />
@@ -262,7 +266,7 @@ function LibraryProjectPlayer({
           </div>
         )}
         <div className="absolute top-4 left-4 text-white/70 text-xs">
-          {project.type === "ad_video" ? "Ad" : "Short Film"} - Scene {index + 1}/{scenes.length}
+          {project.type === "ad_video" ? "Ad" : project.type === "website_video" ? "Website" : "Short Film"} - Scene {index + 1}/{scenes.length}
         </div>
         <div className="absolute top-10 left-4 max-w-[70vw] text-white text-sm md:text-lg font-medium drop-shadow">
           {project.title}
