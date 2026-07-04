@@ -13,6 +13,7 @@ import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardWebsiteRouteImport } from './routes/dashboard_.website'
+import { Route as DashboardProfileRouteImport } from './routes/dashboard_.profile'
 import { Route as DashboardLibraryRouteImport } from './routes/dashboard_.library'
 import { Route as DashboardAdsRouteImport } from './routes/dashboard_.ads'
 import { Route as DashboardAgentIdRouteImport } from './routes/dashboard_.agent.$id'
@@ -37,6 +38,11 @@ const DashboardWebsiteRoute = DashboardWebsiteRouteImport.update({
   path: '/dashboard/website',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DashboardProfileRoute = DashboardProfileRouteImport.update({
+  id: '/dashboard_/profile',
+  path: '/dashboard/profile',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DashboardLibraryRoute = DashboardLibraryRouteImport.update({
   id: '/dashboard_/library',
   path: '/dashboard/library',
@@ -59,6 +65,7 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof DashboardRoute
   '/dashboard/ads': typeof DashboardAdsRoute
   '/dashboard/library': typeof DashboardLibraryRoute
+  '/dashboard/profile': typeof DashboardProfileRoute
   '/dashboard/website': typeof DashboardWebsiteRoute
   '/dashboard/agent/$id': typeof DashboardAgentIdRoute
 }
@@ -68,6 +75,7 @@ export interface FileRoutesByTo {
   '/dashboard': typeof DashboardRoute
   '/dashboard/ads': typeof DashboardAdsRoute
   '/dashboard/library': typeof DashboardLibraryRoute
+  '/dashboard/profile': typeof DashboardProfileRoute
   '/dashboard/website': typeof DashboardWebsiteRoute
   '/dashboard/agent/$id': typeof DashboardAgentIdRoute
 }
@@ -78,6 +86,7 @@ export interface FileRoutesById {
   '/dashboard': typeof DashboardRoute
   '/dashboard_/ads': typeof DashboardAdsRoute
   '/dashboard_/library': typeof DashboardLibraryRoute
+  '/dashboard_/profile': typeof DashboardProfileRoute
   '/dashboard_/website': typeof DashboardWebsiteRoute
   '/dashboard_/agent/$id': typeof DashboardAgentIdRoute
 }
@@ -89,6 +98,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/dashboard/ads'
     | '/dashboard/library'
+    | '/dashboard/profile'
     | '/dashboard/website'
     | '/dashboard/agent/$id'
   fileRoutesByTo: FileRoutesByTo
@@ -98,6 +108,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/dashboard/ads'
     | '/dashboard/library'
+    | '/dashboard/profile'
     | '/dashboard/website'
     | '/dashboard/agent/$id'
   id:
@@ -107,6 +118,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/dashboard_/ads'
     | '/dashboard_/library'
+    | '/dashboard_/profile'
     | '/dashboard_/website'
     | '/dashboard_/agent/$id'
   fileRoutesById: FileRoutesById
@@ -117,6 +129,7 @@ export interface RootRouteChildren {
   DashboardRoute: typeof DashboardRoute
   DashboardAdsRoute: typeof DashboardAdsRoute
   DashboardLibraryRoute: typeof DashboardLibraryRoute
+  DashboardProfileRoute: typeof DashboardProfileRoute
   DashboardWebsiteRoute: typeof DashboardWebsiteRoute
   DashboardAgentIdRoute: typeof DashboardAgentIdRoute
 }
@@ -151,6 +164,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardWebsiteRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/dashboard_/profile': {
+      id: '/dashboard_/profile'
+      path: '/dashboard/profile'
+      fullPath: '/dashboard/profile'
+      preLoaderRoute: typeof DashboardProfileRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/dashboard_/library': {
       id: '/dashboard_/library'
       path: '/dashboard/library'
@@ -181,6 +201,7 @@ const rootRouteChildren: RootRouteChildren = {
   DashboardRoute: DashboardRoute,
   DashboardAdsRoute: DashboardAdsRoute,
   DashboardLibraryRoute: DashboardLibraryRoute,
+  DashboardProfileRoute: DashboardProfileRoute,
   DashboardWebsiteRoute: DashboardWebsiteRoute,
   DashboardAgentIdRoute: DashboardAgentIdRoute,
 }

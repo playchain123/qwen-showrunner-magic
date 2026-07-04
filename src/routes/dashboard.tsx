@@ -46,6 +46,9 @@ export function Sidebar() {
         <Link to="/dashboard/website" className="flex flex-col items-center gap-1 hover:text-white">
           <Globe className="h-4 w-4" /><span>Web</span>
         </Link>
+        <Link to="/dashboard/profile" className="flex flex-col items-center gap-1 hover:text-white">
+          <Heart className="h-4 w-4" /><span>Profile</span>
+        </Link>
       </nav>
     </aside>
   );

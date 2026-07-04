@@ -1,9 +1,9 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Film, Trash2, Play, Download, Scissors, Volume2, VolumeX } from "lucide-react";
+import { Check, Film, RefreshCw, Trash2, Play, Download, Scissors, Volume2, VolumeX, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar } from "./dashboard";
-import { readLibraryProjects, type LibraryProject, type LibraryProjectType, type LibraryScene } from "@/lib/library";
+import { readLibraryProjects, writeSceneReview, type LibraryProject, type LibraryProjectType, type LibraryScene } from "@/lib/library";
 
 export const Route = createFileRoute("/dashboard_/library")({
   ssr: false,
@@ -214,6 +214,7 @@ function LibraryProjectPlayer({
   const scenes = getProjectScenes(project);
   const scene = scenes[index];
   const [muted, setMuted] = useState(false);
+  const [reviewed, setReviewed] = useState<string>("");
   const videoRef = useRef<HTMLVideoElement>(null);
   const fallbackRef = useRef<number | null>(null);
 
@@ -234,12 +235,34 @@ function LibraryProjectPlayer({
 
   if (!scene) return null;
 
+  function review(action: "accepted" | "regenerated" | "manually_edited" | "rejected") {
+    writeSceneReview({
+      projectId: project.id,
+      sceneTitle: scene.title,
+      action,
+      edits: action === "manually_edited" ? { note: "User requested edited regeneration from library review." } : undefined,
+    });
+    setReviewed(action);
+  }
+
   return (
     <div className="fixed inset-0 z-50 bg-black">
       <button onClick={onClose} className="absolute top-4 right-4 text-white/60 hover:text-white text-sm z-10">Close</button>
       <button onClick={() => setMuted((m) => !m)} className="absolute top-4 right-24 text-white/70 hover:text-white z-10">
         {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
       </button>
+      <div className="absolute top-4 left-4 z-20 flex items-center gap-2">
+        <button onClick={() => review("accepted")} className="flex items-center gap-1 rounded-full bg-emerald-500/90 px-3 py-1 text-[11px] text-white hover:bg-emerald-500">
+          <Check className="h-3 w-3" /> Accept
+        </button>
+        <button onClick={() => review("manually_edited")} className="flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-[11px] text-white/80 hover:bg-white/20">
+          <RefreshCw className="h-3 w-3" /> Edit signal
+        </button>
+        <button onClick={() => review("rejected")} className="flex items-center gap-1 rounded-full bg-red-500/80 px-3 py-1 text-[11px] text-white hover:bg-red-500">
+          <X className="h-3 w-3" /> Reject
+        </button>
+        {reviewed && <span className="rounded-full bg-black/60 px-2 py-1 text-[10px] text-white/60">Logged {reviewed}</span>}
+      </div>
       <div className="relative h-screen w-screen overflow-hidden bg-black">
         {scene.posterUrl && <img src={scene.posterUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-80" />}
         <video
@@ -265,10 +288,10 @@ function LibraryProjectPlayer({
             </div>
           </div>
         )}
-        <div className="absolute top-4 left-4 text-white/70 text-xs">
+        <div className="absolute top-14 left-4 text-white/70 text-xs">
           {project.type === "ad_video" ? "Ad" : project.type === "website_video" ? "Website" : "Short Film"} - Scene {index + 1}/{scenes.length}
         </div>
-        <div className="absolute top-10 left-4 max-w-[70vw] text-white text-sm md:text-lg font-medium drop-shadow">
+        <div className="absolute top-20 left-4 max-w-[70vw] text-white text-sm md:text-lg font-medium drop-shadow">
           {project.title}
         </div>
         <div className="absolute bottom-2 inset-x-4">
