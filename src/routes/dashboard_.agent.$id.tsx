@@ -8,12 +8,15 @@ import { pickBgm } from "@/lib/free-sounds";
 import { saveLibraryProject } from "@/lib/library";
 import {
   buildShortFilmVisualBible,
+  buildOptimizedScenePrompt,
+  compileReferenceImages,
   findCharacterBible,
   formatCharacterLock,
+  formatOptimizedScenePrompt,
+  formatReferenceRouting,
   formatSceneContinuity,
   formatVisualBible,
   validateAndRepairScenes,
-  CONTINUITY_NEGATIVE_PROMPT,
   type VisualBible,
 } from "@/lib/continuity";
 import {
@@ -185,8 +188,17 @@ function AgentWorkspace() {
       const sceneCount = chooseSceneCount(prompt);
       const learningContext = readLearningContext();
       const referenceBrief = refs.map((r) => ({ name: r.name, description: r.description || "user uploaded character/style reference image" }));
+      const compiledReferences = compileReferenceImages(referenceBrief);
+      const referenceRouting = formatReferenceRouting(compiledReferences);
       // 1. Storyboard via Qwen — prompt-aware scene count with persistent learning context
-      const story = await generateStoryboard({ data: { prompt, sceneCount, learningContext, referenceImages: referenceBrief } });
+      const story = await generateStoryboard({
+        data: {
+          prompt,
+          sceneCount,
+          learningContext: [learningContext, referenceRouting ? `Reference routing map: ${referenceRouting}` : ""].filter(Boolean).join("\n"),
+          referenceImages: referenceBrief,
+        },
+      });
       const initialBible = buildShortFilmVisualBible({
         prompt,
         title: story.title,
@@ -277,12 +289,25 @@ function AgentWorkspace() {
               previousVisual: previousScene?.visual || previousScene?.video_prompt,
               nextVisual: nextScene?.visual || nextScene?.video_prompt,
             });
+            const optimizedPrompt = buildOptimizedScenePrompt({
+              scene: s,
+              bible,
+              sceneIndex: idx,
+              sceneCount: scenes.length,
+              previousVisual: previousScene?.visual || previousScene?.video_prompt,
+              nextVisual: nextScene?.visual || nextScene?.video_prompt,
+              referenceWeight: refWeight,
+              references: compiledReferences,
+              userStyleProfile: learningContext,
+            });
             const spokenLine = s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, "");
 
             // Generate the storyboard still first. I2V animation of this Qwen-Image
             // still is the continuity-first path; T2V remains the safety fallback.
             const imgPrompt = [
+              formatOptimizedScenePrompt(optimizedPrompt, "image"),
               continuityPrompt,
+              referenceRouting ? `Reference compiler routing: ${referenceRouting}` : "",
               s.visual || s.video_prompt,
               previousScene ? `Previous scene visual continuity: ${previousScene.visual || previousScene.video_prompt}` : "",
               nextScene ? `Next scene visual setup: ${nextScene.visual || nextScene.video_prompt}` : "",
@@ -292,7 +317,7 @@ function AgentWorkspace() {
               s.color_grade ? `Color grade: ${s.color_grade}` : "",
               s.character ? `Featured character: ${s.character}` : "",
               `Storyboard still for scene ${idx + 1} of ${scenes.length}; match wardrobe, lighting, geography, and emotional continuity.`,
-              `Negative prompt: ${CONTINUITY_NEGATIVE_PROMPT}`,
+              `Negative prompt: ${optimizedPrompt.negative_prompt}`,
             ].filter(Boolean).join("\n");
             let storyboardStillUrl: string | undefined;
             try {
@@ -300,7 +325,8 @@ function AgentWorkspace() {
                 data: {
                   prompt: imgPrompt,
                   referenceImages: refs.map((r) => r.dataUrl),
-                  referenceWeight: refWeight,
+                  referenceWeight: optimizedPrompt.continuity.reference_image_weight,
+                  negativePrompt: optimizedPrompt.negative_prompt,
                 },
               });
               storyboardStillUrl = img.image_url;
@@ -322,7 +348,9 @@ function AgentWorkspace() {
               })
               .catch(() => {});
             const fullPrompt = [
+              formatOptimizedScenePrompt(optimizedPrompt, "video"),
               continuityPrompt,
+              referenceRouting ? `Reference compiler routing: ${referenceRouting}` : "",
               s.video_prompt,
               `Project visual bible summary: ${formatVisualBible(bible)}`,
               previousScene ? `Previous scene visual: ${previousScene.visual || previousScene.video_prompt}` : "",
@@ -336,7 +364,7 @@ function AgentWorkspace() {
               s.sfx ? `On-screen action must support these clean SFX cues: ${s.sfx}` : "",
               spokenLine ? `Lip-sync exactly to this spoken line, matching mouth movement and emotional delivery: "${spokenLine}"` : "",
               `Scene ${idx + 1} of ${scenes.length}. Match wardrobe, lighting mood, geography, eyeline and motion continuity from the previous shot; stage the last movement so it leads naturally into the next cut. No black frames, no fade-to-black, no title cards, no watermarks, seamless edit-ready plate.`,
-              `Negative prompt: ${CONTINUITY_NEGATIVE_PROMPT}`,
+              `Negative prompt: ${optimizedPrompt.negative_prompt}`,
               `Render as one continuous ${normalizeSceneDuration(s.duration_seconds)}-second cinematic shot.`,
             ].filter(Boolean).join("\n");
             const videoUrl = await submitAndPollVideo(fullPrompt, buildVideoAttempts(storyboardStillUrl), (progress) => {
@@ -405,6 +433,7 @@ function AgentWorkspace() {
             source: "agent",
             prompt,
             visualBible: bible,
+            compiledReferences,
             referenceImages: refs.map((r) => ({ name: r.name, description: r.description })),
           },
         });

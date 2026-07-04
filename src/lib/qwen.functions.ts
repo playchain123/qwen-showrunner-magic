@@ -405,6 +405,7 @@ export const generateSceneImage = createServerFn({ method: "POST" })
         prompt: z.string().min(3),
         referenceImages: z.array(z.string()).optional().default([]),
         referenceWeight: z.number().min(0).max(1).optional().default(0.75),
+        negativePrompt: z.string().optional().default(""),
       })
       .parse(input),
   )
@@ -455,7 +456,9 @@ export const generateSceneImage = createServerFn({ method: "POST" })
           ],
         },
         parameters: {
-          negative_prompt: "Low resolution, low quality, distorted limbs, malformed fingers, blurry faces, waxy skin, watermark, subtitles, text overlay.",
+          negative_prompt:
+            data.negativePrompt ||
+            "Low resolution, low quality, distorted limbs, malformed fingers, blurry faces, waxy skin, watermark, subtitles, text overlay.",
           prompt_extend: true,
           watermark: false,
           size: process.env.QWEN_IMAGE_SIZE || "1664*928",
