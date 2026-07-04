@@ -1284,6 +1284,28 @@ function buildVideoAttempts(storyboardStillUrl?: string): VideoAttempt[] {
   return attempts;
 }
 
+function buildRoutedVideoAttempts(
+  routing: { primary: VideoModel; fallback: VideoModel | null; requiresStartingImage: boolean },
+  storyboardStillUrl?: string,
+): VideoAttempt[] {
+  const attempts: VideoAttempt[] = [];
+  const needsImage = (m: VideoModel) => m.endsWith("i2v") || m.endsWith("i2v-plus");
+  const push = (m: VideoModel) => {
+    if (needsImage(m)) {
+      if (storyboardStillUrl) attempts.push({ model: m, imageUrl: storyboardStillUrl });
+    } else {
+      attempts.push({ model: m });
+    }
+  };
+  push(routing.primary);
+  if (routing.fallback) push(routing.fallback);
+  // Safety net: also try the opposite-mode engine so a still-image failure
+  // never leaves the scene un-rendered.
+  if (!attempts.some((a) => a.model === "happyhorse-1.1-t2v")) attempts.push({ model: "happyhorse-1.1-t2v" });
+  if (!attempts.some((a) => a.model === "wan2.2-t2v-plus")) attempts.push({ model: "wan2.2-t2v-plus" });
+  return attempts;
+}
+
 async function submitAndPollVideo(
   prompt: string,
   attempts: VideoAttempt[],
