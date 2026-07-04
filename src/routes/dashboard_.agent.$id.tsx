@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX, Download, ImagePlus, BookOpen } from "lucide-react";
+import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX, Download, ImagePlus, BookOpen, Copy, Pencil } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateSceneImage } from "@/lib/qwen.functions";
@@ -12,6 +12,8 @@ import {
   formatCharacterLock,
   formatSceneContinuity,
   formatVisualBible,
+  validateAndRepairScenes,
+  CONTINUITY_NEGATIVE_PROMPT,
   type VisualBible,
 } from "@/lib/continuity";
 import {
@@ -69,6 +71,7 @@ function AgentWorkspace() {
   const { id } = Route.useParams();
   const navigate = useNavigate();
   const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [editingPrompt, setEditingPrompt] = useState<{ index: number; text: string } | null>(null);
   const [cards, setCards] = useState<StoryCard[]>([]);
   const [tasks, setTasks] = useState<{ text: string; done: boolean }[]>([]);
   const [input, setInput] = useState("");
@@ -184,11 +187,20 @@ function AgentWorkspace() {
       const referenceBrief = refs.map((r) => ({ name: r.name, description: r.description || "user uploaded character/style reference image" }));
       // 1. Storyboard via Qwen — prompt-aware scene count with persistent learning context
       const story = await generateStoryboard({ data: { prompt, sceneCount, learningContext, referenceImages: referenceBrief } });
-      const bible = buildShortFilmVisualBible({
+      const initialBible = buildShortFilmVisualBible({
         prompt,
         title: story.title,
         tone: story.tone,
         scenes: story.scenes,
+        references: referenceBrief,
+      });
+      const repairedScenes = validateAndRepairScenes(story.scenes, initialBible, normalizeSceneDuration(undefined));
+      story.scenes = repairedScenes;
+      const bible = buildShortFilmVisualBible({
+        prompt,
+        title: story.title,
+        tone: story.tone,
+        scenes: repairedScenes,
         references: referenceBrief,
       });
       setVisualBible(bible);
@@ -280,6 +292,7 @@ function AgentWorkspace() {
               s.color_grade ? `Color grade: ${s.color_grade}` : "",
               s.character ? `Featured character: ${s.character}` : "",
               `Storyboard still for scene ${idx + 1} of ${scenes.length}; match wardrobe, lighting, geography, and emotional continuity.`,
+              `Negative prompt: ${CONTINUITY_NEGATIVE_PROMPT}`,
             ].filter(Boolean).join("\n");
             let storyboardStillUrl: string | undefined;
             try {
@@ -323,6 +336,7 @@ function AgentWorkspace() {
               s.sfx ? `On-screen action must support these clean SFX cues: ${s.sfx}` : "",
               spokenLine ? `Lip-sync exactly to this spoken line, matching mouth movement and emotional delivery: "${spokenLine}"` : "",
               `Scene ${idx + 1} of ${scenes.length}. Match wardrobe, lighting mood, geography, eyeline and motion continuity from the previous shot; stage the last movement so it leads naturally into the next cut. No black frames, no fade-to-black, no title cards, no watermarks, seamless edit-ready plate.`,
+              `Negative prompt: ${CONTINUITY_NEGATIVE_PROMPT}`,
               `Render as one continuous ${normalizeSceneDuration(s.duration_seconds)}-second cinematic shot.`,
             ].filter(Boolean).join("\n");
             const videoUrl = await submitAndPollVideo(fullPrompt, buildVideoAttempts(storyboardStillUrl), (progress) => {
@@ -410,6 +424,21 @@ function AgentWorkspace() {
     void runPipeline(text, referenceImages);
   }
 
+  function copyPrompt(text: string) {
+    void navigator.clipboard?.writeText(text).catch(() => {
+      setInput(text);
+    });
+  }
+
+  function submitEditedPrompt(index: number, text: string) {
+    const nextText = text.trim();
+    if (thinking || !nextText) return;
+    setEditingPrompt(null);
+    setMessages((m) => [...m.slice(0, index), { ...m[index], text: nextText }]);
+    setInput("");
+    void runPipeline(nextText, referenceImages);
+  }
+
   async function handleReferenceFiles(files: FileList | null) {
     if (!files?.length) return;
     const images = Array.from(files).filter((file) => file.type.startsWith("image/")).slice(0, 8);
@@ -490,7 +519,17 @@ function AgentWorkspace() {
             <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6 flex flex-col justify-end">
               <div className="space-y-6">
                 {messages.map((m, i) => (
-                  <MessageBubble key={i} msg={m} />
+                  <MessageBubble
+                    key={i}
+                    msg={m}
+                    editingText={editingPrompt?.index === i ? editingPrompt.text : null}
+                    disabled={thinking}
+                    onCopy={() => copyPrompt(m.text)}
+                    onEdit={() => setEditingPrompt({ index: i, text: m.text })}
+                    onEditText={(text) => setEditingPrompt((current) => current?.index === i ? { ...current, text } : current)}
+                    onCancelEdit={() => setEditingPrompt(null)}
+                    onSubmitEdit={() => submitEditedPrompt(i, editingPrompt?.text || "")}
+                  />
                 ))}
                 {thinking && (
                   <div className="flex items-center gap-2 text-sm text-white/60">
@@ -810,11 +849,80 @@ function Detail({ label, value }: { label: string; value?: string }) {
   );
 }
 
-function MessageBubble({ msg }: { msg: ChatMsg }) {
+function MessageBubble({
+  msg,
+  editingText,
+  disabled,
+  onCopy,
+  onEdit,
+  onEditText,
+  onCancelEdit,
+  onSubmitEdit,
+}: {
+  msg: ChatMsg;
+  editingText?: string | null;
+  disabled?: boolean;
+  onCopy?: () => void;
+  onEdit?: () => void;
+  onEditText?: (text: string) => void;
+  onCancelEdit?: () => void;
+  onSubmitEdit?: () => void;
+}) {
   if (msg.role === "user") {
+    if (editingText !== null && editingText !== undefined) {
+      return (
+        <div className="flex justify-end">
+          <div className="w-full max-w-[80%] rounded-2xl bg-white/15 px-4 py-3 text-sm">
+            <textarea
+              value={editingText}
+              onChange={(e) => onEditText?.(e.target.value)}
+              rows={Math.min(10, Math.max(3, Math.ceil(editingText.length / 80)))}
+              className="w-full resize-none bg-transparent text-white outline-none placeholder:text-white/35"
+              autoFocus
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={onCancelEdit}
+                className="rounded-full border border-white/15 px-4 py-2 text-xs font-medium text-white hover:bg-white/10"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={disabled || !editingText.trim()}
+                onClick={onSubmitEdit}
+                className="rounded-full bg-white px-4 py-2 text-xs font-medium text-black disabled:opacity-40"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
     return (
-      <div className="flex justify-end">
+      <div className="group flex flex-col items-end">
         <div className="max-w-[80%] rounded-2xl bg-white/10 px-4 py-2 text-sm">{msg.text}</div>
+        <div className="mt-1 flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onCopy}
+            title="Copy prompt"
+            className="h-8 w-8 rounded-lg bg-white/10 text-white/70 hover:bg-white/20 hover:text-white flex items-center justify-center"
+          >
+            <Copy className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={onEdit}
+            title="Edit and regenerate"
+            className="h-8 w-8 rounded-lg bg-white/10 text-white/70 hover:bg-white/20 hover:text-white disabled:opacity-40 flex items-center justify-center"
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
+        </div>
       </div>
     );
   }

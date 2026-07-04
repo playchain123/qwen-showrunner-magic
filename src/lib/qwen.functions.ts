@@ -137,9 +137,8 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     for (let i = 0; i < attempts.length; i++) {
       const { model, max_tokens } = attempts[i];
       try {
-        const controller = new AbortController();
-        const to = setTimeout(() => controller.abort(), 90_000);
-        const res = await fetch(CHAT_URL, {
+        console.info(`[qwen] storyboard attempt ${i + 1}/${attempts.length} model=${model} max_tokens=${max_tokens}`);
+        const res = await fetchWithTimeout(CHAT_URL, {
           method: "POST",
           headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -149,20 +148,24 @@ export const generateStoryboard = createServerFn({ method: "POST" })
             temperature: 0.8,
             max_tokens,
           }),
-          signal: controller.signal,
-        }).finally(() => clearTimeout(to));
+        }, 120_000, `storyboard ${model}`);
         if (res.ok) {
           const j = (await res.json()) as { choices: Array<{ message: { content: string } }> };
           content = j.choices?.[0]?.message?.content ?? "";
           if (content) break;
         } else {
-          lastErr = `Qwen ${model} (${res.status})`;
+          const body = await res.text().catch(() => "");
+          lastErr = `Qwen ${model} (${res.status}): ${body.slice(0, 200)}`;
+          console.warn(`[qwen] storyboard ${model} error: ${lastErr}`);
           if (res.status < 500 && res.status !== 429) break; // don't retry client errors
         }
       } catch (e) {
-        lastErr = `Qwen ${model} ${(e as Error).message}`;
+        const err = e as Error;
+        const causeMsg = err.cause instanceof Error ? ` cause=${err.cause.message}` : "";
+        lastErr = `Qwen ${model} ${err.message}${causeMsg}`;
+        console.warn(`[qwen] storyboard ${model} fetch exception: ${lastErr}`);
       }
-      await new Promise((r) => setTimeout(r, 1500 * (i + 1)));
+      await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
     }
 
     if (!content && allowNonQwenFallbacks()) {

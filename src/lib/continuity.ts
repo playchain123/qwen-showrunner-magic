@@ -40,17 +40,85 @@ export type ProductBible = {
 };
 
 type StoryScene = {
+  title?: string;
   visual?: string;
+  dialogue?: string;
+  spoken_line?: string;
+  caption?: string;
   video_prompt?: string;
+  image_prompt?: string;
   character?: string;
   location?: string;
   color_grade?: string;
   voice_tone?: string;
+  duration_seconds?: number;
   reference_image_direction?: string;
 };
 
 type ReferenceBrief = { name: string; description?: string };
 type BrandAssetBrief = { kind: "product" | "logo" | "model"; name: string };
+
+export const CONTINUITY_NEGATIVE_PROMPT = [
+  "different actor",
+  "changed face",
+  "changed hairstyle",
+  "changed age",
+  "changed wardrobe",
+  "different product",
+  "changed logo",
+  "inconsistent character",
+  "duplicate person",
+  "deformed face",
+  "extra fingers",
+  "blurry",
+  "low quality",
+  "black frame",
+  "watermark",
+  "random text",
+  "scene reset",
+].join(", ");
+
+export function validateAndRepairScenes<T extends StoryScene>(
+  scenes: T[],
+  bible: VisualBible,
+  defaultDuration: number,
+) {
+  const mainCharacter = bible.characters[0];
+  const mainProduct = bible.products?.[0];
+  return scenes.map((scene, index) => {
+    const visual = scene.visual || scene.video_prompt || scene.image_prompt || `${bible.worldDescription}, scene ${index + 1}`;
+    const spokenLine = normalizeVoiceLine(scene.spoken_line || scene.dialogue || scene.caption, bible.projectType);
+    const character = bible.projectType === "short_film"
+      ? scene.character || mainCharacter?.name || "Lead character"
+      : scene.character || mainProduct?.name || "Hero product";
+    const videoPrompt = [
+      scene.video_prompt || visual,
+      bible.projectType === "short_film"
+        ? "Use the same character identity from the Visual Bible. Do not change face, age, hairstyle, body type, wardrobe, or accessories."
+        : "Use the same product identity from the Product Bible. Do not change product shape, logo placement, color, packaging, material, or brand appearance.",
+      `Continuity context: ${bible.worldDescription}. ${bible.colorPalette}. ${bible.lightingStyle}.`,
+      `Negative prompt: ${CONTINUITY_NEGATIVE_PROMPT}`,
+    ].join("\n");
+
+    return {
+      ...scene,
+      title: scene.title || `Scene ${index + 1}`,
+      visual,
+      character,
+      spoken_line: spokenLine,
+      dialogue: spokenLine,
+      caption: scene.caption || spokenLine,
+      video_prompt: videoPrompt,
+      image_prompt: scene.image_prompt || visual,
+      duration_seconds: Number.isFinite(scene.duration_seconds ?? NaN) ? scene.duration_seconds : defaultDuration,
+      reference_image_direction:
+        scene.reference_image_direction ||
+        (bible.projectType === "short_film"
+          ? "Match the Visual Bible character identity exactly."
+          : "Match the Product Bible identity exactly."),
+    };
+  });
+}
 
 export function buildShortFilmVisualBible({
   prompt,
@@ -199,8 +267,10 @@ export function formatSceneContinuity({
   return [
     formatVisualBible(bible),
     character ? `ACTIVE CHARACTER LOCK: ${formatCharacterLock(character)}` : "",
+    "Use the same character identity from the Visual Bible. Do not change face, age, hairstyle, body type, wardrobe, or accessories.",
     previousVisual ? `MATCH FROM PREVIOUS SHOT: ${previousVisual}` : "",
     nextVisual ? `MOTION LEADS INTO NEXT SHOT: ${nextVisual}` : "",
+    `SHARED NEGATIVE PROMPT: ${CONTINUITY_NEGATIVE_PROMPT}`,
     "Generate a continuity-safe plate: same identity, same wardrobe/product state, same grade, no black frames, no fade to black, no title card, no watermark.",
   ].filter(Boolean).join("\n");
 }
@@ -211,7 +281,9 @@ export function formatProductContinuity(bible: VisualBible) {
   return [
     formatVisualBible(bible),
     `ACTIVE PRODUCT LOCK: ${product.name}; ${product.shape}; ${product.color}; ${product.material}; ${product.distinctiveFeatures}`,
+    "Use the same product identity from the Product Bible. Do not change product shape, logo placement, color, packaging, material, or brand appearance.",
     `PRODUCT NEGATIVE RULES: ${product.usageRules.join(" ")}`,
+    `SHARED NEGATIVE PROMPT: ${CONTINUITY_NEGATIVE_PROMPT}`,
   ].join("\n");
 }
 
@@ -381,4 +453,11 @@ function cleanName(name: string) {
 
 function slugId(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "item";
+}
+
+function normalizeVoiceLine(value: string | undefined, projectType: LibraryProjectType) {
+  const cleaned = (value || "").replace(/^[^:]{1,32}:\s*/, "").replace(/\s+/g, " ").trim();
+  const fallback = projectType === "ad_video" ? "Discover what moves you." : "We finish this together.";
+  const words = (cleaned || fallback).split(/\s+/).slice(0, projectType === "ad_video" ? 12 : 10);
+  return words.join(" ");
 }

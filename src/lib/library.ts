@@ -20,6 +20,7 @@ export type LibraryScene = {
   colorGrade?: string;
   editingNotes?: string;
   referenceImageDirection?: string;
+  continuityPrompt?: string;
 };
 
 export type LibraryProject = {
@@ -135,6 +136,7 @@ function normalizeScenes(value: unknown): LibraryScene[] {
     colorGrade: stringField(scene.colorGrade),
     editingNotes: stringField(scene.editingNotes),
     referenceImageDirection: stringField(scene.referenceImageDirection),
+    continuityPrompt: stringField(scene.continuityPrompt),
   }));
 }
 

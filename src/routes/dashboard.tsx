@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useNavigate, Outlet } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Plus, Home, Library, Upload, Sparkles, Film, FileText, Video, Package, X, Heart, LogOut } from "lucide-react";
+import { ArrowUp, Plus, Home, Library, Upload, Sparkles, Film, FileText, Video, Package, X, Heart, LogOut, Copy, Pencil } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import slide1 from "@/assets/slide-1.jpg";
 import slide2 from "@/assets/slide-2.jpg";
@@ -130,6 +130,7 @@ function DashboardHome() {
   const [openFeature, setOpenFeature] = useState<null | (typeof FEATURED)[number]>(null);
   const [attach, setAttach] = useState<File | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -161,6 +162,7 @@ function DashboardHome() {
             {/* prompt box */}
             <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
               <textarea
+                ref={promptRef}
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 placeholder="Plan a script, storyboard or video"
@@ -169,6 +171,21 @@ function DashboardHome() {
               />
               <div className="flex items-center justify-between mt-2">
                 <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => promptRef.current?.focus()}
+                    className="h-8 w-8 rounded-full border border-white/10 hover:bg-white/10 flex items-center justify-center disabled:opacity-40"
+                    title="Edit prompt"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button
+                    disabled={!prompt.trim()}
+                    onClick={() => void navigator.clipboard?.writeText(prompt)}
+                    className="h-8 w-8 rounded-full border border-white/10 hover:bg-white/10 flex items-center justify-center disabled:opacity-40"
+                    title="Copy prompt"
+                  >
+                    <Copy className="h-4 w-4" />
+                  </button>
                   <button
                     onClick={() => fileRef.current?.click()}
                     className="h-8 w-8 rounded-full border border-white/10 hover:bg-white/10 flex items-center justify-center"
@@ -262,6 +279,7 @@ function FeatureModal({
   const [topic, setTopic] = useState("");
   const [activeHero, setActiveHero] = useState(feature.hero || LOCAL_BACKGROUND_VIDEO);
   const [heroReady, setHeroReady] = useState(false);
+  const topicRef = useRef<HTMLTextAreaElement>(null);
 
   function proceed() {
     const seed = `Create a ${duration} ${pace} ${feature.label.toLowerCase()} for ${platform} about ${topic || "my topic"}.`;
@@ -312,12 +330,32 @@ function FeatureModal({
                 <Select value={platform} onChange={setPlatform} options={["YouTube", "TikTok", "Instagram", "X"]} />
                 <span>about</span>
               </div>
+              <div className="mt-4 flex items-center justify-end gap-1">
+                <button
+                  type="button"
+                  onClick={() => topicRef.current?.focus()}
+                  className="h-7 w-7 rounded-md border border-white/10 text-white/60 hover:bg-white/10 hover:text-white flex items-center justify-center"
+                  title="Edit prompt"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  disabled={!topic.trim()}
+                  onClick={() => void navigator.clipboard?.writeText(topic)}
+                  className="h-7 w-7 rounded-md border border-white/10 text-white/60 hover:bg-white/10 hover:text-white disabled:opacity-40 flex items-center justify-center"
+                  title="Copy prompt"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                </button>
+              </div>
               <textarea
+                ref={topicRef}
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
                 placeholder="Type your topic here"
                 rows={3}
-                className="mt-4 w-full bg-white/[0.04] border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-white/30 resize-none"
+                className="mt-2 w-full bg-white/[0.04] border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-white/30 resize-none"
               />
               <p className="text-xs text-white/50 mt-5 mb-2">Settings:</p>
               <div className="flex flex-wrap gap-2">
