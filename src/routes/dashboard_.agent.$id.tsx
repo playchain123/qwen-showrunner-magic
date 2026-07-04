@@ -7,6 +7,14 @@ import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateScen
 import { pickBgm } from "@/lib/free-sounds";
 import { saveLibraryProject } from "@/lib/library";
 import {
+  buildShortFilmVisualBible,
+  findCharacterBible,
+  formatCharacterLock,
+  formatSceneContinuity,
+  formatVisualBible,
+  type VisualBible,
+} from "@/lib/continuity";
+import {
   MAKERS_DEMO_LIMITS,
   clampSceneCount,
   getVideoPollDelayMs,
@@ -21,7 +29,7 @@ export const Route = createFileRoute("/dashboard_/agent/$id")({
 
 type ChatMsg = { role: "user" | "agent"; text: string; skills?: string[]; task?: string };
 type ReferenceImage = { name: string; dataUrl: string; description?: string };
-type CharacterBible = {
+type CharacterSheetInput = {
   name: string;
   descriptor: string;
   skin: string;
@@ -51,6 +59,7 @@ type StoryCard = {
   colorGrade?: string;
   editingNotes?: string;
   referenceImageDirection?: string;
+  continuityPrompt?: string;
 };
 type VideoModel = "happyhorse-1.1-t2v" | "wan2.2-t2v-plus" | "happyhorse-1.1-i2v" | "wan2.2-i2v-plus";
 type VideoAttempt = { model: VideoModel; imageUrl?: string };
@@ -67,6 +76,7 @@ function AgentWorkspace() {
   const [playingFilm, setPlayingFilm] = useState(false);
   const [filmTitle, setFilmTitle] = useState<string>("");
   const [logline, setLogline] = useState<string>("");
+  const [visualBible, setVisualBible] = useState<VisualBible | null>(null);
   const [currentPrompt, setCurrentPrompt] = useState<string>("");
   const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
   const [refWeight, setRefWeight] = useState<number>(0.75);
@@ -104,6 +114,7 @@ function AgentWorkspace() {
           tasks?: { text: string; done: boolean }[];
           filmTitle?: string;
           logline?: string;
+          visualBible?: VisualBible;
           referenceImages?: ReferenceImage[];
         };
         startedRef.current = true;
@@ -113,6 +124,7 @@ function AgentWorkspace() {
         setTasks(doc.tasks || []);
         setFilmTitle(doc.filmTitle || "");
         setLogline(doc.logline || "");
+        setVisualBible(doc.visualBible || null);
         setReferenceImages(doc.referenceImages || []);
         return;
       } catch {
@@ -143,6 +155,7 @@ function AgentWorkspace() {
           tasks,
           filmTitle,
           logline,
+          visualBible,
           referenceImages,
           updatedAt: Date.now(),
         }),
@@ -150,7 +163,7 @@ function AgentWorkspace() {
     } catch {
       // local restore is best-effort
     }
-  }, [id, currentPrompt, messages, cards, tasks, filmTitle, logline, referenceImages]);
+  }, [id, currentPrompt, messages, cards, tasks, filmTitle, logline, visualBible, referenceImages]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -164,12 +177,21 @@ function AgentWorkspace() {
     setTasks([]);
     setFilmTitle("");
     setLogline("");
+    setVisualBible(null);
     try {
       const sceneCount = chooseSceneCount(prompt);
       const learningContext = readLearningContext();
       const referenceBrief = refs.map((r) => ({ name: r.name, description: r.description || "user uploaded character/style reference image" }));
       // 1. Storyboard via Qwen — prompt-aware scene count with persistent learning context
       const story = await generateStoryboard({ data: { prompt, sceneCount, learningContext, referenceImages: referenceBrief } });
+      const bible = buildShortFilmVisualBible({
+        prompt,
+        title: story.title,
+        tone: story.tone,
+        scenes: story.scenes,
+        references: referenceBrief,
+      });
+      setVisualBible(bible);
       setThinking(false);
       setFilmTitle(story.title);
       setLogline(story.logline);
@@ -185,6 +207,7 @@ function AgentWorkspace() {
       setTasks([
         { text: `Render ${story.scenes.length} cinematic shots`, done: false },
         { text: `Cast clean human dialogue voices`, done: false },
+        { text: `Lock visual bible: characters, world, palette, wardrobe`, done: true },
         { text: `Build context: storyline, shots, locations, dialogue, edit notes`, done: false },
       ]);
 
@@ -208,6 +231,12 @@ function AgentWorkspace() {
           colorGrade: s.color_grade,
           editingNotes: s.editing_notes,
           referenceImageDirection: s.reference_image_direction,
+          continuityPrompt: formatSceneContinuity({
+            bible,
+            sceneCharacter: s.character,
+            previousVisual: scenes[i - 1]?.visual || scenes[i - 1]?.video_prompt,
+            nextVisual: scenes[i + 1]?.visual || scenes[i + 1]?.video_prompt,
+          }),
           progress: 5,
           done: false,
         })),
@@ -229,15 +258,24 @@ function AgentWorkspace() {
             const previousScene = scenes[idx - 1];
             const nextScene = scenes[idx + 1];
             const characterRoster = buildCharacterRoster(scenes);
+            const characterLock = findCharacterBible(bible, s.character);
+            const continuityPrompt = formatSceneContinuity({
+              bible,
+              sceneCharacter: s.character,
+              previousVisual: previousScene?.visual || previousScene?.video_prompt,
+              nextVisual: nextScene?.visual || nextScene?.video_prompt,
+            });
             const spokenLine = s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, "");
 
             // Generate the storyboard still first. I2V animation of this Qwen-Image
             // still is the continuity-first path; T2V remains the safety fallback.
             const imgPrompt = [
+              continuityPrompt,
               s.visual || s.video_prompt,
               previousScene ? `Previous scene visual continuity: ${previousScene.visual || previousScene.video_prompt}` : "",
               nextScene ? `Next scene visual setup: ${nextScene.visual || nextScene.video_prompt}` : "",
               characterRoster ? `Recurring named characters, same identity every scene: ${characterRoster}` : "",
+              characterLock ? `Exact active character identity: ${formatCharacterLock(characterLock)}` : "",
               s.reference_image_direction ? `Reference note: ${s.reference_image_direction}` : "",
               s.color_grade ? `Color grade: ${s.color_grade}` : "",
               s.character ? `Featured character: ${s.character}` : "",
@@ -262,7 +300,7 @@ function AgentWorkspace() {
                 text: spokenLine,
                 voice: chosenVoice,
                 language: s.language || "English",
-                tone: s.voice_tone || "natural film dialogue",
+                tone: characterLock?.voiceStyle || s.voice_tone || "natural film dialogue",
                 pitch: s.pitch || "medium",
               },
             })
@@ -271,10 +309,13 @@ function AgentWorkspace() {
               })
               .catch(() => {});
             const fullPrompt = [
+              continuityPrompt,
               s.video_prompt,
+              `Project visual bible summary: ${formatVisualBible(bible)}`,
               previousScene ? `Previous scene visual: ${previousScene.visual || previousScene.video_prompt}` : "",
               nextScene ? `Next scene visual: ${nextScene.visual || nextScene.video_prompt}` : "",
               characterRoster ? `Same 2-3 named characters repeated in every scene: ${characterRoster}. Keep face, wardrobe, body language and relationship continuity exact.` : "",
+              characterLock ? `Active character must remain identical: ${formatCharacterLock(characterLock)}` : "",
               (s as { location?: string }).location ? `Exact location continuity: ${(s as { location?: string }).location}` : "",
               s.reference_image_direction ? `Character/style reference: ${s.reference_image_direction}` : "",
               s.editing_notes ? `Professional edit intent: ${s.editing_notes}` : "",
@@ -331,6 +372,7 @@ function AgentWorkspace() {
           colorGrade: c.colorGrade,
           editingNotes: c.editingNotes,
           referenceImageDirection: c.referenceImageDirection,
+          continuityPrompt: c.continuityPrompt,
         }));
         saveLibraryProject({
           id,
@@ -348,6 +390,7 @@ function AgentWorkspace() {
           metadata: {
             source: "agent",
             prompt,
+            visualBible: bible,
             referenceImages: refs.map((r) => ({ name: r.name, description: r.description })),
           },
         });
@@ -374,7 +417,7 @@ function AgentWorkspace() {
     setReferenceImages((prev) => [...prev, ...loaded].slice(0, 8));
   }
 
-  async function buildCharacterBible(b: CharacterBible) {
+  async function buildCharacterBible(b: CharacterSheetInput) {
     setBibleBusy(true);
     try {
       const lockedPrompt = [
@@ -401,7 +444,7 @@ function AgentWorkspace() {
   function exportProject() {
     downloadText(
       `${slugify(filmTitle || "makers-film")}-project.json`,
-      JSON.stringify({ id, prompt: currentPrompt, title: filmTitle, logline, referenceImages, scenes: cards }, null, 2),
+      JSON.stringify({ id, prompt: currentPrompt, title: filmTitle, logline, visualBible, referenceImages, scenes: cards }, null, 2),
       "application/json",
     );
   }
@@ -666,8 +709,8 @@ function AgentWorkspace() {
   );
 }
 
-function CharacterBibleModal({ busy, onClose, onBuild }: { busy: boolean; onClose: () => void; onBuild: (b: CharacterBible) => void }) {
-  const [b, setB] = useState<CharacterBible>({
+function CharacterBibleModal({ busy, onClose, onBuild }: { busy: boolean; onClose: () => void; onBuild: (b: CharacterSheetInput) => void }) {
+  const [b, setB] = useState<CharacterSheetInput>({
     name: "",
     descriptor: "Weathered detective, early 50s, stoic",
     skin: "#c9a888",

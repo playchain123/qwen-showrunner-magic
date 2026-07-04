@@ -6,6 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateSceneImage } from "@/lib/qwen.functions";
 import { pickBgm } from "@/lib/free-sounds";
 import { saveLibraryProject } from "@/lib/library";
+import { buildAdVisualBible, formatProductContinuity, formatVisualBible } from "@/lib/continuity";
 import {
   MAKERS_DEMO_LIMITS,
   getVideoPollDelayMs,
@@ -85,6 +86,15 @@ function CinematicAds() {
       const brief = `A ${toneObj.label.toLowerCase()} 15-30 second cinematic ad for ${brand}. Pitch: ${pitch}. Structure: 1) hook shot, 2) product/context, 3) emotional beat with talent, 4) CTA reveal ("${cta}"). Style: ${toneObj.desc}. No narrator voice-over — in-world dialogue only. Every shot MUST feature the brand's uploaded ${assets.some((a) => a.kind === "product") ? "product prominently" : "identity"}. Keep talent and product consistent across every shot.`;
       const referenceBrief = assets.map((a) => ({ name: a.name, description: a.kind === "product" ? "Hero product — must appear in every shot" : a.kind === "logo" ? "Brand logo — subtle placement + endcard" : "Brand talent — same face across all shots" }));
       const story = await generateStoryboard({ data: { prompt: brief, sceneCount: MAKERS_DEMO_LIMITS.maxScenes, learningContext: "", referenceImages: referenceBrief } });
+      const visualBible = buildAdVisualBible({
+        brand,
+        pitch,
+        toneLabel: toneObj.label,
+        toneDescription: toneObj.desc,
+        assets: assets.map((asset) => ({ kind: asset.kind, name: asset.name })),
+        scenes: story.scenes,
+      });
+      const productContinuity = formatProductContinuity(visualBible);
       const initShots: AdShot[] = story.scenes.map((s, i) => ({
         title: `#${i + 1} ${s.title}`,
         visual: s.visual,
@@ -103,7 +113,7 @@ function CinematicAds() {
         MAKERS_DEMO_LIMITS.maxParallelVideoJobs,
         async (s, idx) => {
           try {
-            const imgPrompt = [s.visual || s.video_prompt, s.color_grade ? `Color grade: ${s.color_grade}` : "", `Brand: ${brand}. Hero product/logo/talent must remain identical to references.`].filter(Boolean).join("\n");
+            const imgPrompt = [productContinuity, s.visual || s.video_prompt, s.color_grade ? `Color grade: ${s.color_grade}` : "", `Brand: ${brand}. Hero product/logo/talent must remain identical to references.`].filter(Boolean).join("\n");
             void generateSceneImage({ data: { prompt: imgPrompt, referenceImages: assets.map((a) => a.dataUrl), referenceWeight: 0.9 } })
               .then((img) => setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, posterUrl: img.image_url } : sh))))
               .catch(() => {});
@@ -112,7 +122,7 @@ function CinematicAds() {
                   .then((v) => setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, audioUrl: v.audio_url } : sh))))
                   .catch(() => {})
               : Promise.resolve();
-            const fullPrompt = [s.video_prompt, `Brand: ${brand}. Product/logo/talent from reference must appear.`, s.color_grade ? `Color grade: ${s.color_grade}` : ""].filter(Boolean).join("\n");
+            const fullPrompt = [productContinuity, `Project visual bible summary: ${formatVisualBible(visualBible)}`, s.video_prompt, `Brand: ${brand}. Product/logo/talent from reference must appear and remain identical.`, s.color_grade ? `Color grade: ${s.color_grade}` : "", `No product geometry changes, no logo drift, no package swap, no random colorway, no disconnected location style.`].filter(Boolean).join("\n");
             const { task_id } = await submitVideo({ data: { prompt: fullPrompt, size: "832*480", model: "wan2.2-t2v-plus" } });
             let attempts = 0;
             while (attempts < MAKERS_DEMO_LIMITS.maxVideoPollAttempts) {
@@ -185,6 +195,7 @@ function CinematicAds() {
             source: "ads",
             tone,
             toneDescription: toneObj.desc,
+            visualBible,
             assets: assets.map((asset) => ({ kind: asset.kind, name: asset.name })),
           },
         });
