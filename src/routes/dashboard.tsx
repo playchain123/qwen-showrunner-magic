@@ -53,9 +53,16 @@ export function TopBar() {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   useEffect(() => {
+    if (!supabase) return;
+
     supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? null));
   }, []);
   async function logout() {
+    if (!supabase) {
+      navigate({ to: "/auth", search: { mode: "login" } });
+      return;
+    }
+
     await supabase.auth.signOut();
     navigate({ to: "/auth", search: { mode: "login" } });
   }
@@ -133,6 +140,11 @@ function DashboardHome() {
   const promptRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
+    if (!supabase) {
+      navigate({ to: "/auth", search: { mode: "login" } });
+      return;
+    }
+
     supabase.auth.getUser().then(({ data }) => {
       if (!data.user) navigate({ to: "/auth", search: { mode: "login" } });
     });

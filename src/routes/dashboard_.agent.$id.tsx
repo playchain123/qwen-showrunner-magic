@@ -122,6 +122,11 @@ function AgentWorkspace() {
 
   // auth + seed
   useEffect(() => {
+    if (!supabase) {
+      navigate({ to: "/auth", search: { mode: "login" } });
+      return;
+    }
+
     supabase.auth.getUser().then(({ data }) => {
       if (!data.user) navigate({ to: "/auth", search: { mode: "login" } });
     });
