@@ -37,6 +37,11 @@ type AdShot = {
   done: boolean;
   videoUrl?: string;
   audioUrl?: string;
+  localizedScript?: string;
+  targetLanguage?: string;
+  ttsProvider?: string;
+  ttsSpeaker?: string;
+  regionalCritique?: unknown;
   posterUrl?: string;
   durationSeconds: number;
   colorGrade?: string;
@@ -182,8 +187,8 @@ function CinematicAds() {
               // T2V fallback below still carries the product bible.
             }
             const voiceP = s.spoken_line
-              ? generateVoice({ data: { text: s.spoken_line, voice: "Cherry", language: s.language || "English", tone: `premium YouTube ad voice-over, cinematic, emotional, natural, ${toneObj.label.toLowerCase()}`, pitch: s.pitch || "medium" } })
-                  .then((v) => setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, audioUrl: v.audio_url } : sh))))
+              ? generateVoice({ data: { text: s.spoken_line, voice: "Cherry", language: s.language || "English", tone: `premium YouTube ad voice-over, cinematic, emotional, natural, ${toneObj.label.toLowerCase()}`, pitch: s.pitch || "medium", beatId: `ad-${idx + 1}` } })
+                  .then((v) => setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, audioUrl: v.audio_url, localizedScript: v.localized_script, targetLanguage: v.target_language, ttsProvider: v.provider, ttsSpeaker: v.tts_speaker, regionalCritique: v.critique } : sh))))
                   .catch(() => {})
               : Promise.resolve();
             const fullPrompt = [
@@ -236,6 +241,11 @@ function CinematicAds() {
             title: shot.title,
             videoUrl: shot.videoUrl,
             audioUrl: shot.audioUrl,
+            localizedScript: shot.localizedScript,
+            targetLanguage: shot.targetLanguage,
+            ttsProvider: shot.ttsProvider,
+            ttsSpeaker: shot.ttsSpeaker,
+            regionalCritique: typeof shot.regionalCritique === "object" && shot.regionalCritique ? shot.regionalCritique as Record<string, unknown> : undefined,
             posterUrl: shot.posterUrl,
             visual: shot.visual,
             caption: shot.spokenLine,
@@ -250,6 +260,11 @@ function CinematicAds() {
             title: `Ad shot ${index + 1}`,
             videoUrl: shot.videoUrl,
             audioUrl: shot.audioUrl,
+            localizedScript: shot.localizedScript,
+            targetLanguage: shot.targetLanguage,
+            ttsProvider: shot.ttsProvider,
+            ttsSpeaker: shot.ttsSpeaker,
+            regionalCritique: typeof shot.regionalCritique === "object" && shot.regionalCritique ? shot.regionalCritique as Record<string, unknown> : undefined,
             posterUrl: shot.posterUrl,
             visual: shot.visual,
             spokenLine: shot.spokenLine,

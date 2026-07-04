@@ -28,6 +28,11 @@ export const Route = createFileRoute("/dashboard_/website")({
 
 type BeatPreview = WebsiteVideoBeat & {
   audioUrl?: string;
+  localizedScript?: string;
+  targetLanguage?: string;
+  ttsProvider?: string;
+  ttsSpeaker?: string;
+  regionalCritique?: unknown;
   actualVoDurationSeconds?: number;
   plannedDurationSeconds?: number;
   renderAsset?: WebsiteBeatRenderAsset;
@@ -111,10 +116,12 @@ function WebsiteVideoPage() {
                 language: "English",
                 tone: kit.brand.voice_tone,
                 pitch: "medium",
+                beatId: beat.beat_id,
+                clientStyleProfile: readWebsiteStyleMemory(kit.brand.name),
               },
             });
             const audioDuration = await resolveAudioDurationSeconds(voice.audio_url, beat.vo_line);
-            return { ...beat, audioUrl: voice.audio_url, actualVoDurationSeconds: audioDuration, done: true, progress: 100 };
+            return { ...beat, audioUrl: voice.audio_url, localizedScript: voice.localized_script, targetLanguage: voice.target_language, ttsProvider: voice.provider, ttsSpeaker: voice.tts_speaker, regionalCritique: voice.critique, actualVoDurationSeconds: audioDuration, done: true, progress: 100 };
           } catch {
             return { ...beat, actualVoDurationSeconds: estimateVoiceDurationSeconds(beat.vo_line), done: true, progress: 100 };
           }
@@ -144,6 +151,13 @@ function WebsiteVideoPage() {
     setStatus("Regenerating this video beat...");
     try {
       let audioUrl = beat.audioUrl;
+      let voiceMeta = {
+        localizedScript: beat.localizedScript,
+        targetLanguage: beat.targetLanguage,
+        ttsProvider: beat.ttsProvider,
+        ttsSpeaker: beat.ttsSpeaker,
+        regionalCritique: beat.regionalCritique,
+      };
       try {
         const voice = await generateVoice({
           data: {
@@ -152,15 +166,24 @@ function WebsiteVideoPage() {
             language: "English",
             tone: brandKit.brand.voice_tone,
             pitch: "medium",
+            beatId,
+            clientStyleProfile: readWebsiteStyleMemory(brandKit.brand.name),
           },
         });
         audioUrl = voice.audio_url;
+        voiceMeta = {
+          localizedScript: voice.localized_script,
+          targetLanguage: voice.target_language,
+          ttsProvider: voice.provider,
+          ttsSpeaker: voice.tts_speaker,
+          regionalCritique: voice.critique,
+        };
       } catch {
         audioUrl = beat.audioUrl;
       }
       const actualVoDurationSeconds = audioUrl ? await resolveAudioDurationSeconds(audioUrl, nextText) : estimateVoiceDurationSeconds(nextText);
       const editedBeats = beats.map((item) =>
-        item.beat_id === beatId ? { ...item, vo_line: nextText, audioUrl, actualVoDurationSeconds, done: true, progress: 100 } : item,
+        item.beat_id === beatId ? { ...item, vo_line: nextText, audioUrl, ...voiceMeta, actualVoDurationSeconds, done: true, progress: 100 } : item,
       );
       const pipeline = buildWebsiteRenderPipeline({ brandKit, beats: editedBeats });
       const nextBeats = mergePipelineBeats(pipeline.beats);
@@ -217,6 +240,11 @@ function WebsiteVideoPage() {
         caption: beat.vo_line,
         spokenLine: beat.vo_line,
         audioUrl: beat.audioUrl,
+        localizedScript: beat.localizedScript,
+        targetLanguage: beat.targetLanguage,
+        ttsProvider: beat.ttsProvider,
+        ttsSpeaker: beat.ttsSpeaker,
+        regionalCritique: typeof beat.regionalCritique === "object" && beat.regionalCritique ? beat.regionalCritique as Record<string, unknown> : undefined,
         shotType: beat.production_method,
         durationSeconds: beat.duration_seconds,
         colorGrade: `${kit.brand.primary_color_hex}, ${kit.brand.secondary_color_hex}, ${kit.brand.accent_color_hex}`,
@@ -231,6 +259,11 @@ function WebsiteVideoPage() {
         caption: beat.vo_line,
         spokenLine: beat.vo_line,
         audioUrl: beat.audioUrl,
+        localizedScript: beat.localizedScript,
+        targetLanguage: beat.targetLanguage,
+        ttsProvider: beat.ttsProvider,
+        ttsSpeaker: beat.ttsSpeaker,
+        regionalCritique: typeof beat.regionalCritique === "object" && beat.regionalCritique ? beat.regionalCritique as Record<string, unknown> : undefined,
         visual: beat.production_method,
         shotType: beat.production_method,
         durationSeconds: beat.duration_seconds,
@@ -810,6 +843,11 @@ function mergePipelineBeats(beats: WebsiteRenderPipeline["beats"]): BeatPreview[
   return beats.map((beat) => ({
     ...beat,
     audioUrl: beat.vo_audio_url,
+    localizedScript: "localizedScript" in beat ? String(beat.localizedScript || "") || undefined : undefined,
+    targetLanguage: "targetLanguage" in beat ? String(beat.targetLanguage || "") || undefined : undefined,
+    ttsProvider: "ttsProvider" in beat ? String(beat.ttsProvider || "") || undefined : undefined,
+    ttsSpeaker: "ttsSpeaker" in beat ? String(beat.ttsSpeaker || "") || undefined : undefined,
+    regionalCritique: "regionalCritique" in beat ? beat.regionalCritique : undefined,
     actualVoDurationSeconds: beat.actual_vo_duration_seconds,
     plannedDurationSeconds: beat.planned_duration_seconds,
     assetStatus: beat.asset_status,

@@ -12,10 +12,15 @@ export type LibraryScene = {
   location?: string;
   caption?: string;
   spokenLine?: string;
+  localizedScript?: string;
   character?: string;
   shotType?: string;
   language?: string;
+  targetLanguage?: string;
   voiceTone?: string;
+  ttsProvider?: string;
+  ttsSpeaker?: string;
+  regionalCritique?: Record<string, unknown>;
   pitch?: "low" | "medium" | "high";
   bgm?: string;
   sfx?: string;
@@ -272,10 +277,15 @@ function normalizeScenes(value: unknown): LibraryScene[] {
     location: stringField(scene.location),
     caption: stringField(scene.caption),
     spokenLine: stringField(scene.spokenLine),
+    localizedScript: stringField(scene.localizedScript),
     character: stringField(scene.character),
     shotType: stringField(scene.shotType),
     language: stringField(scene.language),
+    targetLanguage: stringField(scene.targetLanguage),
     voiceTone: stringField(scene.voiceTone),
+    ttsProvider: stringField(scene.ttsProvider),
+    ttsSpeaker: stringField(scene.ttsSpeaker),
+    regionalCritique: isRecord(scene.regionalCritique) ? scene.regionalCritique : undefined,
     pitch: scene.pitch === "low" || scene.pitch === "medium" || scene.pitch === "high" ? scene.pitch : undefined,
     bgm: stringField(scene.bgm),
     sfx: stringField(scene.sfx),

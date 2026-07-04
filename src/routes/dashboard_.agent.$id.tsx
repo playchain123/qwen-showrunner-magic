@@ -48,6 +48,11 @@ type StoryCard = {
   done: boolean;
   videoUrl?: string;
   audioUrl?: string;
+  localizedScript?: string;
+  targetLanguage?: string;
+  ttsProvider?: string;
+  ttsSpeaker?: string;
+  regionalCritique?: unknown;
   posterUrl?: string;
   visual?: string;
   location?: string;
@@ -341,10 +346,12 @@ function AgentWorkspace() {
                 language: s.language || "English",
                 tone: characterLock?.voiceStyle || s.voice_tone || "natural film dialogue",
                 pitch: s.pitch || "medium",
+                beatId: `scene-${idx + 1}`,
+                clientStyleProfile: learningContext,
               },
             })
               .then((v) => {
-                setCards((c) => c.map((card, i) => (i === idx ? { ...card, audioUrl: v.audio_url } : card)));
+                setCards((c) => c.map((card, i) => (i === idx ? { ...card, audioUrl: v.audio_url, localizedScript: v.localized_script, targetLanguage: v.target_language, ttsProvider: v.provider, ttsSpeaker: v.tts_speaker, regionalCritique: v.critique } : card)));
               })
               .catch(() => {});
             const fullPrompt = [
@@ -403,10 +410,15 @@ function AgentWorkspace() {
           location: c.location,
           caption: c.caption,
           spokenLine: c.spokenLine,
+          localizedScript: c.localizedScript,
           character: c.character,
           shotType: c.shotType,
           language: c.language,
+          targetLanguage: c.targetLanguage,
           voiceTone: c.voiceTone,
+          ttsProvider: c.ttsProvider,
+          ttsSpeaker: c.ttsSpeaker,
+          regionalCritique: typeof c.regionalCritique === "object" && c.regionalCritique ? c.regionalCritique as Record<string, unknown> : undefined,
           pitch: c.pitch,
           bgm: c.bgm,
           sfx: c.sfx,
