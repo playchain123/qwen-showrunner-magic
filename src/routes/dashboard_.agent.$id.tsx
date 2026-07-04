@@ -3,7 +3,22 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX, Download, ImagePlus, BookOpen, Copy, Pencil } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
-import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateSceneImage } from "@/lib/qwen.functions";
+import {
+  generateStoryboard,
+  submitVideo,
+  pollVideo,
+  generateVoice,
+  generateSceneImage,
+  compileSceneSpec,
+  critiqueScene,
+  upsertCharacterEmbedding,
+  scoreSceneAgainstCharacter,
+} from "@/lib/qwen.functions";
+import type { SceneSpec } from "@/lib/scene-spec";
+import { routeSceneToVideoModel } from "@/lib/model-router";
+import { compileNegativePrompt } from "@/lib/negative-prompts";
+import { generateSceneWithQualityGate, type QualityResult } from "@/lib/quality-gate";
+import { gradeClip, concatClips } from "@/lib/ffmpeg-post";
 import { pickBgm } from "@/lib/free-sounds";
 import { saveLibraryProject } from "@/lib/library";
 import {
@@ -62,6 +77,9 @@ type StoryCard = {
   editingNotes?: string;
   referenceImageDirection?: string;
   continuityPrompt?: string;
+  agentTrace?: QualityResult[];
+  routingReason?: string;
+  characterSimilarity?: number | null;
 };
 type VideoModel = "happyhorse-1.1-t2v" | "wan2.2-t2v-plus" | "happyhorse-1.1-i2v" | "wan2.2-i2v-plus";
 type VideoAttempt = { model: VideoModel; imageUrl?: string };
