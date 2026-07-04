@@ -2,7 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState, useRef, useEffect, type FormEvent } from "react";
 import { z } from "zod";
 import { Eye, EyeOff, ArrowRight } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { isSupabaseConfigured, supabase } from "@/integrations/supabase/client";
 
 function Mark({ className = "h-6 w-6" }: { className?: string }) {
   return (
@@ -56,16 +56,7 @@ function AuthPage() {
   const isSignup = mode === "signup";
   const navigate = useNavigate();
 
-  // Frontend Supabase env vars (injected at build time by Vite).
-  // Required in Lovable Cloud:
-  //   - VITE_SUPABASE_URL
-  //   - VITE_SUPABASE_PUBLISHABLE_KEY
-  // Server-only (NEVER expose to the browser):
-  //   - SUPABASE_SERVICE_ROLE_KEY
-  //   - SUPABASE_JWT_SECRET
-  const supabaseConfigured = Boolean(
-    import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-  );
+  const supabaseConfigured = isSupabaseConfigured && supabase !== null;
   const setupMessage =
     "Supabase is not configured. Please connect Supabase or add the required environment variables.";
 
@@ -103,7 +94,7 @@ function AuthPage() {
     e.preventDefault();
     setError(null);
     setMsg(null);
-    if (!supabaseConfigured) {
+    if (!supabaseConfigured || !supabase) {
       setError(setupMessage);
       return;
     }
