@@ -67,12 +67,12 @@ export function saveLibraryProject(project: LibraryProject, limit = 50) {
 function normalizeLibraryProject(raw: Record<string, unknown>): LibraryProject | null {
   const scenes = normalizeScenes(raw.scenes);
   const timeline = normalizeScenes(raw.timeline);
-  const typed = raw.type === "ad_video" || raw.type === "short_film";
-  const type: LibraryProjectType = typed
-    ? raw.type
-    : raw.brandName || raw.productPitch || raw.cta || raw.adTone
-    ? "ad_video"
-    : "short_film";
+  const type: LibraryProjectType =
+    raw.type === "ad_video" || raw.type === "short_film"
+      ? (raw.type as LibraryProjectType)
+      : raw.brandName || raw.productPitch || raw.cta || raw.adTone
+        ? "ad_video"
+        : "short_film";
   const projectScenes = scenes.length ? scenes : timeline;
   const sceneVideos = Array.isArray(raw.sceneVideos)
     ? raw.sceneVideos.filter((url): url is string => typeof url === "string" && url.length > 0)

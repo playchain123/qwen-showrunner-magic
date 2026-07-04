@@ -277,7 +277,7 @@ function FeatureModal({
   const [pace, setPace] = useState("fast paced");
   const [platform, setPlatform] = useState("YouTube");
   const [topic, setTopic] = useState("");
-  const [activeHero, setActiveHero] = useState(feature.hero || LOCAL_BACKGROUND_VIDEO);
+  const [activeHero, setActiveHero] = useState<string>(feature.hero || LOCAL_BACKGROUND_VIDEO);
   const [heroReady, setHeroReady] = useState(false);
   const topicRef = useRef<HTMLTextAreaElement>(null);
 
