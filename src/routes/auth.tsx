@@ -22,7 +22,7 @@ export const Route = createFileRoute("/auth")({
   component: AuthPage,
   head: () => ({
     meta: [
-      { title: "Sign in — Makers" },
+      { title: "Sign in - Makers" },
       { name: "description", content: "Sign in or create a Makers account." },
     ],
   }),
