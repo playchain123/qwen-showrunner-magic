@@ -287,6 +287,7 @@ function FeatureModal({
             muted
             loop
             playsInline
+            preload="metadata"
             onCanPlay={() => setHeroReady(true)}
             onError={() => {
               setHeroReady(false);

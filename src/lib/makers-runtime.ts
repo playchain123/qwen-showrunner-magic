@@ -21,7 +21,7 @@ export function normalizeSceneDuration(seconds: number | undefined) {
 
 export function getVideoPollDelayMs(attempt: number) {
   if (attempt < 6) return MAKERS_DEMO_LIMITS.videoPollBackoffMs[0];
-  if (attempt < 18) return MAKERS_DEMO_LIMITS.videoPollBackoffMs[1];
+  if (attempt < 12) return MAKERS_DEMO_LIMITS.videoPollBackoffMs[1];
   return MAKERS_DEMO_LIMITS.videoPollBackoffMs[2];
 }
 

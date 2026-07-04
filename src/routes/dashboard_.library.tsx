@@ -104,7 +104,7 @@ function LibraryPage() {
                       className="relative aspect-video w-full bg-black block"
                     >
                       {cover ? (
-                        <video src={cover} muted playsInline preload="metadata" className="absolute inset-0 h-full w-full object-cover" />
+                        <video src={cover} muted playsInline preload="none" className="absolute inset-0 h-full w-full object-cover" />
                       ) : (
                         <div className="absolute inset-0 flex items-center justify-center text-white/30"><Film className="h-8 w-8" /></div>
                       )}
@@ -177,7 +177,7 @@ function LibraryFilmPlayer({
         {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
       </button>
       <div className="relative h-screen w-screen overflow-hidden bg-black">
-        <video ref={videoRef} autoPlay playsInline muted onEnded={onNext} onError={onNext} className="absolute inset-0 h-full w-full object-cover" />
+        <video ref={videoRef} autoPlay playsInline muted preload="metadata" onEnded={onNext} onError={onNext} className="absolute inset-0 h-full w-full object-cover" />
         {scene.audioUrl && <audio key={scene.audioUrl} src={scene.audioUrl} autoPlay muted={muted} />}
         <div className="absolute inset-x-0 top-0 h-[5%] bg-black pointer-events-none" />
         <div className="absolute inset-x-0 bottom-0 h-[5%] bg-black pointer-events-none" />

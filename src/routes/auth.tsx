@@ -67,7 +67,11 @@ function AuthPage() {
   const vidRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    const t = setInterval(() => setClipIdx((i) => (i + 1) % reels.length), 6000);
+    const t = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        setClipIdx((i) => (i + 1) % reels.length);
+      }
+    }, 6000);
     return () => clearInterval(t);
   }, []);
 
@@ -228,6 +232,7 @@ function AuthPage() {
               muted
               loop
               playsInline
+              preload="metadata"
               className="absolute inset-0 h-full w-full object-cover"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
@@ -257,7 +262,7 @@ function AuthPage() {
                   src={r.url}
                   muted
                   playsInline
-                  preload="metadata"
+                  preload={i === clipIdx ? "metadata" : "none"}
                   className="absolute inset-0 h-full w-full object-cover"
                 />
                 <span className="absolute bottom-1 left-1 right-1 truncate text-[9px] text-white/90 text-left">

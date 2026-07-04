@@ -53,6 +53,7 @@ type StoryCard = {
 };
 type VideoModel = "happyhorse-1.1-t2v" | "wan2.2-t2v-plus" | "happyhorse-1.1-i2v" | "wan2.2-i2v-plus";
 type VideoAttempt = { model: VideoModel; imageUrl?: string };
+const videoTaskCache = new Map<string, string>();
 
 function AgentWorkspace() {
   const { id } = Route.useParams();
@@ -348,7 +349,7 @@ function AgentWorkspace() {
   }
 
   function send() {
-    if (!input.trim()) return;
+    if (thinking || !input.trim()) return;
     const text = input.trim();
     setMessages((m) => [...m, { role: "user", text }]);
     setInput("");
@@ -469,7 +470,11 @@ function AgentWorkspace() {
                   {referenceImages.length > 0 && <span className="text-[11px] text-white/50">{referenceImages.length} refs</span>}
                   <div className="flex items-center gap-2">
                     <span className="text-[11px] text-white/50">Makers lite ▾</span>
-                    <button onClick={send} className="h-7 w-7 rounded-full bg-white text-black flex items-center justify-center">
+                    <button
+                      onClick={send}
+                      disabled={thinking || !input.trim()}
+                      className="h-7 w-7 rounded-full bg-white text-black flex items-center justify-center disabled:opacity-40"
+                    >
                       <ArrowUp className="h-3.5 w-3.5" />
                     </button>
                   </div>
@@ -518,14 +523,24 @@ function AgentWorkspace() {
                         onClick={() => setPlayingFilm(true)}
                         className="group absolute inset-0"
                       >
-                        <video
-                          src={firstReady.videoUrl}
-                          muted
-                          playsInline
-                          autoPlay
-                          loop
-                          className="absolute inset-0 h-full w-full object-cover opacity-70 group-hover:opacity-90 transition"
-                        />
+                        {firstReady.videoUrl ? (
+                          <video
+                            src={firstReady.videoUrl}
+                            muted
+                            playsInline
+                            autoPlay
+                            loop
+                            preload="metadata"
+                            poster={firstReady.posterUrl}
+                            className="absolute inset-0 h-full w-full object-cover opacity-70 group-hover:opacity-90 transition"
+                          />
+                        ) : firstReady.posterUrl ? (
+                          <img
+                            src={firstReady.posterUrl}
+                            alt=""
+                            className="absolute inset-0 h-full w-full object-cover opacity-70 group-hover:opacity-90 transition"
+                          />
+                        ) : null}
                         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40" />
                         <div className="absolute inset-0 flex flex-col items-center justify-center">
                           <div className="h-16 w-16 rounded-full bg-white text-black flex items-center justify-center shadow-2xl group-hover:scale-105 transition">
@@ -963,20 +978,34 @@ async function submitAndPollVideo(
   const failures: string[] = [];
   for (const attempt of attempts) {
     try {
-      const { task_id } = await submitVideo({
-        data: {
-          prompt,
-          size: "832*480",
-          model: attempt.model,
-          imageUrl: attempt.imageUrl,
-        },
+      const cacheKey = JSON.stringify({
+        model: attempt.model,
+        imageUrl: attempt.imageUrl || "",
+        size: "832*480",
+        prompt,
       });
+      let task_id = videoTaskCache.get(cacheKey);
+      if (!task_id) {
+        const submitted = await submitVideo({
+          data: {
+            prompt,
+            size: "832*480",
+            model: attempt.model,
+            imageUrl: attempt.imageUrl,
+          },
+        });
+        task_id = submitted.task_id;
+        videoTaskCache.set(cacheKey, task_id);
+      }
       for (let pollAttempt = 0; pollAttempt < MAKERS_DEMO_LIMITS.maxVideoPollAttempts; pollAttempt++) {
         await new Promise((r) => setTimeout(r, getVideoPollDelayMs(pollAttempt)));
         onProgress(Math.min(10 + pollAttempt * 3, 92));
         const status = await pollVideo({ data: { task_id } });
         if (status.status === "SUCCEEDED" && status.video_url) return status.video_url;
-        if (status.status === "FAILED") throw new Error(status.error || "Task failed");
+        if (status.status === "FAILED") {
+          videoTaskCache.delete(cacheKey);
+          throw new Error(status.error || "Task failed");
+        }
       }
       throw new Error("Timed out waiting for video");
     } catch (err) {

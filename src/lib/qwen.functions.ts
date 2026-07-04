@@ -23,6 +23,31 @@ function qwenMaasGenerationUrl() {
   return `https://${workspaceId}.${region}.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation`;
 }
 
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  label: string,
+) {
+  const started = Date.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    console.info(`[qwen] ${label} ${res.status} ${Date.now() - started}ms`);
+    return res;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[qwen] ${label} failed after ${Date.now() - started}ms: ${message}`);
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 type Scene = {
   title: string;
   visual: string;
@@ -194,7 +219,7 @@ export const submitVideo = createServerFn({ method: "POST" })
       throw new Error(`${data.model} requires a storyboard still image`);
     }
 
-    const res = await fetch(VIDEO_SUBMIT_URL, {
+    const res = await fetchWithTimeout(VIDEO_SUBMIT_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${key}`,
@@ -208,7 +233,7 @@ export const submitVideo = createServerFn({ method: "POST" })
           : { prompt: data.prompt },
         parameters: { size: data.size },
       }),
-    });
+    }, 60_000, `video submit ${data.model}`);
     if (!res.ok) {
       const t = await res.text();
       throw new Error(`Video submit failed (${res.status}): ${t.slice(0, 300)}`);
@@ -225,9 +250,9 @@ export const pollVideo = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<{ status: string; video_url?: string; error?: string }> => {
     const key = process.env.DASHSCOPE_API_KEY;
     if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
-    const res = await fetch(TASK_URL(data.task_id), {
+    const res = await fetchWithTimeout(TASK_URL(data.task_id), {
       headers: { Authorization: `Bearer ${key}` },
-    });
+    }, 20_000, "video poll");
     if (!res.ok) {
       const t = await res.text();
       throw new Error(`Poll failed (${res.status}): ${t.slice(0, 300)}`);
@@ -308,7 +333,7 @@ export const generateVoice = createServerFn({ method: "POST" })
     const dashKey = process.env.DASHSCOPE_API_KEY;
     if (dashKey) {
       try {
-        const res = await fetch(qwenMaasGenerationUrl(), {
+        const res = await fetchWithTimeout(qwenMaasGenerationUrl(), {
           method: "POST",
           headers: {
             Authorization: `Bearer ${dashKey}`,
@@ -323,7 +348,7 @@ export const generateVoice = createServerFn({ method: "POST" })
             },
             parameters: { stream: false },
           }),
-        });
+        }, 60_000, "qwen tts");
         if (res.ok) {
           const j = (await res.json()) as {
             output?: { audio?: { url?: string; data?: string } };
@@ -342,7 +367,7 @@ export const generateVoice = createServerFn({ method: "POST" })
       const lovKey = process.env.LOVABLE_API_KEY;
       if (lovKey) {
         try {
-          const res = await fetch("https://ai.gateway.lovable.dev/v1/audio/speech", {
+          const res = await fetchWithTimeout("https://ai.gateway.lovable.dev/v1/audio/speech", {
             method: "POST",
             headers: {
               Authorization: `Bearer ${lovKey}`,
@@ -356,7 +381,7 @@ export const generateVoice = createServerFn({ method: "POST" })
               response_format: "mp3",
               instructions: richInstructions,
             }),
-          });
+          }, 60_000, "gateway tts fallback");
           if (res.ok) {
             return { audio_url: toDataUrl(await res.arrayBuffer()), provider: "gateway-tts" };
           }
@@ -410,7 +435,7 @@ export const generateSceneImage = createServerFn({ method: "POST" })
       unusedLegacyContent.push({ type: "image_url", image_url: { url: ref } });
     }
 
-    const res = await fetch(qwenMaasGenerationUrl(), {
+    const res = await fetchWithTimeout(qwenMaasGenerationUrl(), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${key}`,
@@ -434,7 +459,7 @@ export const generateSceneImage = createServerFn({ method: "POST" })
           n: 1,
         },
       }),
-    });
+    }, 90_000, "qwen image");
     if (!res.ok) {
       const t = await res.text();
       throw new Error(`Qwen image failed (${res.status}): ${t.slice(0, 240)}`);

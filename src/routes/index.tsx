@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowRight, ArrowUp, Plus, Check } from "lucide-react";
 import scene1 from "@/assets/scene-1.jpg";
 import scene2 from "@/assets/scene-2.jpg";
@@ -179,11 +179,22 @@ function HoverVideo({
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [activeSrc, setActiveSrc] = useState(src || LOCAL_BACKGROUND_VIDEO);
+  const [shouldLoadVideo, setShouldLoadVideo] = useState(false);
   const [videoReady, setVideoReady] = useState(false);
+
+  useEffect(() => {
+    if (!shouldLoadVideo || !videoReady) return;
+    const v = ref.current;
+    if (!v) return;
+    v.currentTime = 0;
+    v.play().catch(() => {});
+  }, [shouldLoadVideo, videoReady]);
+
   return (
     <div
       className={`group relative overflow-hidden bg-black ${className}`}
       onMouseEnter={() => {
+        setShouldLoadVideo(true);
         const v = ref.current;
         if (v) {
           v.currentTime = 0;
@@ -206,22 +217,24 @@ function HoverVideo({
           videoReady ? "group-hover:opacity-0" : ""
         }`}
       />
-      <video
-        ref={ref}
-        src={activeSrc}
-        muted
-        loop
-        playsInline
-        preload="none"
-        onCanPlay={() => setVideoReady(true)}
-        onError={() => {
-          setVideoReady(false);
-          if (activeSrc !== LOCAL_BACKGROUND_VIDEO) setActiveSrc(LOCAL_BACKGROUND_VIDEO);
-        }}
-        className={`absolute inset-0 h-full w-full object-cover opacity-0 transition-opacity duration-300 ${
-          videoReady ? "group-hover:opacity-100" : ""
-        }`}
-      />
+      {shouldLoadVideo && (
+        <video
+          ref={ref}
+          src={activeSrc}
+          muted
+          loop
+          playsInline
+          preload="none"
+          onCanPlay={() => setVideoReady(true)}
+          onError={() => {
+            setVideoReady(false);
+            if (activeSrc !== LOCAL_BACKGROUND_VIDEO) setActiveSrc(LOCAL_BACKGROUND_VIDEO);
+          }}
+          className={`absolute inset-0 h-full w-full object-cover opacity-0 transition-opacity duration-300 ${
+            videoReady ? "group-hover:opacity-100" : ""
+          }`}
+        />
+      )}
       {children}
     </div>
   );
@@ -238,11 +251,40 @@ function AutoplayVideo({
   className?: string;
   fallbackSrc?: string | null;
 }) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [activeSrc, setActiveSrc] = useState(src || LOCAL_BACKGROUND_VIDEO);
   const [videoReady, setVideoReady] = useState(false);
+  const [isVisible, setIsVisible] = useState(false);
+  const [shouldLoadVideo, setShouldLoadVideo] = useState(false);
+
+  useEffect(() => {
+    const node = rootRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        const visible = entry.isIntersecting;
+        setIsVisible(visible);
+        if (visible) setShouldLoadVideo(true);
+      },
+      { rootMargin: "420px 0px", threshold: 0.05 },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (isVisible) {
+      video.play().catch(() => {});
+      return;
+    }
+    video.pause();
+  }, [isVisible, activeSrc]);
 
   return (
-    <>
+    <div ref={rootRef} className="absolute inset-0">
       <img
         src={poster}
         alt=""
@@ -251,24 +293,27 @@ function AutoplayVideo({
           videoReady ? "opacity-0" : "opacity-100"
         } ${className}`}
       />
-      <video
-        src={activeSrc}
-        autoPlay
-        muted
-        loop
-        playsInline
-        preload="auto"
-        poster={poster}
-        onCanPlay={() => setVideoReady(true)}
-        onError={() => {
-          setVideoReady(false);
-          if (fallbackSrc && activeSrc !== fallbackSrc) setActiveSrc(fallbackSrc);
-        }}
-        className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-500 ${
-          videoReady ? "opacity-100" : "opacity-0"
-        } ${className}`}
-      />
-    </>
+      {shouldLoadVideo && (
+        <video
+          ref={videoRef}
+          src={activeSrc}
+          autoPlay
+          muted
+          loop
+          playsInline
+          preload="metadata"
+          poster={poster}
+          onCanPlay={() => setVideoReady(true)}
+          onError={() => {
+            setVideoReady(false);
+            if (fallbackSrc && activeSrc !== fallbackSrc) setActiveSrc(fallbackSrc);
+          }}
+          className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-500 ${
+            videoReady ? "opacity-100" : "opacity-0"
+          } ${className}`}
+        />
+      )}
+    </div>
   );
 }
 
