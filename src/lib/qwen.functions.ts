@@ -172,20 +172,27 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     return parsed;
   });
 
-/** Submit a text-to-video task to Qwen Cloud (async). Returns task_id. */
+/** Submit a text-to-video or image-to-video task to Qwen Cloud (async). Returns task_id. */
 export const submitVideo = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
     z
       .object({
         prompt: z.string().min(3),
         size: z.string().default("1280*720"),
-        model: z.enum(["happyhorse-1.1-t2v", "wan2.2-t2v-plus"]).default("wan2.2-t2v-plus"),
+        model: z
+          .enum(["happyhorse-1.1-t2v", "wan2.2-t2v-plus", "happyhorse-1.1-i2v", "wan2.2-i2v-plus"])
+          .default("happyhorse-1.1-t2v"),
+        imageUrl: z.string().url().optional(),
       })
       .parse(input),
   )
   .handler(async ({ data }): Promise<{ task_id: string }> => {
     const key = process.env.DASHSCOPE_API_KEY;
     if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
+    const isImageToVideo = data.model.includes("-i2v");
+    if (isImageToVideo && !data.imageUrl) {
+      throw new Error(`${data.model} requires a storyboard still image`);
+    }
 
     const res = await fetch(VIDEO_SUBMIT_URL, {
       method: "POST",
@@ -196,7 +203,9 @@ export const submitVideo = createServerFn({ method: "POST" })
       },
       body: JSON.stringify({
         model: data.model,
-        input: { prompt: data.prompt },
+        input: isImageToVideo
+          ? { prompt: data.prompt, img_url: data.imageUrl }
+          : { prompt: data.prompt },
         parameters: { size: data.size },
       }),
     });

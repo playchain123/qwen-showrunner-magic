@@ -51,6 +51,8 @@ type StoryCard = {
   editingNotes?: string;
   referenceImageDirection?: string;
 };
+type VideoModel = "happyhorse-1.1-t2v" | "wan2.2-t2v-plus" | "happyhorse-1.1-i2v" | "wan2.2-i2v-plus";
+type VideoAttempt = { model: VideoModel; imageUrl?: string };
 
 function AgentWorkspace() {
   const { id } = Route.useParams();
@@ -222,29 +224,40 @@ function AgentWorkspace() {
             let hash = 0;
             for (let i = 0; i < charKey.length; i++) hash = (hash * 31 + charKey.charCodeAt(i)) >>> 0;
             const chosenVoice = voicePool[hash % voicePool.length];
-            // Kick off a cinematic poster image per scene so the storyboard
-            // shows real thumbnails immediately, long before the video renders.
+            const previousScene = scenes[idx - 1];
+            const nextScene = scenes[idx + 1];
+            const characterRoster = buildCharacterRoster(scenes);
+            const spokenLine = s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, "");
+
+            // Generate the storyboard still first. I2V animation of this Qwen-Image
+            // still is the continuity-first path; T2V remains the safety fallback.
             const imgPrompt = [
               s.visual || s.video_prompt,
+              previousScene ? `Previous scene visual continuity: ${previousScene.visual || previousScene.video_prompt}` : "",
+              nextScene ? `Next scene visual setup: ${nextScene.visual || nextScene.video_prompt}` : "",
+              characterRoster ? `Recurring named characters, same identity every scene: ${characterRoster}` : "",
               s.reference_image_direction ? `Reference note: ${s.reference_image_direction}` : "",
               s.color_grade ? `Color grade: ${s.color_grade}` : "",
               s.character ? `Featured character: ${s.character}` : "",
+              `Storyboard still for scene ${idx + 1} of ${scenes.length}; match wardrobe, lighting, geography, and emotional continuity.`,
             ].filter(Boolean).join("\n");
-            void generateSceneImage({
-              data: {
-                prompt: imgPrompt,
-                referenceImages: refs.map((r) => r.dataUrl),
-                referenceWeight: refWeight,
-              },
-            })
-              .then((img) => {
-                setCards((c) => c.map((card, i) => (i === idx ? { ...card, posterUrl: img.image_url } : card)));
-              })
-              .catch(() => {});
-            // kick off voice + video in parallel
+            let storyboardStillUrl: string | undefined;
+            try {
+              const img = await generateSceneImage({
+                data: {
+                  prompt: imgPrompt,
+                  referenceImages: refs.map((r) => r.dataUrl),
+                  referenceWeight: refWeight,
+                },
+              });
+              storyboardStillUrl = img.image_url;
+              setCards((c) => c.map((card, i) => (i === idx ? { ...card, posterUrl: img.image_url, progress: 10 } : card)));
+            } catch {
+              // Poster generation improves continuity but should not block T2V fallback.
+            }
             const voiceP = generateVoice({
               data: {
-                text: s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, ""),
+                text: spokenLine,
                 voice: chosenVoice,
                 language: s.language || "English",
                 tone: s.voice_tone || "natural film dialogue",
@@ -257,34 +270,25 @@ function AgentWorkspace() {
               .catch(() => {});
             const fullPrompt = [
               s.video_prompt,
+              previousScene ? `Previous scene visual: ${previousScene.visual || previousScene.video_prompt}` : "",
+              nextScene ? `Next scene visual: ${nextScene.visual || nextScene.video_prompt}` : "",
+              characterRoster ? `Same 2-3 named characters repeated in every scene: ${characterRoster}. Keep face, wardrobe, body language and relationship continuity exact.` : "",
               (s as { location?: string }).location ? `Exact location continuity: ${(s as { location?: string }).location}` : "",
               s.reference_image_direction ? `Character/style reference: ${s.reference_image_direction}` : "",
               s.editing_notes ? `Professional edit intent: ${s.editing_notes}` : "",
               s.color_grade ? `Color grade: ${s.color_grade}` : "",
               s.sfx ? `On-screen action must support these clean SFX cues: ${s.sfx}` : "",
-              `This is scene ${idx + 1} of ${scenes.length} in the same short film. Preserve the same characters, wardrobe, lighting mood, location geography, emotional continuity and storyline from the surrounding scenes. Render as one continuous ${normalizeSceneDuration(s.duration_seconds)}-second cinematic shot.`,
+              spokenLine ? `Lip-sync exactly to this spoken line, matching mouth movement and emotional delivery: "${spokenLine}"` : "",
+              `Scene ${idx + 1} of ${scenes.length}. Match wardrobe, lighting mood, geography, eyeline and motion continuity from the previous shot; stage the last movement so it leads naturally into the next cut. No black frames, no fade-to-black, no title cards, no watermarks, seamless edit-ready plate.`,
+              `Render as one continuous ${normalizeSceneDuration(s.duration_seconds)}-second cinematic shot.`,
             ].filter(Boolean).join("\n");
-            const { task_id } = await submitVideo({
-              data: { prompt: fullPrompt, size: "832*480", model: "wan2.2-t2v-plus" },
+            const videoUrl = await submitAndPollVideo(fullPrompt, buildVideoAttempts(storyboardStillUrl), (progress) => {
+              setCards((c) => c.map((card, i) => (i === idx ? { ...card, progress } : card)));
             });
-            // poll
-            let attempts = 0;
-            while (attempts < MAKERS_DEMO_LIMITS.maxVideoPollAttempts) {
-              await new Promise((r) => setTimeout(r, getVideoPollDelayMs(attempts)));
-              attempts++;
-              const p = Math.min(10 + attempts * 3, 92);
-              setCards((c) => c.map((card, i) => (i === idx ? { ...card, progress: p } : card)));
-              const status = await pollVideo({ data: { task_id } });
-              if (status.status === "SUCCEEDED" && status.video_url) {
-                await voiceP;
-                setCards((c) =>
-                  c.map((card, i) => (i === idx ? { ...card, progress: 100, done: true, videoUrl: status.video_url } : card)),
-                );
-                return;
-              }
-              if (status.status === "FAILED") throw new Error(status.error || "Task failed");
-            }
-            throw new Error("Timed out waiting for video");
+            await voiceP;
+            setCards((c) =>
+              c.map((card, i) => (i === idx ? { ...card, progress: 100, done: true, videoUrl } : card)),
+            );
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
             setCards((c) => c.map((card, i) => (i === idx ? { ...card, caption: `${card.caption}\n⚠ ${msg}` } : card)));
@@ -930,6 +934,57 @@ function getRenderedCards(cards: StoryCard[]) {
   // still frames with dialogue+BGM so the full movie always plays end-to-end
   // even while later scenes are still rendering.
   return cards.filter((card) => Boolean(card.videoUrl) || Boolean(card.posterUrl));
+}
+
+function buildCharacterRoster(scenes: Array<{ character?: string }>) {
+  const names = scenes
+    .map((scene) => scene.character?.trim())
+    .filter((name): name is string => Boolean(name));
+  return Array.from(new Set(names)).slice(0, 3).join(", ");
+}
+
+function buildVideoAttempts(storyboardStillUrl?: string): VideoAttempt[] {
+  const attempts: VideoAttempt[] = [];
+  if (storyboardStillUrl) {
+    attempts.push(
+      { model: "happyhorse-1.1-i2v", imageUrl: storyboardStillUrl },
+      { model: "wan2.2-i2v-plus", imageUrl: storyboardStillUrl },
+    );
+  }
+  attempts.push({ model: "happyhorse-1.1-t2v" }, { model: "wan2.2-t2v-plus" });
+  return attempts;
+}
+
+async function submitAndPollVideo(
+  prompt: string,
+  attempts: VideoAttempt[],
+  onProgress: (progress: number) => void,
+) {
+  const failures: string[] = [];
+  for (const attempt of attempts) {
+    try {
+      const { task_id } = await submitVideo({
+        data: {
+          prompt,
+          size: "832*480",
+          model: attempt.model,
+          imageUrl: attempt.imageUrl,
+        },
+      });
+      for (let pollAttempt = 0; pollAttempt < MAKERS_DEMO_LIMITS.maxVideoPollAttempts; pollAttempt++) {
+        await new Promise((r) => setTimeout(r, getVideoPollDelayMs(pollAttempt)));
+        onProgress(Math.min(10 + pollAttempt * 3, 92));
+        const status = await pollVideo({ data: { task_id } });
+        if (status.status === "SUCCEEDED" && status.video_url) return status.video_url;
+        if (status.status === "FAILED") throw new Error(status.error || "Task failed");
+      }
+      throw new Error("Timed out waiting for video");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      failures.push(`${attempt.model}: ${message}`);
+    }
+  }
+  throw new Error(`All video engines failed. ${failures.join(" | ")}`);
 }
 
 /**
