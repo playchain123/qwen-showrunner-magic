@@ -59,7 +59,7 @@ export async function gradeClip(inputUrl: string): Promise<string> {
 
   const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
   const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-  const blob = new Blob([arrayBuffer], { type: "video/mp4" });
+  const blob = new Blob([new Uint8Array(arrayBuffer)], { type: "video/mp4" });
   return URL.createObjectURL(blob);
 }
 
@@ -99,7 +99,7 @@ export async function concatClips(clipUrls: string[]): Promise<string> {
 
   const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
   const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-  const blob = new Blob([arrayBuffer], { type: "video/mp4" });
+  const blob = new Blob([new Uint8Array(arrayBuffer)], { type: "video/mp4" });
   return URL.createObjectURL(blob);
 }
 

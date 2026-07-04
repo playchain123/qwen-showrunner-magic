@@ -746,7 +746,7 @@ export const upsertCharacterEmbedding = createServerFn({ method: "POST" })
           project_id: data.project_id,
           character_token: data.character_token,
           embedding: embedding as unknown as string, // pgvector accepts array literals
-          metadata: data.metadata,
+          metadata: data.metadata as Record<string, unknown> as never,
         },
         { onConflict: "user_id,project_id,character_token" },
       );
