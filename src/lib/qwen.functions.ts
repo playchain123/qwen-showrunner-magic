@@ -11,6 +11,40 @@ const VIDEO_SUBMIT_URL = `${DASHSCOPE_BASE}/api/v1/services/aigc/video-generatio
 const TASK_URL = (id: string) => `${DASHSCOPE_BASE}/api/v1/tasks/${id}`;
 const LOVABLE_GATEWAY = "https://ai.gateway.lovable.dev";
 
+// Allow only trusted external hosts for URLs we forward to third-party AI
+// providers. Prevents SSRF-by-proxy against cloud-internal endpoints.
+const ALLOWED_MEDIA_HOSTS = new Set([
+  "dashscope-intl.aliyuncs.com",
+  "dashscope.aliyuncs.com",
+  "oss-cn-beijing.aliyuncs.com",
+  "oss-accelerate.aliyuncs.com",
+  "dashscope-result.oss-cn-beijing.aliyuncs.com",
+  "dashscope-result-sh.oss-cn-shanghai.aliyuncs.com",
+  "dashscope-result-wlcb.oss-cn-wulanchabu.aliyuncs.com",
+  "acecxckmvlaxygbvubub.supabase.co",
+]);
+
+function isSafeExternalUrl(value: string): boolean {
+  if (value.startsWith("data:image/") || value.startsWith("data:audio/")) return true;
+  try {
+    const u = new URL(value);
+    if (u.protocol !== "https:") return false;
+    return ALLOWED_MEDIA_HOSTS.has(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+const safeMediaUrl = z
+  .string()
+  .url()
+  .max(2048)
+  .refine(isSafeExternalUrl, {
+    message: "URL host is not on the allowlist for external media forwarding",
+  });
+
+const TASK_ID_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;
+
 function allowNonQwenFallbacks() {
   return process.env.ALLOW_NON_QWEN_FALLBACKS === "true";
 }
@@ -83,11 +117,17 @@ export const generateStoryboard = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
     z
       .object({
-        prompt: z.string().min(1),
+        prompt: z.string().min(1).max(4000),
         sceneCount: z.number().int().min(1).max(3).default(3),
-        learningContext: z.string().optional().default(""),
+        learningContext: z.string().max(2000).optional().default(""),
         referenceImages: z
-          .array(z.object({ name: z.string(), description: z.string().optional().default("") }))
+          .array(
+            z.object({
+              name: z.string().max(200),
+              description: z.string().max(500).optional().default(""),
+            }),
+          )
+          .max(8)
           .optional()
           .default([]),
       })
@@ -210,12 +250,12 @@ export const submitVideo = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
     z
       .object({
-        prompt: z.string().min(3),
+        prompt: z.string().min(3).max(4000),
         size: z.string().default("1280*720"),
         model: z
           .enum(["happyhorse-1.1-t2v", "wan2.2-t2v-plus", "happyhorse-1.1-i2v", "wan2.2-i2v-plus"])
           .default("happyhorse-1.1-t2v"),
-        imageUrl: z.string().url().optional(),
+        imageUrl: safeMediaUrl.optional(),
       })
       .parse(input),
   )
@@ -255,7 +295,15 @@ export const submitVideo = createServerFn({ method: "POST" })
 /** Poll a video-gen task. Returns status + video url when SUCCEEDED. */
 export const pollVideo = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ task_id: z.string().min(1) }).parse(input))
+  .inputValidator((input: unknown) =>
+    z
+      .object({
+        task_id: z
+          .string()
+          .regex(TASK_ID_PATTERN, "Invalid task_id format"),
+      })
+      .parse(input),
+  )
   .handler(async ({ data }): Promise<{ status: string; video_url?: string; error?: string }> => {
     const key = process.env.DASHSCOPE_API_KEY;
     if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
@@ -410,8 +458,8 @@ export const generateSceneImage = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
     z
       .object({
-        prompt: z.string().min(3),
-        referenceImages: z.array(z.string()).optional().default([]),
+        prompt: z.string().min(3).max(4000),
+        referenceImages: z.array(safeMediaUrl).max(4).optional().default([]),
         referenceWeight: z.number().min(0).max(1).optional().default(0.75),
       })
       .parse(input),
@@ -486,7 +534,7 @@ export const generateSceneImage = createServerFn({ method: "POST" })
 /** Transcribe an audio URL with Paraformer-v2 to get word-level timing for subtitle sync. */
 export const transcribeAudio = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ audio_url: z.string().url() }).parse(input))
+  .inputValidator((input: unknown) => z.object({ audio_url: safeMediaUrl }).parse(input))
   .handler(async ({ data }): Promise<{ words: Array<{ text: string; begin: number; end: number }> }> => {
     const key = process.env.DASHSCOPE_API_KEY;
     if (!key) return { words: [] };
@@ -541,11 +589,11 @@ export const compileSceneSpec = createServerFn({ method: "POST" })
     z
       .object({
         scene_id: z.string().min(1),
-        director_beat: z.string().min(1),
+        director_beat: z.string().min(1).max(4000),
         prior_scene_ref: z.string().nullable().optional().default(null),
-        prior_scene_visual: z.string().optional().default(""),
+        prior_scene_visual: z.string().max(2000).optional().default(""),
         character_token: z.string().min(1),
-        wardrobe_token: z.string().optional().default(""),
+        wardrobe_token: z.string().max(500).optional().default(""),
       })
       .parse(input),
   )
@@ -635,7 +683,7 @@ export const critiqueScene = createServerFn({ method: "POST" })
     z
       .object({
         spec: SceneSpecSchema,
-        image_url: z.string().url(),
+        image_url: safeMediaUrl,
       })
       .parse(input),
   )
