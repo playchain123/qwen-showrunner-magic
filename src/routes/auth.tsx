@@ -29,10 +29,26 @@ export const Route = createFileRoute("/auth")({
 });
 
 const reels = [
-  { url: "/videos/vid-1.mp4", title: "Who am I?", tag: "Cinematic short" },
-  { url: "/videos/vid-2.mp4", title: "The Interview", tag: "Portrait drama" },
-  { url: "/videos/vid-3.mp4", title: "Nightwalker", tag: "Cyberpunk teaser" },
-  { url: "/videos/vid-4.mp4", title: "Skyline", tag: "Epic wide shot" },
+  {
+    url: "https://id-preview--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app/__l5e/assets-v1/0c2e9db4-e0c4-4b61-aed1-5e5b0ade3b1c/auth-reel.mp4",
+    title: "Who am I?",
+    tag: "Cinematic short",
+  },
+  {
+    url: "https://id-preview--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app/__l5e/assets-v1/4192efe5-4238-48bf-9eb4-6cc74fc61a31/auth-2.mp4",
+    title: "The Interview",
+    tag: "Portrait drama",
+  },
+  {
+    url: "https://id-preview--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app/__l5e/assets-v1/88e74376-6309-477d-84b5-9266720fb05c/auth-3.mp4",
+    title: "Nightwalker",
+    tag: "Cyberpunk teaser",
+  },
+  {
+    url: "https://id-preview--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app/__l5e/assets-v1/b2e4e21b-03c7-4711-9c37-f1d71cc4aa86/auth-4.mp4",
+    title: "Skyline",
+    tag: "Epic wide shot",
+  },
 ];
 
 function AuthPage() {
@@ -237,7 +253,13 @@ function AuthPage() {
                   i === clipIdx ? "border-white" : "border-white/10 opacity-60 hover:opacity-100"
                 }`}
               >
-                <video src={r.url} muted playsInline preload="metadata" className="absolute inset-0 h-full w-full object-cover" />
+                <video
+                  src={r.url}
+                  muted
+                  playsInline
+                  preload="metadata"
+                  className="absolute inset-0 h-full w-full object-cover"
+                />
                 <span className="absolute bottom-1 left-1 right-1 truncate text-[9px] text-white/90 text-left">
                   {r.title}
                 </span>

@@ -86,10 +86,42 @@ export function TopBar() {
 }
 
 const FEATURED = [
-  { id: "product-ads", label: "Product Ads", icon: Package, hero: LOCAL_VIDEOS[0], poster: slide1, title: "Short ad video", kind: "ad" },
-  { id: "ai-shorts", label: "Create AI shorts", icon: Film, hero: LOCAL_VIDEOS[1], poster: slide2, title: "AI short film", kind: "short" },
-  { id: "use-script", label: "Use my script", icon: FileText, hero: LOCAL_VIDEOS[2], poster: slide3, title: "Turn script into video", kind: "script" },
-  { id: "explainer", label: "Make explainer video", icon: Video, hero: LOCAL_VIDEOS[3], poster: slide4, title: "Explainer video", kind: "explainer" },
+  {
+    id: "product-ads",
+    label: "Product Ads",
+    icon: Package,
+    hero: "https://id-preview--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app/__l5e/assets-v1/6d74569b-48ca-469d-a154-d12bf99ce53e/mwm-2.mp4",
+    poster: slide1,
+    title: "Short ad video",
+    kind: "ad",
+  },
+  {
+    id: "ai-shorts",
+    label: "Create AI shorts",
+    icon: Film,
+    hero: "https://id-preview--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app/__l5e/assets-v1/a06b0e52-903c-4da3-ab72-e3824c502e45/mwm-3.mp4",
+    poster: slide2,
+    title: "AI short film",
+    kind: "short",
+  },
+  {
+    id: "use-script",
+    label: "Use my script",
+    icon: FileText,
+    hero: "https://id-preview--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app/__l5e/assets-v1/d84eef6e-5aef-4684-b084-e081d3744f0e/mwm-4.mp4",
+    poster: slide3,
+    title: "Turn script into video",
+    kind: "script",
+  },
+  {
+    id: "explainer",
+    label: "Make explainer video",
+    icon: Video,
+    hero: "https://id-preview--b29dc86a-d18c-4045-b264-43c58a1abcde.lovable.app/__l5e/assets-v1/d1ca7aa7-ba96-4209-89b8-1b0573c27f84/explainer-hero.mp4",
+    poster: slide4,
+    title: "Explainer video",
+    kind: "explainer",
+  },
 ] as const;
 
 function DashboardHome() {

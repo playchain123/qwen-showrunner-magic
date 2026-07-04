@@ -601,8 +601,8 @@ function MadeWithMakers() {
     "MUSIC VIDEOS",
   ];
   return (
-    <section className="relative px-4 py-10 md:px-8 md:py-16">
-      <div className="mx-auto w-full max-w-[1500px]">
+    <section className="px-6 py-24 md:py-36">
+      <div className="max-w-6xl mx-auto">
         {/* Hero autoplay video */}
         <div className="relative min-h-[360px] w-full overflow-hidden rounded-[18px] bg-black md:aspect-[21/8] md:min-h-0">
           <AutoplayVideo
