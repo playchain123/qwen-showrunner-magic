@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { clampSceneCount, normalizeSceneDuration } from "./makers-runtime";
+import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 
 const DASHSCOPE_BASE = "https://dashscope-intl.aliyuncs.com";
 const CHAT_URL = `${DASHSCOPE_BASE}/compatible-mode/v1/chat/completions`;
@@ -76,6 +77,7 @@ type Storyboard = {
 
 /** Generate a full short-drama storyboard from a logline using Qwen3.7-Max. */
 export const generateStoryboard = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) =>
     z
       .object({
@@ -202,6 +204,7 @@ export const generateStoryboard = createServerFn({ method: "POST" })
 
 /** Submit a text-to-video or image-to-video task to Qwen Cloud (async). Returns task_id. */
 export const submitVideo = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) =>
     z
       .object({
@@ -249,6 +252,7 @@ export const submitVideo = createServerFn({ method: "POST" })
 
 /** Poll a video-gen task. Returns status + video url when SUCCEEDED. */
 export const pollVideo = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) => z.object({ task_id: z.string().min(1) }).parse(input))
   .handler(async ({ data }): Promise<{ status: string; video_url?: string; error?: string }> => {
     const key = process.env.DASHSCOPE_API_KEY;
@@ -272,6 +276,7 @@ export const pollVideo = createServerFn({ method: "POST" })
  * distinct. Non-Qwen fallback is opt-in through ALLOW_NON_QWEN_FALLBACKS.
  * Returns a data URL (or hosted URL) playable in <audio>. */
 export const generateVoice = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) =>
     z
       .object({
@@ -399,6 +404,7 @@ export const generateVoice = createServerFn({ method: "POST" })
 
 /** Generate a cinematic scene poster image via Qwen-Image. */
 export const generateSceneImage = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) =>
     z
       .object({
@@ -477,6 +483,7 @@ export const generateSceneImage = createServerFn({ method: "POST" })
 
 /** Transcribe an audio URL with Paraformer-v2 to get word-level timing for subtitle sync. */
 export const transcribeAudio = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) => z.object({ audio_url: z.string().url() }).parse(input))
   .handler(async ({ data }): Promise<{ words: Array<{ text: string; begin: number; end: number }> }> => {
     const key = process.env.DASHSCOPE_API_KEY;
