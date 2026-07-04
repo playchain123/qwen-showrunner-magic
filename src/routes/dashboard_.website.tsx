@@ -12,6 +12,12 @@ import {
   type WebsiteVideoPlan,
   type WebsiteVideoType,
 } from "@/lib/website-video";
+import {
+  buildWebsiteRenderPipeline,
+  estimateVoiceDurationSeconds,
+  type WebsiteBeatRenderAsset,
+  type WebsiteRenderPipeline,
+} from "@/lib/website-render-pipeline";
 import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/dashboard_/website")({
@@ -21,6 +27,9 @@ export const Route = createFileRoute("/dashboard_/website")({
 
 type BeatPreview = WebsiteVideoBeat & {
   audioUrl?: string;
+  actualVoDurationSeconds?: number;
+  plannedDurationSeconds?: number;
+  renderAsset?: WebsiteBeatRenderAsset;
   done?: boolean;
   progress?: number;
 };
@@ -39,6 +48,7 @@ function WebsiteVideoPage() {
   const [targetDuration, setTargetDuration] = useState(180);
   const [brandKit, setBrandKit] = useState<WebsiteBrandKit | null>(null);
   const [plan, setPlan] = useState<WebsiteVideoPlan | null>(null);
+  const [renderPipeline, setRenderPipeline] = useState<WebsiteRenderPipeline | null>(null);
   const [beats, setBeats] = useState<BeatPreview[]>([]);
   const [running, setRunning] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -62,6 +72,7 @@ function WebsiteVideoPage() {
     setRunning(true);
     setBrandKit(null);
     setPlan(null);
+    setRenderPipeline(null);
     setBeats([]);
     setStatus("Extracting brand kit from website...");
     try {
@@ -98,16 +109,21 @@ function WebsiteVideoPage() {
                 pitch: "medium",
               },
             });
-            return { ...beat, audioUrl: voice.audio_url, done: true, progress: 100 };
+            const audioDuration = await resolveAudioDurationSeconds(voice.audio_url, beat.vo_line);
+            return { ...beat, audioUrl: voice.audio_url, actualVoDurationSeconds: audioDuration, done: true, progress: 100 };
           } catch {
-            return { ...beat, done: true, progress: 100 };
+            return { ...beat, actualVoDurationSeconds: estimateVoiceDurationSeconds(beat.vo_line), done: true, progress: 100 };
           }
         }),
       );
-      setBeats(renderedBeats);
-      saveWebsiteProject(kit, nextPlan, renderedBeats);
+      const pipeline = buildWebsiteRenderPipeline({ brandKit: kit, beats: renderedBeats });
+      const pipelineBeats = mergePipelineBeats(pipeline.beats);
+      setBeats(pipelineBeats);
+      setPlan({ ...nextPlan, beats: pipeline.beats });
+      setRenderPipeline(pipeline);
+      saveWebsiteProject(kit, { ...nextPlan, beats: pipeline.beats }, pipelineBeats, pipeline);
       writeWebsiteStyleMemory(kit.brand.name, nextPlan);
-      setStatus("Website video plan ready - saved to Library.");
+      setStatus("Website render pipeline ready - compiled assets, reconciled timing, and saved to Library.");
     } catch (err) {
       setStatus(`Failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -138,11 +154,17 @@ function WebsiteVideoPage() {
       } catch {
         audioUrl = beat.audioUrl;
       }
-      const nextBeats = beats.map((item) => (item.beat_id === beatId ? { ...item, vo_line: nextText, audioUrl, done: true, progress: 100 } : item));
+      const actualVoDurationSeconds = audioUrl ? await resolveAudioDurationSeconds(audioUrl, nextText) : estimateVoiceDurationSeconds(nextText);
+      const editedBeats = beats.map((item) =>
+        item.beat_id === beatId ? { ...item, vo_line: nextText, audioUrl, actualVoDurationSeconds, done: true, progress: 100 } : item,
+      );
+      const pipeline = buildWebsiteRenderPipeline({ brandKit, beats: editedBeats });
+      const nextBeats = mergePipelineBeats(pipeline.beats);
       setBeats(nextBeats);
       setPlan((current) =>
-        current ? { ...current, beats: current.beats.map((item) => (item.beat_id === beatId ? { ...item, vo_line: nextText } : item)) } : current,
+        current ? { ...current, beats: pipeline.beats } : current,
       );
+      setRenderPipeline(pipeline);
       setEditingBeat(null);
       setStatus("Beat updated. Preview or download the regenerated website video.");
     } finally {
@@ -168,7 +190,7 @@ function WebsiteVideoPage() {
     }
   }
 
-  function saveWebsiteProject(kit: WebsiteBrandKit, nextPlan: WebsiteVideoPlan, renderedBeats: BeatPreview[]) {
+  function saveWebsiteProject(kit: WebsiteBrandKit, nextPlan: WebsiteVideoPlan, renderedBeats: BeatPreview[], pipeline: WebsiteRenderPipeline | null) {
     const now = new Date().toISOString();
     saveLibraryProject({
       id: `website-${Date.now()}`,
@@ -190,7 +212,7 @@ function WebsiteVideoPage() {
         shotType: beat.production_method,
         durationSeconds: beat.duration_seconds,
         colorGrade: `${kit.brand.primary_color_hex}, ${kit.brand.secondary_color_hex}, ${kit.brand.accent_color_hex}`,
-        editingNotes: `Transition: ${beat.transition_out}. ${beat.screen_capture_spec ? `Capture ${beat.screen_capture_spec.source_page}` : "Motion graphics using brand kit"}`,
+        editingNotes: `Transition: ${beat.transition_out}. Render asset: ${beat.renderAsset?.production_method || beat.production_method}. ${beat.screen_capture_spec ? `Capture ${beat.screen_capture_spec.source_page}` : "Motion graphics using brand kit"}`,
       })),
       timeline: renderedBeats.map((beat) => ({
         title: beat.beat_purpose,
@@ -206,6 +228,9 @@ function WebsiteVideoPage() {
         source: "website",
         brandKit: kit,
         websiteVideoPlan: nextPlan,
+        renderPipeline: pipeline,
+        renderAssets: pipeline?.assets,
+        renderChecklist: pipeline?.checklist,
       },
     });
   }
@@ -352,6 +377,25 @@ function WebsiteVideoPage() {
                   <Stat label="Lint Score" value={`${Math.round(plan.production_value_self_check.score * 100)}%`} />
                   <Stat label="Verdict" value={plan.production_value_self_check.verdict} />
                 </div>
+                {renderPipeline && (
+                  <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium">Render Pipeline</div>
+                        <div className="text-[11px] text-white/45">Plan compiled into executable beat assets and reconciled against voice timing.</div>
+                      </div>
+                      <span className="rounded-full border border-white/15 px-2.5 py-1 text-[10px] uppercase tracking-widest text-white/50">{renderPipeline.target.replaceAll("_", " ")}</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {renderPipeline.checklist.map((item) => (
+                        <div key={item.id} className="flex items-start gap-2 rounded-md border border-white/10 bg-black/25 p-2 text-[11px] text-white/55">
+                          <span className={`mt-0.5 h-2 w-2 rounded-full ${item.ok ? "bg-emerald-300" : "bg-amber-300"}`} />
+                          <span>{item.note}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="rounded-xl border border-white/10 bg-white/[0.03] overflow-hidden">
                   <div className="aspect-video bg-neutral-950 relative">
                     {brandKit && beats[0] ? (
@@ -416,6 +460,10 @@ function WebsiteVideoPage() {
                       <div className="p-3 text-[11px] text-white/50 space-y-1">
                         {beat.screen_capture_spec && <div>Capture: {beat.screen_capture_spec.source_page}</div>}
                         {beat.motion_graphic_spec && <div>Motion: {beat.motion_graphic_spec.layout}</div>}
+                        {beat.renderAsset?.captureChoreography && <div>Choreography: {beat.renderAsset.captureChoreography.interaction_sequence.join(" -> ")}</div>}
+                        {beat.renderAsset?.motionGraphicSpec && <div>Compiled layers: {beat.renderAsset.motionGraphicSpec.elements.length}</div>}
+                        {beat.renderAsset?.brollPromptSpec && <div>B-roll prompt compiled</div>}
+                        {beat.actualVoDurationSeconds && <div>Timing: VO {beat.actualVoDurationSeconds.toFixed(1)}s / resolved {beat.duration_seconds.toFixed(1)}s</div>}
                         {beat.done && <div className="flex items-center gap-1 text-emerald-300"><Check className="h-3 w-3" /> Voice ready</div>}
                         {editingBeat?.beatId === beat.beat_id && (
                           <div className="pt-2 flex justify-end gap-2">
@@ -703,6 +751,45 @@ function validColor(value: string | null | undefined, fallback: string) {
   return value && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
 }
 
+function mergePipelineBeats(beats: WebsiteRenderPipeline["beats"]): BeatPreview[] {
+  return beats.map((beat) => ({
+    ...beat,
+    audioUrl: beat.vo_audio_url,
+    actualVoDurationSeconds: beat.actual_vo_duration_seconds,
+    plannedDurationSeconds: beat.planned_duration_seconds,
+    renderAsset: beat.render_asset,
+    done: true,
+    progress: 100,
+  }));
+}
+
+function resolveAudioDurationSeconds(audioUrl: string | undefined, fallbackText: string) {
+  if (!audioUrl || typeof Audio === "undefined") return Promise.resolve(estimateVoiceDurationSeconds(fallbackText));
+  return new Promise<number>((resolve) => {
+    const audio = new Audio();
+    const fallback = estimateVoiceDurationSeconds(fallbackText);
+    let settled = false;
+    const done = (value: number) => {
+      if (settled) return;
+      settled = true;
+      audio.removeAttribute("src");
+      audio.load();
+      resolve(Number.isFinite(value) && value > 0 ? Number(value.toFixed(2)) : fallback);
+    };
+    const timeout = window.setTimeout(() => done(fallback), 2500);
+    audio.preload = "metadata";
+    audio.onloadedmetadata = () => {
+      window.clearTimeout(timeout);
+      done(audio.duration);
+    };
+    audio.onerror = () => {
+      window.clearTimeout(timeout);
+      done(fallback);
+    };
+    audio.src = audioUrl;
+  });
+}
+
 async function renderWebsiteVideoDownload({
   brandKit,
   beats,
@@ -780,6 +867,10 @@ function drawBeatFrame(
   const secondary = validColor(brandKit.brand.secondary_color_hex, "#2a2a2a");
   const accent = validColor(brandKit.brand.accent_color_hex, "#ffffff");
   const neutral = validColor(brandKit.brand.neutral_color_hex, "#080808");
+  const motionSpec = beat.renderAsset?.motionGraphicSpec;
+  const captureSpec = beat.renderAsset?.captureChoreography;
+  const brollSpec = beat.renderAsset?.brollPromptSpec;
+  const panelTitle = motionSpec?.layout?.replaceAll("_", " ") || captureSpec?.framing?.replaceAll("_", " ") || brollSpec?.positive_prompt.split(".")[0] || beat.production_method;
   const gradient = ctx.createLinearGradient(0, 0, width, height);
   gradient.addColorStop(0, beat.production_method === "screen_capture" ? neutral : primary);
   gradient.addColorStop(0.58, primary);
@@ -816,15 +907,16 @@ function drawBeatFrame(
   ctx.font = "600 18px Arial";
   ctx.fillText(beat.production_method.replace("_", " ").toUpperCase(), 76, 470);
   ctx.fillText(`${formatTime(beat.start_seconds)} - ${formatTime(beat.start_seconds + beat.duration_seconds)}`, 76, 500);
+  ctx.fillText(panelTitle.toUpperCase(), 76, 530);
 
   ctx.fillStyle = "#ffffff";
   ctx.font = "700 54px Georgia";
-  ctx.fillText(brandKit.brand.name, 76, 570);
+  ctx.fillText(brandKit.brand.name, 76, 585);
   ctx.font = "500 34px Arial";
-  wrapCanvasText(ctx, beat.beat_purpose, 76, 618, 760, 40);
+  wrapCanvasText(ctx, beat.beat_purpose, 76, 632, 760, 40);
   ctx.font = "400 25px Arial";
   ctx.fillStyle = "rgba(255,255,255,0.78)";
-  wrapCanvasText(ctx, beat.vo_line, 76, 662, 820, 30, 2);
+  wrapCanvasText(ctx, beat.vo_line, 76, 676, 820, 30, 2);
 
   ctx.font = "600 17px Arial";
   ctx.fillStyle = "rgba(255,255,255,0.58)";
