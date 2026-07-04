@@ -1,5 +1,28 @@
 import type { LibraryProjectType } from "./library";
 
+// §2.2 — Continuity-embedding math. Used by quality-gate.ts to decide
+// whether a newly generated hero frame matches the stored character
+// reference well enough to accept, or should trigger a refine pass.
+export const CONTINUITY_THRESHOLD = 0.82;
+
+export function cosineSimilarity(a: number[], b: number[]): number {
+  const len = Math.min(a.length, b.length);
+  let dot = 0;
+  let magA = 0;
+  let magB = 0;
+  for (let i = 0; i < len; i++) {
+    dot += a[i] * b[i];
+    magA += a[i] * a[i];
+    magB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(magA) * Math.sqrt(magB);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+export function needsContinuityRefine(current: number[], reference: number[]): boolean {
+  return cosineSimilarity(current, reference) < CONTINUITY_THRESHOLD;
+}
+
 export type VisualBible = {
   projectType: LibraryProjectType;
   visualStyle: string;
