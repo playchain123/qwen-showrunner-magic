@@ -14,13 +14,95 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      character_embeddings: {
+        Row: {
+          character_token: string
+          created_at: string
+          embedding: string
+          id: string
+          metadata: Json
+          model_version: string
+          project_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          character_token: string
+          created_at?: string
+          embedding: string
+          id?: string
+          metadata?: Json
+          model_version?: string
+          project_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          character_token?: string
+          created_at?: string
+          embedding?: string
+          id?: string
+          metadata?: Json
+          model_version?: string
+          project_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      scene_embeddings: {
+        Row: {
+          character_token: string
+          created_at: string
+          embedding: string
+          id: string
+          metadata: Json
+          model_version: string
+          project_id: string
+          scene_id: string
+          user_id: string
+        }
+        Insert: {
+          character_token: string
+          created_at?: string
+          embedding: string
+          id?: string
+          metadata?: Json
+          model_version?: string
+          project_id: string
+          scene_id: string
+          user_id: string
+        }
+        Update: {
+          character_token?: string
+          created_at?: string
+          embedding?: string
+          id?: string
+          metadata?: Json
+          model_version?: string
+          project_id?: string
+          scene_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      match_character_embedding: {
+        Args: {
+          p_character_token: string
+          p_project_id: string
+          p_query_embedding: string
+        }
+        Returns: {
+          id: string
+          metadata: Json
+          similarity: number
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never

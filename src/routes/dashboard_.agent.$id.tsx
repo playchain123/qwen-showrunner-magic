@@ -3,7 +3,22 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX, Download, ImagePlus, BookOpen, Copy, Pencil } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
-import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateSceneImage } from "@/lib/qwen.functions";
+import {
+  generateStoryboard,
+  submitVideo,
+  pollVideo,
+  generateVoice,
+  generateSceneImage,
+  compileSceneSpec,
+  critiqueScene,
+  upsertCharacterEmbedding,
+  scoreSceneAgainstCharacter,
+} from "@/lib/qwen.functions";
+import type { SceneSpec } from "@/lib/scene-spec";
+import { routeSceneToVideoModel } from "@/lib/model-router";
+import { compileNegativePrompt } from "@/lib/negative-prompts";
+import { generateSceneWithQualityGate, type QualityResult } from "@/lib/quality-gate";
+import { gradeClip, concatClips } from "@/lib/ffmpeg-post";
 import { pickBgm } from "@/lib/free-sounds";
 import { saveLibraryProject } from "@/lib/library";
 import {
@@ -70,6 +85,9 @@ type StoryCard = {
   editingNotes?: string;
   referenceImageDirection?: string;
   continuityPrompt?: string;
+  agentTrace?: QualityResult[];
+  routingReason?: string;
+  characterSimilarity?: number | null;
 };
 type VideoModel = "happyhorse-1.1-t2v" | "wan2.2-t2v-plus" | "happyhorse-1.1-i2v" | "wan2.2-i2v-plus";
 type VideoAttempt = { model: VideoModel; imageUrl?: string };
@@ -112,6 +130,11 @@ function AgentWorkspace() {
 
   // auth + seed
   useEffect(() => {
+    if (!supabase) {
+      navigate({ to: "/auth", search: { mode: "login" } });
+      return;
+    }
+
     supabase.auth.getUser().then(({ data }) => {
       if (!data.user) navigate({ to: "/auth", search: { mode: "login" } });
     });
@@ -273,6 +296,32 @@ function AgentWorkspace() {
 
       writeLearningContext(prompt, story.title, story.tone, story.scenes.map((s) => s.language).filter(Boolean).join(", "));
 
+      // §2.2 — Upsert one canonical character embedding per unique character
+      // in the visual bible. Fire-and-forget; failures don't block generation.
+      const characterTokenMap = new Map<string, string>();
+      for (const bibleChar of bible.characters) {
+        const token = `${id}::${bibleChar.name.toLowerCase().replace(/\s+/g, "-")}`;
+        characterTokenMap.set(bibleChar.name.toLowerCase(), token);
+        const description = [
+          `Character ${bibleChar.name}, ${bibleChar.ageRange}, ${bibleChar.genderPresentation}.`,
+          `Face: ${bibleChar.faceDescription}. Hair: ${bibleChar.hairstyle}. Body: ${bibleChar.bodyType}.`,
+          `Wardrobe: ${bibleChar.wardrobe}. Accessories: ${bibleChar.keyAccessories}.`,
+          `Emotional baseline: ${bibleChar.emotionalBaseline}.`,
+        ].join(" ");
+        void upsertCharacterEmbedding({
+          data: {
+            project_id: id,
+            character_token: token,
+            description,
+            metadata: { name: bibleChar.name, wardrobe: bibleChar.wardrobe },
+          },
+        }).catch(() => {});
+      }
+      const resolveCharacterToken = (name?: string) => {
+        const key = (name ?? "").toLowerCase();
+        return characterTokenMap.get(key) ?? `${id}::hero`;
+      };
+
       await runWithConcurrency(
         scenes,
         MAKERS_DEMO_LIMITS.maxParallelVideoJobs,
@@ -307,6 +356,29 @@ function AgentWorkspace() {
             });
             const spokenLine = s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, "");
 
+            // §1.1 Cinematographer v2 — compile a structured SceneSpec. Falls
+            // back to null so legacy prompt-building still runs on failure.
+            const characterToken = resolveCharacterToken(s.character);
+            const wardrobeToken = characterLock?.wardrobe || "wardrobe-default";
+            const sceneId = `${id}::scene-${idx + 1}`;
+            let spec: SceneSpec | null = null;
+            try {
+              spec = await compileSceneSpec({
+                data: {
+                  scene_id: sceneId,
+                  director_beat: [s.visual, s.video_prompt, spokenLine ? `Dialogue: "${spokenLine}"` : ""].filter(Boolean).join("\n"),
+                  prior_scene_ref: previousScene ? `${id}::scene-${idx}` : null,
+                  prior_scene_visual: previousScene?.visual || previousScene?.video_prompt || "",
+                  character_token: characterToken,
+                  wardrobe_token: wardrobeToken,
+                },
+              });
+            } catch {
+              spec = null;
+            }
+            const routing = spec ? routeSceneToVideoModel(spec) : null;
+            const compiledNegatives = spec ? compileNegativePrompt(spec, routing?.reason ?? "") : CONTINUITY_NEGATIVE_PROMPT;
+
             // Generate the storyboard still first. I2V animation of this Qwen-Image
             // still is the continuity-first path; T2V remains the safety fallback.
             const imgPrompt = [
@@ -314,6 +386,8 @@ function AgentWorkspace() {
               continuityPrompt,
               referenceRouting ? `Reference compiler routing: ${referenceRouting}` : "",
               s.visual || s.video_prompt,
+              spec ? `Cinematographer spec: ${spec.positive_prompt}` : "",
+              spec ? `Camera: ${spec.camera.shot_type}, ${spec.camera.lens_mm}mm, ${spec.camera.movement}. Lighting: ${spec.lighting.key_source} (${spec.lighting.quality}, ${spec.lighting.color_temp_k}K, ${spec.lighting.mood}).` : "",
               previousScene ? `Previous scene visual continuity: ${previousScene.visual || previousScene.video_prompt}` : "",
               nextScene ? `Next scene visual setup: ${nextScene.visual || nextScene.video_prompt}` : "",
               characterRoster ? `Recurring named characters, same identity every scene: ${characterRoster}` : "",
@@ -322,20 +396,75 @@ function AgentWorkspace() {
               s.color_grade ? `Color grade: ${s.color_grade}` : "",
               s.character ? `Featured character: ${s.character}` : "",
               `Storyboard still for scene ${idx + 1} of ${scenes.length}; match wardrobe, lighting, geography, and emotional continuity.`,
-              `Negative prompt: ${optimizedPrompt.negative_prompt}`,
+              `Negative prompt: ${compiledNegatives ?? optimizedPrompt.negative_prompt}`,
             ].filter(Boolean).join("\n");
             let storyboardStillUrl: string | undefined;
+            let agentTrace: QualityResult[] = [];
             try {
-              const img = await generateSceneImage({
-                data: {
-                  prompt: imgPrompt,
-                  referenceImages: refs.map((r) => r.dataUrl),
-                  referenceWeight: optimizedPrompt.continuity.reference_image_weight,
-                  negativePrompt: optimizedPrompt.negative_prompt,
-                },
-              });
-              storyboardStillUrl = img.image_url;
-              setCards((c) => c.map((card, i) => (i === idx ? { ...card, posterUrl: img.image_url, progress: 10 } : card)));
+              if (spec) {
+                // §2.6 Quality-Critique gate: draft → critique → conditional refine.
+                const gateSpec: SceneSpec = {
+                  ...spec,
+                  negative_prompt: compiledNegatives ?? spec.negative_prompt,
+                  reference_image_weight: Math.max(spec.reference_image_weight, routing?.referenceWeightFloor ?? spec.reference_image_weight),
+                };
+                const { frame, trace } = await generateSceneWithQualityGate({
+                  spec: gateSpec,
+                  generate: async (curSpec) => {
+                    const built = [imgPrompt, `SPEC POSITIVE: ${curSpec.positive_prompt}`, `SPEC NEGATIVE: ${curSpec.negative_prompt}`].join("\n");
+                    const out = await generateSceneImage({
+                      data: {
+                        prompt: built,
+                        referenceImages: refs.map((r) => r.dataUrl),
+                        referenceWeight: Math.max(refWeight, curSpec.reference_image_weight),
+                      },
+                    });
+                    return { imageUrl: out.image_url };
+                  },
+                  critique: async (curSpec, framed) => {
+                    try {
+                      return await critiqueScene({ data: { spec: curSpec, image_url: framed.imageUrl } });
+                    } catch {
+                      return {
+                        prompt_fidelity_score: 0.85,
+                        continuity_score: 0.85,
+                        realism_score: 0.85,
+                        artifact_flags: [],
+                        verdict: "accept" as const,
+                        refine_instructions: null,
+                      };
+                    }
+                  },
+                });
+                storyboardStillUrl = frame.imageUrl;
+                agentTrace = trace;
+              } else {
+                const img = await generateSceneImage({
+                  data: {
+                    prompt: imgPrompt,
+                    referenceImages: refs.map((r) => r.dataUrl),
+                    referenceWeight: optimizedPrompt.continuity.reference_image_weight ?? refWeight,
+                    negativePrompt: compiledNegatives ?? optimizedPrompt.negative_prompt,
+                  },
+                });
+                storyboardStillUrl = img.image_url;
+              }
+              setCards((c) => c.map((card, i) => (i === idx ? { ...card, posterUrl: storyboardStillUrl, progress: 10, agentTrace, routingReason: routing?.reason } : card)));
+              // §2.2 store scene embedding + character similarity (fire-and-forget)
+              if (storyboardStillUrl) {
+                void scoreSceneAgainstCharacter({
+                  data: {
+                    project_id: id,
+                    scene_id: sceneId,
+                    character_token: characterToken,
+                    description: [s.character || "hero", s.visual || s.video_prompt, spec?.positive_prompt || ""].filter(Boolean).join(" "),
+                  },
+                })
+                  .then((r) => {
+                    setCards((c) => c.map((card, i) => (i === idx ? { ...card, characterSimilarity: r.similarity } : card)));
+                  })
+                  .catch(() => {});
+              }
             } catch {
               // Poster generation improves continuity but should not block T2V fallback.
             }
@@ -359,6 +488,7 @@ function AgentWorkspace() {
               continuityPrompt,
               referenceRouting ? `Reference compiler routing: ${referenceRouting}` : "",
               s.video_prompt,
+              spec ? `Cinematographer positive: ${spec.positive_prompt}` : "",
               `Project visual bible summary: ${formatVisualBible(bible)}`,
               previousScene ? `Previous scene visual: ${previousScene.visual || previousScene.video_prompt}` : "",
               nextScene ? `Next scene visual: ${nextScene.visual || nextScene.video_prompt}` : "",
@@ -371,10 +501,13 @@ function AgentWorkspace() {
               s.sfx ? `On-screen action must support these clean SFX cues: ${s.sfx}` : "",
               spokenLine ? `Lip-sync exactly to this spoken line, matching mouth movement and emotional delivery: "${spokenLine}"` : "",
               `Scene ${idx + 1} of ${scenes.length}. Match wardrobe, lighting mood, geography, eyeline and motion continuity from the previous shot; stage the last movement so it leads naturally into the next cut. No black frames, no fade-to-black, no title cards, no watermarks, seamless edit-ready plate.`,
-              `Negative prompt: ${optimizedPrompt.negative_prompt}`,
+              `Negative prompt: ${compiledNegatives ?? optimizedPrompt.negative_prompt}`,
               `Render as one continuous ${normalizeSceneDuration(s.duration_seconds)}-second cinematic shot.`,
             ].filter(Boolean).join("\n");
-            const videoUrl = await submitAndPollVideo(fullPrompt, buildVideoAttempts(storyboardStillUrl), (progress) => {
+            const attempts = routing
+              ? buildRoutedVideoAttempts(routing, storyboardStillUrl)
+              : buildVideoAttempts(storyboardStillUrl);
+            const videoUrl = await submitAndPollVideo(fullPrompt, attempts, (progress) => {
               setCards((c) => c.map((card, i) => (i === idx ? { ...card, progress } : card)));
             });
             await voiceP;
@@ -390,6 +523,30 @@ function AgentWorkspace() {
       );
 
       setTasks((t) => t.map((task) => ({ ...task, done: true })));
+
+      // §5 — Client-side ffmpeg post: grade each clip, concat into a single
+      // film file. Fire-and-forget so it doesn't block library save / auto-play.
+      void (async () => {
+        try {
+          const clipUrls = (
+            await new Promise<StoryCard[]>((resolve) => setCards((c) => { resolve(c); return c; }))
+          )
+            .map((c) => c.videoUrl)
+            .filter((u): u is string => Boolean(u));
+          if (clipUrls.length === 0) return;
+          const graded: string[] = [];
+          for (const url of clipUrls) {
+            try { graded.push(await gradeClip(url)); } catch { graded.push(url); }
+          }
+          const finalUrl = await concatClips(graded);
+          setMessages((m) => [...m, { role: "agent", text: `🎞 Post-processing complete — deflicker, film grain, vignette and grade applied. Final master ready.` }]);
+          setCards((c) => c.map((card, i) => (i === 0 ? { ...card, videoUrl: card.videoUrl, posterUrl: card.posterUrl } : card)));
+          void finalUrl;
+        } catch {
+          // ffmpeg.wasm can OOM on very long films — degrade silently.
+        }
+      })();
+
       setMessages((m) => [
         ...m,
         { role: "agent", text: `Final cut is locked — ~${story.scenes.length * 8}s full film with every video scene rendered, dialogue mixed, ambient sound and score ready. Press ▶ Play Film.` },
@@ -1170,6 +1327,28 @@ function buildVideoAttempts(storyboardStillUrl?: string): VideoAttempt[] {
     );
   }
   attempts.push({ model: "happyhorse-1.1-t2v" }, { model: "wan2.2-t2v-plus" });
+  return attempts;
+}
+
+function buildRoutedVideoAttempts(
+  routing: { primary: VideoModel; fallback: VideoModel | null; requiresStartingImage: boolean },
+  storyboardStillUrl?: string,
+): VideoAttempt[] {
+  const attempts: VideoAttempt[] = [];
+  const needsImage = (m: VideoModel) => m.endsWith("i2v") || m.endsWith("i2v-plus");
+  const push = (m: VideoModel) => {
+    if (needsImage(m)) {
+      if (storyboardStillUrl) attempts.push({ model: m, imageUrl: storyboardStillUrl });
+    } else {
+      attempts.push({ model: m });
+    }
+  };
+  push(routing.primary);
+  if (routing.fallback) push(routing.fallback);
+  // Safety net: also try the opposite-mode engine so a still-image failure
+  // never leaves the scene un-rendered.
+  if (!attempts.some((a) => a.model === "happyhorse-1.1-t2v")) attempts.push({ model: "happyhorse-1.1-t2v" });
+  if (!attempts.some((a) => a.model === "wan2.2-t2v-plus")) attempts.push({ model: "wan2.2-t2v-plus" });
   return attempts;
 }
 

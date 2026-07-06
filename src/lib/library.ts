@@ -213,7 +213,7 @@ function normalizeLibraryProject(raw: Record<string, unknown>): LibraryProject |
   const timeline = normalizeScenes(raw.timeline);
   const typed = raw.type === "ad_video" || raw.type === "short_film" || raw.type === "website_video";
   const type: LibraryProjectType = typed
-    ? raw.type
+    ? (raw.type as LibraryProjectType)
     : raw.websiteUrl || raw.videoType
     ? "website_video"
     : raw.brandName || raw.productPitch || raw.cta || raw.adTone

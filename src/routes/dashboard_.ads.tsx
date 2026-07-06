@@ -92,9 +92,15 @@ function CinematicAds() {
       alert("Add a brand name and pitch first.");
       return;
     }
-    supabase.auth.getUser().then(({ data }) => {
-      if (!data.user) navigate({ to: "/auth", search: { mode: "login" } });
-    });
+    if (!supabase) {
+      navigate({ to: "/auth", search: { mode: "login" } });
+      return;
+    }
+    const { data } = await supabase.auth.getUser();
+    if (!data.user) {
+      navigate({ to: "/auth", search: { mode: "login" } });
+      return;
+    }
     setRunning(true);
     setShots([]);
     setStatus("Writing ad storyboard…");

@@ -1,6 +1,9 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { clampSceneCount, normalizeSceneDuration } from "./makers-runtime";
+import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { SceneSpecSchema, type SceneSpec } from "./scene-spec";
+import type { QualityResult } from "./quality-gate";
 import {
   buildLocalizationPrompt,
   chooseSarvamSpeaker,
@@ -15,6 +18,40 @@ const CHAT_URL = `${DASHSCOPE_BASE}/compatible-mode/v1/chat/completions`;
 const VIDEO_SUBMIT_URL = `${DASHSCOPE_BASE}/api/v1/services/aigc/video-generation/video-synthesis`;
 const TASK_URL = (id: string) => `${DASHSCOPE_BASE}/api/v1/tasks/${id}`;
 const LOVABLE_GATEWAY = "https://ai.gateway.lovable.dev";
+
+// Allow only trusted external hosts for URLs we forward to third-party AI
+// providers. Prevents SSRF-by-proxy against cloud-internal endpoints.
+const ALLOWED_MEDIA_HOSTS = new Set([
+  "dashscope-intl.aliyuncs.com",
+  "dashscope.aliyuncs.com",
+  "oss-cn-beijing.aliyuncs.com",
+  "oss-accelerate.aliyuncs.com",
+  "dashscope-result.oss-cn-beijing.aliyuncs.com",
+  "dashscope-result-sh.oss-cn-shanghai.aliyuncs.com",
+  "dashscope-result-wlcb.oss-cn-wulanchabu.aliyuncs.com",
+  "acecxckmvlaxygbvubub.supabase.co",
+]);
+
+function isSafeExternalUrl(value: string): boolean {
+  if (value.startsWith("data:image/") || value.startsWith("data:audio/")) return true;
+  try {
+    const u = new URL(value);
+    if (u.protocol !== "https:") return false;
+    return ALLOWED_MEDIA_HOSTS.has(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+const safeMediaUrl = z
+  .string()
+  .url()
+  .max(2048)
+  .refine(isSafeExternalUrl, {
+    message: "URL host is not on the allowlist for external media forwarding",
+  });
+
+const TASK_ID_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;
 
 function allowNonQwenFallbacks() {
   return process.env.ALLOW_NON_QWEN_FALLBACKS === "true";
@@ -147,14 +184,21 @@ type Storyboard = {
 
 /** Generate a full short-drama storyboard from a logline using Qwen3.7-Max. */
 export const generateStoryboard = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) =>
     z
       .object({
-        prompt: z.string().min(1),
+        prompt: z.string().min(1).max(4000),
         sceneCount: z.number().int().min(1).max(3).default(3),
-        learningContext: z.string().optional().default(""),
+        learningContext: z.string().max(2000).optional().default(""),
         referenceImages: z
-          .array(z.object({ name: z.string(), description: z.string().optional().default("") }))
+          .array(
+            z.object({
+              name: z.string().max(200),
+              description: z.string().max(500).optional().default(""),
+            }),
+          )
+          .max(8)
           .optional()
           .default([]),
       })
@@ -274,15 +318,16 @@ export const generateStoryboard = createServerFn({ method: "POST" })
 
 /** Submit a text-to-video or image-to-video task to Qwen Cloud (async). Returns task_id. */
 export const submitVideo = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) =>
     z
       .object({
-        prompt: z.string().min(3),
+        prompt: z.string().min(3).max(4000),
         size: z.string().default("1280*720"),
         model: z
           .enum(["happyhorse-1.1-t2v", "wan2.2-t2v-plus", "happyhorse-1.1-i2v", "wan2.2-i2v-plus"])
           .default("happyhorse-1.1-t2v"),
-        imageUrl: z.string().url().optional(),
+        imageUrl: safeMediaUrl.optional(),
       })
       .parse(input),
   )
@@ -321,7 +366,16 @@ export const submitVideo = createServerFn({ method: "POST" })
 
 /** Poll a video-gen task. Returns status + video url when SUCCEEDED. */
 export const pollVideo = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) => z.object({ task_id: z.string().min(1) }).parse(input))
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) =>
+    z
+      .object({
+        task_id: z
+          .string()
+          .regex(TASK_ID_PATTERN, "Invalid task_id format"),
+      })
+      .parse(input),
+  )
   .handler(async ({ data }): Promise<{ status: string; video_url?: string; error?: string }> => {
     const key = process.env.DASHSCOPE_API_KEY;
     if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
@@ -344,6 +398,7 @@ export const pollVideo = createServerFn({ method: "POST" })
  * distinct. Non-Qwen fallback is opt-in through ALLOW_NON_QWEN_FALLBACKS.
  * Returns a data URL (or hosted URL) playable in <audio>. */
 export const generateVoice = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) =>
     z
       .object({
@@ -545,11 +600,12 @@ export const generateVoice = createServerFn({ method: "POST" })
 
 /** Generate a cinematic scene poster image via Qwen-Image. */
 export const generateSceneImage = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) =>
     z
       .object({
-        prompt: z.string().min(3),
-        referenceImages: z.array(z.string()).optional().default([]),
+        prompt: z.string().min(3).max(4000),
+        referenceImages: z.array(safeMediaUrl).max(4).optional().default([]),
         referenceWeight: z.number().min(0).max(1).optional().default(0.75),
         negativePrompt: z.string().optional().default(""),
       })
@@ -626,7 +682,8 @@ export const generateSceneImage = createServerFn({ method: "POST" })
 
 /** Transcribe an audio URL with Paraformer-v2 to get word-level timing for subtitle sync. */
 export const transcribeAudio = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) => z.object({ audio_url: z.string().url() }).parse(input))
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => z.object({ audio_url: safeMediaUrl }).parse(input))
   .handler(async ({ data }): Promise<{ words: Array<{ text: string; begin: number; end: number }> }> => {
     const key = process.env.DASHSCOPE_API_KEY;
     if (!key) return { words: [] };
@@ -669,4 +726,261 @@ export const transcribeAudio = createServerFn({ method: "POST" })
       // ignore — captions are optional enrichment
     }
     return { words: [] };
+  });
+
+// ---------------------------------------------------------------------------
+// §1.1 Cinematographer Agent v2 — compile a Director scene into a strict
+// SceneSpec JSON that downstream nodes consume without loose parsing.
+// ---------------------------------------------------------------------------
+export const compileSceneSpec = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) =>
+    z
+      .object({
+        scene_id: z.string().min(1),
+        director_beat: z.string().min(1).max(4000),
+        prior_scene_ref: z.string().nullable().optional().default(null),
+        prior_scene_visual: z.string().max(2000).optional().default(""),
+        character_token: z.string().min(1),
+        wardrobe_token: z.string().max(500).optional().default(""),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }): Promise<SceneSpec> => {
+    const key = process.env.DASHSCOPE_API_KEY;
+    if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
+
+    const system = `You are the Cinematographer Agent in an autonomous film pipeline. You receive a scene beat from the Director Agent and must output a single JSON object — nothing else, no preamble, no markdown fences.
+
+Before writing the final prompt fields, reason internally (do not output this reasoning) through:
+1. The ONE image that best captures this beat's emotional turn.
+2. The lens/framing a human DP would pick to serve that emotion — not the default.
+3. The motivated light source in this environment and where it falls on the subject.
+4. What in the frame visually connects to the previous scene (wardrobe, prop, color).
+5. What would break realism if unspecified — enumerate as negatives.
+
+STRICT SCHEMA (return exactly these fields, no extras):
+{
+  "scene_id": string,
+  "subject": string,
+  "action": string,
+  "camera": { "shot_type": string, "angle": string, "lens_mm": number, "movement": string },
+  "lighting": { "key_source": string, "quality": "hard"|"soft"|"mixed", "color_temp_k": number, "mood": string },
+  "color_grade": { "reference_stock_or_look": string, "contrast": "low"|"medium"|"high" },
+  "environment": { "location": string, "atmosphere": string },
+  "continuity_anchor": { "character_token": string, "wardrobe_token": string, "prior_scene_ref": string|null },
+  "positive_prompt": string,
+  "negative_prompt": string,
+  "reference_image_weight": number
+}
+
+Rules:
+- Never use vague adjectives without a concrete visual referent.
+- Every light source must be motivated by something in "environment".
+- If prior_scene_ref is not null, reference_image_weight MUST be >= 0.8.
+- positive_prompt must be a single dense paragraph a cinematographer could act on, not a list of tags.`;
+
+    const user = JSON.stringify({
+      scene_id: data.scene_id,
+      director_beat: data.director_beat,
+      prior_scene_ref: data.prior_scene_ref,
+      prior_scene_visual: data.prior_scene_visual,
+      character_token: data.character_token,
+      wardrobe_token: data.wardrobe_token,
+    });
+
+    const res = await fetchWithTimeout(CHAT_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: qwenModel("QWEN_SCRIPT_MODEL", "qwen3.7-max"),
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.6,
+        max_tokens: 1200,
+      }),
+    }, 60_000, "cinematographer v2");
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`Cinematographer failed (${res.status}): ${body.slice(0, 240)}`);
+    }
+    const j = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+    const raw = j.choices?.[0]?.message?.content ?? "{}";
+    const parsed = SceneSpecSchema.safeParse(JSON.parse(raw));
+    if (!parsed.success) {
+      throw new Error(`Cinematographer returned invalid SceneSpec: ${parsed.error.issues[0]?.message ?? "schema mismatch"}`);
+    }
+    // Enforce the "prior scene → weight >= 0.8" rule server-side.
+    const spec = parsed.data;
+    if (spec.continuity_anchor.prior_scene_ref && spec.reference_image_weight < 0.8) {
+      spec.reference_image_weight = 0.8;
+    }
+    return spec;
+  });
+
+// ---------------------------------------------------------------------------
+// §1.2 Quality-Critique Agent — vision-model grades a generated still against
+// the SceneSpec that requested it. Uses Lovable AI Gateway (Gemini flash) so
+// this call never touches DashScope quota.
+// ---------------------------------------------------------------------------
+export const critiqueScene = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) =>
+    z
+      .object({
+        spec: SceneSpecSchema,
+        image_url: safeMediaUrl,
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }): Promise<QualityResult> => {
+    const key = process.env.LOVABLE_API_KEY;
+    if (!key) throw new Error("LOVABLE_API_KEY not configured");
+
+    const system = `You are the Quality-Critique Agent. Score the shown still against the SceneSpec that requested it. Return strict JSON with these exact fields, no extras:
+{
+  "prompt_fidelity_score": number 0-1,
+  "continuity_score": number 0-1,
+  "realism_score": number 0-1,
+  "artifact_flags": string[],
+  "verdict": "accept"|"refine"|"reject",
+  "refine_instructions": string|null
+}
+Rules:
+- "accept" only if all three scores >= 0.8 AND artifact_flags is empty.
+- Prefer "refine" over "reject" — refine_instructions must be one actionable sentence a prompt compiler can apply.
+- Never write "make it better". Cite the specific field to change.`;
+
+    const res = await fetch(`${LOVABLE_GATEWAY}/v1/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          { role: "system", content: system },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: `SceneSpec:\n${JSON.stringify(data.spec, null, 2)}` },
+              { type: "image_url", image_url: { url: data.image_url } },
+            ],
+          },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.2,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`Critique failed (${res.status}): ${body.slice(0, 240)}`);
+    }
+    const j = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+    const raw = j.choices?.[0]?.message?.content ?? "{}";
+    const parsed = JSON.parse(raw) as QualityResult;
+    // Defensive: clamp scores + coerce verdict.
+    const clamp = (n: unknown) => Math.max(0, Math.min(1, Number(n) || 0));
+    return {
+      prompt_fidelity_score: clamp(parsed.prompt_fidelity_score),
+      continuity_score: clamp(parsed.continuity_score),
+      realism_score: clamp(parsed.realism_score),
+      artifact_flags: Array.isArray(parsed.artifact_flags) ? parsed.artifact_flags.filter((s) => typeof s === "string") : [],
+      verdict: parsed.verdict === "accept" || parsed.verdict === "refine" || parsed.verdict === "reject" ? parsed.verdict : "refine",
+      refine_instructions: typeof parsed.refine_instructions === "string" ? parsed.refine_instructions : null,
+    };
+  });
+
+// ---------------------------------------------------------------------------
+// §2.2 Continuity embeddings — embed a hero-frame description via Lovable AI
+// (OpenAI text-embedding-3-small, 1536 dims to match pgvector column), then
+// upsert/query in Supabase under RLS as the signed-in user.
+// ---------------------------------------------------------------------------
+async function embedText(text: string): Promise<number[]> {
+  const key = process.env.LOVABLE_API_KEY;
+  if (!key) throw new Error("LOVABLE_API_KEY not configured");
+  const res = await fetch(`${LOVABLE_GATEWAY}/v1/embeddings`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "openai/text-embedding-3-small",
+      input: text.slice(0, 8000),
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Embedding failed (${res.status}): ${body.slice(0, 200)}`);
+  }
+  const j = (await res.json()) as { data: Array<{ embedding: number[] }> };
+  const vec = j.data?.[0]?.embedding;
+  if (!Array.isArray(vec) || vec.length !== 1536) {
+    throw new Error(`Embedding returned wrong shape (len=${vec?.length})`);
+  }
+  return vec;
+}
+
+/** Embed a scene description and upsert it as the canonical character reference. */
+export const upsertCharacterEmbedding = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) =>
+    z
+      .object({
+        project_id: z.string().min(1),
+        character_token: z.string().min(1),
+        description: z.string().min(3),
+        metadata: z.record(z.string(), z.unknown()).optional().default({}),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    const embedding = await embedText(data.description);
+    const { error } = await context.supabase
+      .from("character_embeddings")
+      .upsert(
+        {
+          user_id: context.userId,
+          project_id: data.project_id,
+          character_token: data.character_token,
+          embedding: embedding as unknown as string, // pgvector accepts array literals
+          metadata: data.metadata as Record<string, unknown> as never,
+        },
+        { onConflict: "user_id,project_id,character_token" },
+      );
+    if (error) throw new Error(`upsert character embedding: ${error.message}`);
+    return { embedding_dims: embedding.length };
+  });
+
+/** Embed a per-scene hero-frame description, store it, and return similarity vs. the character reference. */
+export const scoreSceneAgainstCharacter = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) =>
+    z
+      .object({
+        project_id: z.string().min(1),
+        scene_id: z.string().min(1),
+        character_token: z.string().min(1),
+        description: z.string().min(3),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data, context }): Promise<{ similarity: number | null; stored: boolean }> => {
+    const embedding = await embedText(data.description);
+
+    await context.supabase.from("scene_embeddings").insert({
+      user_id: context.userId,
+      project_id: data.project_id,
+      scene_id: data.scene_id,
+      character_token: data.character_token,
+      embedding: embedding as unknown as string,
+    });
+
+    const { data: match, error } = await context.supabase.rpc("match_character_embedding", {
+      p_project_id: data.project_id,
+      p_character_token: data.character_token,
+      p_query_embedding: embedding as unknown as string,
+    });
+    if (error) throw new Error(`match_character_embedding: ${error.message}`);
+    const first = Array.isArray(match) ? match[0] : null;
+    return { similarity: first?.similarity ?? null, stored: true };
   });

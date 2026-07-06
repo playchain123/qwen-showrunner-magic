@@ -35,9 +35,13 @@ function LibraryPage() {
   );
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      if (!data.user) navigate({ to: "/auth", search: { mode: "login" } });
-    });
+    if (!supabase) {
+      navigate({ to: "/auth", search: { mode: "login" } });
+    } else {
+      supabase.auth.getUser().then(({ data }) => {
+        if (!data.user) navigate({ to: "/auth", search: { mode: "login" } });
+      });
+    }
     try {
       setProjects(readLibraryProjects());
     } catch {

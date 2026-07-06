@@ -59,9 +59,16 @@ export function TopBar() {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   useEffect(() => {
+    if (!supabase) return;
+
     supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? null));
   }, []);
   async function logout() {
+    if (!supabase) {
+      navigate({ to: "/auth", search: { mode: "login" } });
+      return;
+    }
+
     await supabase.auth.signOut();
     navigate({ to: "/auth", search: { mode: "login" } });
   }
@@ -139,6 +146,11 @@ function DashboardHome() {
   const promptRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
+    if (!supabase) {
+      navigate({ to: "/auth", search: { mode: "login" } });
+      return;
+    }
+
     supabase.auth.getUser().then(({ data }) => {
       if (!data.user) navigate({ to: "/auth", search: { mode: "login" } });
     });
@@ -283,7 +295,7 @@ function FeatureModal({
   const [pace, setPace] = useState("fast paced");
   const [platform, setPlatform] = useState("YouTube");
   const [topic, setTopic] = useState("");
-  const [activeHero, setActiveHero] = useState(feature.hero || LOCAL_BACKGROUND_VIDEO);
+  const [activeHero, setActiveHero] = useState<string>(feature.hero || LOCAL_BACKGROUND_VIDEO);
   const [heroReady, setHeroReady] = useState(false);
   const topicRef = useRef<HTMLTextAreaElement>(null);
 
