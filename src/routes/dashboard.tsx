@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useNavigate, Outlet } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Plus, Home, Library, Upload, Sparkles, Film, FileText, Video, Package, X, Heart, LogOut, Copy, Pencil, Globe, BookOpen } from "lucide-react";
+import { ArrowUp, Plus, Home, Library, Upload, Sparkles, Film, FileText, Video, Package, X, Heart, LogOut, Copy, Pencil, Globe } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import slide1 from "@/assets/slide-1.jpg";
 import slide2 from "@/assets/slide-2.jpg";
@@ -45,9 +45,6 @@ export function Sidebar() {
         </Link>
         <Link to="/dashboard/website" className="flex flex-col items-center gap-1 hover:text-white">
           <Globe className="h-4 w-4" /><span>Web</span>
-        </Link>
-        <Link to="/dashboard/bible/new" className="flex flex-col items-center gap-1 hover:text-white">
-          <BookOpen className="h-4 w-4" /><span>Bible</span>
         </Link>
         <Link to="/dashboard/profile" className="flex flex-col items-center gap-1 hover:text-white">
           <Heart className="h-4 w-4" /><span>Profile</span>
