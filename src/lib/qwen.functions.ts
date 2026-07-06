@@ -617,7 +617,7 @@ export const generateVoice = createServerFn({ method: "POST" })
       }
     }
 
-    if (allowNonQwenFallbacks()) {
+    {
       const lovKey = process.env.LOVABLE_API_KEY;
       if (lovKey) {
         try {
