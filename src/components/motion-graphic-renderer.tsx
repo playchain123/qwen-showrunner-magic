@@ -10,6 +10,7 @@ export type MotionGraphicColors = {
   bodyFont?: string;
   logoUrl?: string | null;
   fontUrls?: string[];
+  heroBackgroundUrl?: string | null;
 };
 
 const FPS = 30;
@@ -122,9 +123,16 @@ export function MotionGraphicRenderer({
   const headingFont = colors.headingFont || "Georgia, serif";
   const bodyFont = colors.bodyFont || "system-ui, sans-serif";
   const logoSrc = logoUrl || colors.logoUrl;
+  const heroBg = colors.heroBackgroundUrl;
 
   return (
     <div className="relative h-full w-full overflow-hidden" style={{ background: bg }}>
+      {heroBg ? (
+        <>
+          <img src={heroBg} alt="" className="absolute inset-0 h-full w-full object-cover scale-105" />
+          <div className="absolute inset-0 bg-black/72" />
+        </>
+      ) : null}
       {colors.fontUrls?.map((href) => (
         <link key={href} rel="stylesheet" href={href} />
       ))}

@@ -16,6 +16,7 @@ import {
 import { repurposePlanForBlockedSite, repurposePlanForCaptureUnavailable } from "@/lib/website-site-resilience";
 import { isCaptureApiConfigured } from "@/lib/website-browser-api";
 import { slimWebsiteProjectForStorage } from "@/lib/library";
+import { applyBeatScripts, generateWebsiteBeatScriptsServer } from "@/lib/website-brand-enrichment";
 import {
   buildWebsiteRenderPipeline,
   estimateVoiceDurationSeconds,
@@ -129,19 +130,25 @@ function WebsiteVideoPage() {
       setBrandKit(kit);
       setStatus(kit.confidence_flags.includes("fallback_brand_kit_used")
         ? "Website fetch was blocked/unavailable. Building a fallback plan from the domain..."
-        : "Building website-to-video production plan...");
-      const nextPlan = repurposePlanForCaptureUnavailable(
-        repurposePlanForBlockedSite(
-          kit,
-          buildWebsiteVideoPlan({
-            brandKit: kit,
-            videoType,
-            targetDurationSeconds: safeDuration,
-            availableAiBroll: true,
-            clientStyleProfile: buildWebsiteStyleProfile(kit.brand.name, voiceLanguage),
-          }),
-        ),
-      );
+        : kit.confidence_flags.includes("llm_brand_enrichment_applied")
+          ? "Brand kit enriched with AI copy. Building production plan..."
+          : "Building website-to-video production plan...");
+      const aiBrollAvailable = !kit.confidence_flags.includes("ai_broll_unavailable");
+      let draftPlan = buildWebsiteVideoPlan({
+        brandKit: kit,
+        videoType,
+        targetDurationSeconds: safeDuration,
+        availableAiBroll: aiBrollAvailable,
+        clientStyleProfile: buildWebsiteStyleProfile(kit.brand.name, voiceLanguage),
+      });
+      try {
+        setStatus("Writing unique voiceover scripts for each beat...");
+        const scripts = await generateWebsiteBeatScriptsServer({ data: { brandKit: kit, plan: draftPlan } });
+        draftPlan = applyBeatScripts(draftPlan, scripts);
+      } catch {
+        // template VO lines remain
+      }
+      const nextPlan = repurposePlanForCaptureUnavailable(repurposePlanForBlockedSite(kit, draftPlan));
       setPlan(nextPlan);
       setBeats(nextPlan.beats.map((beat) => ({ ...beat, progress: 5, done: false })));
       setStatus("Generating clear voice-over for each beat...");
@@ -984,6 +991,7 @@ function brandColors(brandKit: WebsiteBrandKit) {
     bodyFont: `${brandKit.brand.body_typeface}, system-ui, sans-serif`,
     logoUrl: brandKit.brand.logo_asset_path,
     fontUrls: brandKit.font_urls,
+    heroBackgroundUrl: brandKit.hero_screenshot_url || brandKit.brand.logo_asset_path,
   };
 }
 

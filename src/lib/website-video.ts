@@ -9,7 +9,9 @@ import {
   mergeMetaIntoBrandKit,
   auditBrandKitQuality,
   isBoilerplateSentence,
+  isWeakProductCopy,
 } from "./website-site-resilience";
+import { enrichWebsiteBrandKit } from "./website-brand-enrichment";
 import { requestBrowserExtract, isCaptureApiConfigured } from "./website-browser-api";
 import { persistHeroScreenshot } from "./website-storage";
 
@@ -170,13 +172,15 @@ export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
     // 1) Playwright browser extract via capture API (FC worker)
     const browserExtract = await requestBrowserExtract(normalizedUrl, authToken);
     if (browserExtract?.success) {
-      return buildBrandKitFromBrowserExtract(normalizedUrl, browserExtract, userId);
+      return enrichWebsiteBrandKit(await buildBrandKitFromBrowserExtract(normalizedUrl, browserExtract, userId));
     }
     if (browserExtract?.blocked) {
       const fallback = buildFallbackBrandKit(normalizedUrl, [`${normalizedUrl} blocked in browser`]);
       fallback.confidence_flags.push("site_blocked", "blocked_http_403_or_429", "browser_extract_blocked");
       const meta = await fetchBasicMetaFallback(normalizedUrl);
-      return meta ? mergeMetaIntoBrandKit(fallback, meta) : fallback;
+      const merged = meta ? mergeMetaIntoBrandKit(fallback, meta) : fallback;
+      if (!process.env.DASHSCOPE_API_KEY) merged.confidence_flags.push("ai_broll_unavailable");
+      return enrichWebsiteBrandKit(merged);
     }
 
     // 2) Plain HTTP fetch fallback
@@ -213,7 +217,8 @@ export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
         auditBrandKitQuality(kit);
         if (!isCaptureApiConfigured()) kit.confidence_flags.push("capture_api_unconfigured");
         if (!/html|text|xml/i.test(contentType)) kit.confidence_flags.push("content_type_not_html");
-        return kit;
+        if (!process.env.DASHSCOPE_API_KEY) kit.confidence_flags.push("ai_broll_unavailable");
+        return enrichWebsiteBrandKit(kit);
       } catch (err) {
         failures.push(`${candidate} ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -222,14 +227,17 @@ export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
     if (meta) {
       const kit = buildFallbackBrandKit(normalizedUrl, failures);
       if (sawBlocked) kit.confidence_flags.push("site_blocked", "blocked_http_403_or_429");
-      return mergeMetaIntoBrandKit(kit, meta);
+      const merged = mergeMetaIntoBrandKit(kit, meta);
+      if (!process.env.DASHSCOPE_API_KEY) merged.confidence_flags.push("ai_broll_unavailable");
+      return enrichWebsiteBrandKit(merged);
     }
     const fallback = buildFallbackBrandKit(normalizedUrl, failures);
     fallback.extraction_method = "fallback";
     if (sawBlocked) fallback.confidence_flags.push("site_blocked", "blocked_http_403_or_429");
     if (!isCaptureApiConfigured()) fallback.confidence_flags.push("capture_api_unconfigured");
+    if (!process.env.DASHSCOPE_API_KEY) fallback.confidence_flags.push("ai_broll_unavailable");
     auditBrandKitQuality(fallback);
-    return fallback;
+    return enrichWebsiteBrandKit(fallback);
   });
 
 export function buildWebsiteVideoPlan({
@@ -566,14 +574,19 @@ function getTemplate(type: WebsiteVideoType) {
   ];
 }
 
-function chooseProductionMethod(method: ProductionMethod, availableAiBroll: boolean, index: number) {
-  if (method === "ai_broll" && !availableAiBroll) return index % 2 === 0 ? "motion_graphic" : "screen_capture";
+function chooseProductionMethod(method: ProductionMethod, availableAiBroll: boolean, _index: number) {
+  if (method === "ai_broll" && !availableAiBroll) return "motion_graphic";
   return method;
 }
 
 function buildVoiceLine(kit: WebsiteBrandKit, type: WebsiteVideoType, purpose: string, index: number) {
   const brand = kit.brand.name;
-  const tagline = kit.brand.tagline || kit.product.one_line_description;
+  const tagline =
+    kit.brand.tagline && !isWeakProductCopy(kit.brand.tagline, brand)
+      ? kit.brand.tagline
+      : !isWeakProductCopy(kit.product.one_line_description, brand)
+        ? kit.product.one_line_description
+        : null;
   const feature = kit.product.key_features[index % Math.max(1, kit.product.key_features.length)];
   const page = kit.site_map[index % Math.max(1, kit.site_map.length)];
   const hostname = (() => {
@@ -586,25 +599,29 @@ function buildVoiceLine(kit: WebsiteBrandKit, type: WebsiteVideoType, purpose: s
   const lower = purpose.toLowerCase();
 
   if (/hook|brand hook|cold open/.test(lower)) {
-    return tagline ? `${brand}. ${tagline}` : `Meet ${brand} — built for teams who need clarity, speed, and results.`;
+    return tagline ? `${brand}. ${tagline}` : `Meet ${brand} — the AI assistant built for thoughtful, high-quality work.`;
   }
   if (/problem/.test(lower)) {
-    const pain = kit.product.primary_use_cases[0] || feature?.benefit || tagline;
-    return pain ? `Teams struggle with fragmented workflows. ${brand} solves ${pain}.` : `Here's the problem ${brand} was built to solve.`;
+    const pain = kit.product.primary_use_cases[0] || feature?.benefit;
+    return pain && !isWeakProductCopy(pain, brand)
+      ? `Most teams waste hours on busywork. ${brand} helps you ${pain.toLowerCase()}.`
+      : `Here's the everyday problem ${brand} was designed to solve.`;
   }
   if (/reveal|value proposition/.test(lower)) {
-    return feature ? `Introducing ${feature.name}: ${feature.benefit}` : `${brand} brings your product story into focus.`;
+    return feature ? `Introducing ${feature.name}: ${feature.benefit}` : `${brand} brings powerful AI assistance into your daily workflow.`;
   }
   if (/walkthrough|tour|steps|demo/.test(lower)) {
-    const pageLabel = page?.purpose || "the live product";
-    return `Let's walk through ${pageLabel} on ${hostname} and see how it works in practice.`;
+    const pageLabel = page?.purpose && page.purpose !== "homepage overview" ? page.purpose : "the product";
+    return `Let's explore ${pageLabel} on ${hostname} and see the experience in action.`;
   }
   if (/proof|social|differentiation/.test(lower)) {
     const proof = kit.product.social_proof[0] || feature?.benefit;
-    return proof ? `${brand} earns trust: ${proof}.` : `See why teams choose ${brand} for reliable results.`;
+    return proof && !isWeakProductCopy(proof, brand)
+      ? `${brand} earns trust: ${proof}.`
+      : `See why professionals rely on ${brand} for serious work.`;
   }
   if (/cta|call to action/.test(lower)) {
-    return `Ready to explore ${brand}? Visit ${hostname} and take the next step today.`;
+    return `Ready to try ${brand}? Visit ${hostname} and start your first conversation today.`;
   }
   if (type === "user_manual") {
     return `Follow each on-screen step on ${hostname} to complete this section with confidence.`;
@@ -640,8 +657,11 @@ function buildMotionElements(kit: WebsiteBrandKit, purpose: string, index: numbe
 }
 
 function fitVoiceover(line: string, durationSeconds: number) {
-  const maxWords = Math.max(8, Math.floor(durationSeconds * 2.8));
-  return line.split(/\s+/).slice(0, maxWords).join(" ");
+  const minWords = Math.max(12, Math.floor(durationSeconds * 2.2));
+  const maxWords = Math.max(minWords, Math.floor(durationSeconds * 2.8));
+  const words = line.split(/\s+/).filter(Boolean);
+  if (words.length < minWords) return words.join(" ");
+  return words.slice(0, maxWords).join(" ");
 }
 
 function extractNavLinks(baseUrl: string, html: string) {
