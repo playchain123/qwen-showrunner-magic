@@ -113,6 +113,7 @@ function AgentWorkspace() {
   const [openScene, setOpenScene] = useState<number | null>(null);
   const [bibleOpen, setBibleOpen] = useState(false);
   const [bibleBusy, setBibleBusy] = useState(false);
+  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [finalFilmUrl, setFinalFilmUrl] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
@@ -174,7 +175,10 @@ function AgentWorkspace() {
       setCurrentPrompt(prompt);
       setReferenceImages(refs);
       setMessages([{ role: "user", text: prompt }]);
-      void runPipeline(prompt, refs);
+      // Show the Character Bible modal FIRST — the user locks the hero look
+      // before we plan the storyboard and render Wan/HappyHorse shots.
+      setPendingPrompt(prompt);
+      setBibleOpen(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -666,12 +670,27 @@ function AgentWorkspace() {
         dataUrl: img.image_url,
         description: `Locked character bible for ${b.name || "hero"}: ${b.descriptor}. Match face, wardrobe and colors EXACTLY in every scene.`,
       };
-      setReferenceImages((prev) => [bibleRef, ...prev].slice(0, 8));
+      const nextRefs = [bibleRef, ...referenceImages].slice(0, 8);
+      setReferenceImages(nextRefs);
       setBibleOpen(false);
+      if (pendingPrompt) {
+        const p = pendingPrompt;
+        setPendingPrompt(null);
+        void runPipeline(p, nextRefs);
+      }
     } catch (err) {
       alert("Character bible failed: " + (err instanceof Error ? err.message : String(err)));
     } finally {
       setBibleBusy(false);
+    }
+  }
+
+  function skipCharacterBible() {
+    setBibleOpen(false);
+    if (pendingPrompt) {
+      const p = pendingPrompt;
+      setPendingPrompt(null);
+      void runPipeline(p, referenceImages);
     }
   }
 
@@ -947,13 +966,19 @@ function AgentWorkspace() {
         <SceneDetail card={cards[openScene]} index={openScene} total={cards.length} onClose={() => setOpenScene(null)} />
       )}
       {bibleOpen && (
-        <CharacterBibleModal busy={bibleBusy} onClose={() => setBibleOpen(false)} onBuild={buildCharacterBible} />
+        <CharacterBibleModal
+          busy={bibleBusy}
+          hasPending={pendingPrompt !== null}
+          onClose={() => (pendingPrompt ? skipCharacterBible() : setBibleOpen(false))}
+          onBuild={buildCharacterBible}
+          onSkip={skipCharacterBible}
+        />
       )}
     </div>
   );
 }
 
-function CharacterBibleModal({ busy, onClose, onBuild }: { busy: boolean; onClose: () => void; onBuild: (b: CharacterSheetInput) => void }) {
+function CharacterBibleModal({ busy, hasPending, onClose, onBuild, onSkip }: { busy: boolean; hasPending: boolean; onClose: () => void; onBuild: (b: CharacterSheetInput) => void; onSkip: () => void }) {
   const [b, setB] = useState<CharacterSheetInput>({
     name: "",
     descriptor: "Weathered detective, early 50s, stoic",
@@ -969,6 +994,9 @@ function CharacterBibleModal({ busy, onClose, onBuild }: { busy: boolean; onClos
           <div>
             <div className="text-xs text-white/50 uppercase tracking-widest">Character Bible</div>
             <div className="text-lg font-medium text-white">Lock your hero's look</div>
+            {hasPending && (
+              <div className="text-[11px] text-blue-300 mt-1">Step 1 of 3 · then script → storyboard → Wan/HappyHorse render</div>
+            )}
           </div>
           <button onClick={onClose} className="text-white/60 hover:text-white text-sm">Close ✕</button>
         </div>
@@ -984,6 +1012,15 @@ function CharacterBibleModal({ busy, onClose, onBuild }: { busy: boolean; onClos
         <button disabled={busy} onClick={() => onBuild(b)} className="w-full h-10 rounded-md bg-white text-black text-sm font-medium disabled:opacity-60">
           {busy ? "Generating character sheet…" : "Generate & lock character"}
         </button>
+        {hasPending && (
+          <button
+            disabled={busy}
+            onClick={onSkip}
+            className="w-full h-9 rounded-md border border-white/15 text-white/70 hover:bg-white/5 text-xs disabled:opacity-40"
+          >
+            Skip character bible and generate directly
+          </button>
+        )}
       </div>
     </div>
   );
