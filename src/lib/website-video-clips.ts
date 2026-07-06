@@ -6,6 +6,7 @@ import {
   compileBlockedFallbackMotion,
   isLiveFetchBlocked,
 } from "@/lib/website-site-resilience";
+import { captureBeatRemote } from "@/lib/website-screen-capture";
 import { getVideoPollDelayMs, runWithConcurrency } from "@/lib/makers-runtime";
 
 const WEBSITE_VIDEO_SIZE = "1280*720";
@@ -61,20 +62,11 @@ function motionOnlyResult({
 
 function buildStillPrompt(brandKit: WebsiteBrandKit, beat: WebsiteVideoBeat, renderAsset: WebsiteBeatRenderAsset) {
   const colors = `${brandKit.brand.primary_color_hex}, ${brandKit.brand.secondary_color_hex}, ${brandKit.brand.accent_color_hex}`;
-  if (beat.production_method === "ai_broll") {
-    return [
-      renderAsset.brollPromptSpec?.positive_prompt || `Cinematic b-roll for ${brandKit.brand.name}.`,
-      `Mood: ${brandKit.brand.voice_tone}. Beat: ${beat.beat_purpose}.`,
-      `Photoreal, premium commercial lighting, shallow depth of field, no logos, no UI text.`,
-    ].join(" ");
-  }
-  const motion = renderAsset.motionGraphicSpec;
   return [
-    `Branded motion-graphic hero frame for ${brandKit.brand.name}.`,
-    `Layout: ${motion?.layout?.replaceAll("_", " ") || "split headline and visual"}.`,
-    `Headline concept: ${beat.beat_purpose}. Subhead: ${beat.vo_line}.`,
-    `Colors ${colors}. Editorial typography, subtle grain, premium launch video aesthetic.`,
-    `No watermarks, no random logos, crisp vector-like composition.`,
+    renderAsset.brollPromptSpec?.positive_prompt || `Cinematic b-roll for ${brandKit.brand.name}.`,
+    `Mood: ${brandKit.brand.voice_tone}. Beat: ${beat.beat_purpose}.`,
+    `Photoreal, premium commercial lighting, shallow depth of field, no logos, no UI text.`,
+    `Brand colors ${colors}.`,
   ].join(" ");
 }
 
@@ -82,21 +74,12 @@ function buildVideoPrompt(brandKit: WebsiteBrandKit, beat: WebsiteVideoBeat, ren
   const seconds = clipSeconds(beat);
   const negative =
     renderAsset.brollPromptSpec?.negative_prompt ||
-    "watermark, logo, blurry, low quality, distorted text, UI glitches, random packaging";
+    "watermark, logo, blurry, low quality, distorted text, UI glitches, random packaging, product UI";
 
-  if (beat.production_method === "ai_broll") {
-    return [
-      renderAsset.brollPromptSpec?.positive_prompt || `Cinematic b-roll supporting ${beat.beat_purpose}.`,
-      `One ${seconds}-second continuous shot. Natural camera movement, commercial finish.`,
-      `Match ${brandKit.brand.name} tone: ${brandKit.brand.voice_tone}.`,
-      `Negative prompt: ${negative}`,
-    ].join(" ");
-  }
   return [
-    `One ${seconds}-second branded motion-graphic video for ${brandKit.brand.name}.`,
-    `Animate headline "${beat.beat_purpose}" with elegant kinetic typography and color blocks.`,
-    `Palette ${brandKit.brand.primary_color_hex} / ${brandKit.brand.accent_color_hex}.`,
-    `Smooth ease-out motion, premium launch video, no stock clichés.`,
+    renderAsset.brollPromptSpec?.positive_prompt || `Cinematic b-roll supporting ${beat.beat_purpose}.`,
+    `One ${seconds}-second continuous shot. Natural camera movement, commercial finish.`,
+    `Match ${brandKit.brand.name} tone: ${brandKit.brand.voice_tone}.`,
     `Negative prompt: ${negative}`,
   ].join(" ");
 }
@@ -143,13 +126,18 @@ export async function generateWebsiteBeatClip({
   beat,
   renderAsset,
   onProgress,
+  userId,
+  projectId,
+  authToken,
 }: {
   brandKit: WebsiteBrandKit;
   beat: WebsiteVideoBeat;
   renderAsset: WebsiteBeatRenderAsset;
   onProgress?: (progress: number) => void;
+  userId?: string;
+  projectId?: string;
+  authToken?: string;
 }): Promise<WebsiteClipResult> {
-  // Motion graphics render live in-browser — never burn Qwen video quota on them.
   if (beat.production_method === "motion_graphic") {
     onProgress?.(100);
     return motionOnlyResult({
@@ -159,7 +147,6 @@ export async function generateWebsiteBeatClip({
     });
   }
 
-  // Blocked sites cannot be screen-captured — use branded motion fallback immediately.
   if (isLiveFetchBlocked(brandKit) && beat.production_method === "screen_capture") {
     const fallbackSpec = compileBlockedFallbackMotion(brandKit, beat, "site blocked");
     onProgress?.(100);
@@ -173,12 +160,61 @@ export async function generateWebsiteBeatClip({
     };
   }
 
+  if (beat.production_method === "screen_capture") {
+    onProgress?.(12);
+    const choreography = renderAsset.captureChoreography;
+    if (!choreography) {
+      const fallbackSpec =
+        renderAsset.motionGraphicSpec ||
+        buildFallbackMotionCard(brandKit, beat, "No capture choreography compiled");
+      return {
+        beat_id: beat.beat_id,
+        motion_spec: fallbackSpec,
+        asset_status: "ready",
+        asset_source: "fallback",
+        asset_error: "missing_choreography",
+        motion_only: true,
+      };
+    }
+
+    const capture = await captureBeatRemote({
+      spec: choreography,
+      userId: userId || "anonymous",
+      projectId: projectId || `website-${Date.now()}`,
+      authToken,
+    });
+
+    if (capture.ok) {
+      onProgress?.(100);
+      return {
+        beat_id: beat.beat_id,
+        clip_url: capture.clip_url,
+        poster_url: brandKit.hero_screenshot_url || brandKit.brand.logo_asset_path || undefined,
+        asset_status: "ready",
+        asset_source: "captured",
+      };
+    }
+
+    const reason = capture.blocked ? "site blocked" : capture.reason;
+    const fallbackSpec = compileBlockedFallbackMotion(brandKit, beat, reason);
+    onProgress?.(100);
+    return {
+      beat_id: beat.beat_id,
+      motion_spec: fallbackSpec,
+      asset_status: "ready",
+      asset_source: "fallback",
+      asset_error: reason,
+      motion_only: true,
+    };
+  }
+
+  // ai_broll only — Qwen video generation
   try {
     onProgress?.(8);
     const stillPrompt = buildStillPrompt(brandKit, beat, renderAsset);
     const negative =
       renderAsset.brollPromptSpec?.negative_prompt ||
-      "watermark, logo, blurry, low quality, garbled text, deformed UI";
+      "watermark, logo, blurry, low quality, garbled text, deformed UI, product UI";
 
     let stillUrl: string | undefined;
     try {
@@ -205,7 +241,7 @@ export async function generateWebsiteBeatClip({
       clip_url: clipUrl,
       poster_url: stillUrl,
       asset_status: "ready",
-      asset_source: stillUrl ? "generated" : "compiled",
+      asset_source: "generated",
     };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -228,11 +264,17 @@ export async function generateWebsiteBeatClips({
   beats,
   assets,
   onBeatProgress,
+  userId,
+  projectId,
+  authToken,
 }: {
   brandKit: WebsiteBrandKit;
   beats: WebsiteVideoBeat[];
   assets: Record<string, WebsiteBeatRenderAsset>;
   onBeatProgress?: (beatId: string, progress: number, status: "generating" | "ready" | "failed") => void;
+  userId?: string;
+  projectId?: string;
+  authToken?: string;
 }) {
   const results = new Map<string, WebsiteClipResult>();
 
@@ -244,6 +286,9 @@ export async function generateWebsiteBeatClips({
       brandKit,
       beat,
       renderAsset,
+      userId,
+      projectId,
+      authToken,
       onProgress: (progress) => onBeatProgress?.(beat.beat_id, progress, "generating"),
     });
     results.set(beat.beat_id, result);

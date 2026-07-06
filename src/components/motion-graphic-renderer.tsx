@@ -6,6 +6,10 @@ export type MotionGraphicColors = {
   secondary?: string;
   accent?: string;
   neutral?: string;
+  headingFont?: string;
+  bodyFont?: string;
+  logoUrl?: string | null;
+  fontUrls?: string[];
 };
 
 const FPS = 30;
@@ -68,6 +72,7 @@ export function MotionGraphicRenderer({
   frameOverride,
   animate = true,
   showFallbackBadge = false,
+  logoUrl,
 }: {
   spec: CompiledMotionSpec;
   brandName: string;
@@ -76,6 +81,7 @@ export function MotionGraphicRenderer({
   frameOverride?: number;
   animate?: boolean;
   showFallbackBadge?: boolean;
+  logoUrl?: string | null;
 }) {
   const [frame, setFrame] = useState(frameOverride ?? 0);
   const durationFrames = Math.max(
@@ -113,8 +119,15 @@ export function MotionGraphicRenderer({
     ? spec.background_treatment
     : `radial-gradient(circle at 22% 18%, ${accent}22, transparent 42%), linear-gradient(135deg, ${primary}, ${neutral} 58%, ${secondary})`;
 
+  const headingFont = colors.headingFont || "Georgia, serif";
+  const bodyFont = colors.bodyFont || "system-ui, sans-serif";
+  const logoSrc = logoUrl || colors.logoUrl;
+
   return (
     <div className="relative h-full w-full overflow-hidden" style={{ background: bg }}>
+      {colors.fontUrls?.map((href) => (
+        <link key={href} rel="stylesheet" href={href} />
+      ))}
       <div className="absolute inset-0 opacity-[0.12] bg-[linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.06)_1px,transparent_1px)] bg-[size:48px_48px]" />
       <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/30" />
 
@@ -141,13 +154,16 @@ export function MotionGraphicRenderer({
             const transform = elementTransform(el, frame, easing);
             const isHeadline = el.type === "headline" || el.type === "logo";
             const isCta = el.type === "cta_button";
+            const isLogo = el.type === "logo";
             return (
               <div
                 key={`${el.type}-${index}`}
                 className={`mb-4 ${isCta ? "inline-block" : ""}`}
                 style={{ opacity, transform, color: isCta ? "#000" : color }}
               >
-                {isCta ? (
+                {isLogo && logoSrc ? (
+                  <img src={logoSrc} alt={brandName} className="h-14 md:h-20 w-auto object-contain" />
+                ) : isCta ? (
                   <span
                     className="inline-flex rounded-full px-5 py-2.5 text-sm font-semibold"
                     style={{ background: accent, color: "#000" }}
@@ -163,7 +179,7 @@ export function MotionGraphicRenderer({
                           ? "text-lg md:text-xl font-medium text-white/85"
                           : "text-base md:text-xl leading-relaxed text-white/75"
                     }
-                    style={{ fontFamily: el.typeface_token === "heading" ? "Georgia, serif" : "system-ui, sans-serif" }}
+                    style={{ fontFamily: el.typeface_token === "heading" ? headingFont : bodyFont }}
                   >
                     {el.content}
                   </div>

@@ -8,6 +8,7 @@ import {
   handleVoice,
   type HandlerContext,
 } from "./handlers.js";
+import { handleWebsiteCapture, handleWebsiteExtract } from "./website-handlers.js";
 
 type ApiHandler = (request: Request, context: HandlerContext) => Promise<Response>;
 
@@ -20,6 +21,8 @@ const routes: Record<string, ApiHandler> = {
   "POST /api/voice": handleVoice,
   "POST /api/render": handleRender,
   "POST /api/quota/check": quotaCheck,
+  "POST /api/website/extract": handleWebsiteExtract,
+  "POST /api/website/capture": handleWebsiteCapture,
 };
 
 export async function handler(request: Request) {

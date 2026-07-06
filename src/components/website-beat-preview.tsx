@@ -78,7 +78,6 @@ export function WebsiteBeatPreview({
           <div className="text-sm font-medium text-white">Generating visuals...</div>
           <div className="mt-1 text-xs text-white/45">{beatPurpose}</div>
         </div>
-        {audioUrl && <audio ref={audioRef} src={audioUrl} preload="auto" />}
       </div>
     );
   }
@@ -104,6 +103,7 @@ export function WebsiteBeatPreview({
           spec={motionSpec}
           brandName={brandName}
           colors={colors}
+          logoUrl={colors?.logoUrl}
           progress={progress}
           animate={autoPlayVideo || progress > 0}
           showFallbackBadge={showFallbackBadge}
@@ -113,6 +113,7 @@ export function WebsiteBeatPreview({
           spec={buildEmergencyMotionSpec(beatPurpose, voLine || brandName)}
           brandName={brandName}
           colors={colors}
+          logoUrl={colors?.logoUrl}
           progress={progress}
           animate
           showFallbackBadge

@@ -177,7 +177,19 @@ export function compileMotionGraphic(brandKit: WebsiteBrandKit, beat: WebsiteVid
   const durationFrames = Math.max(90, Math.round(beat.duration_seconds * FPS));
   const feature = brandKit.product.key_features[0];
   const layout = chooseMotionLayout(beat, Boolean(feature));
-  const elements: CompiledMotionElement[] = [
+  const elements: CompiledMotionElement[] = [];
+  if (brandKit.brand.logo_asset_path && (layout === "logo_moment" || layout === "cta_card")) {
+    elements.push({
+      type: "logo",
+      content: brandKit.brand.name,
+      enter_animation: "scale_overshoot",
+      enter_frame: 2,
+      exit_frame: null,
+      color_token: "accent",
+      typeface_token: "heading",
+    });
+  }
+  elements.push(
     {
       type: "headline",
       content: beat.beat_purpose,
@@ -196,7 +208,7 @@ export function compileMotionGraphic(brandKit: WebsiteBrandKit, beat: WebsiteVid
       color_token: "neutral",
       typeface_token: "body",
     },
-  ];
+  );
   if (layout === "feature_list" && feature) {
     elements.push({
       type: "feature_item",

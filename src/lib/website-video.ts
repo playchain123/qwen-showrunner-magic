@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getRequest } from "@tanstack/react-start/server";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import {
@@ -7,6 +8,8 @@ import {
   fetchBasicMetaFallback,
   mergeMetaIntoBrandKit,
 } from "./website-site-resilience";
+import { requestBrowserExtract } from "./website-browser-api";
+import { persistHeroScreenshot } from "./website-storage";
 
 export type WebsiteVideoType = "saas_launch" | "website_promo" | "user_demo" | "user_manual";
 export type ProductionMethod = "screen_capture" | "motion_graphic" | "ai_broll";
@@ -39,6 +42,9 @@ export type WebsiteBrandKit = {
   confidence_flags: string[];
   source_url: string;
   extracted_at: string;
+  extraction_method?: "browser" | "fetch" | "fallback";
+  hero_screenshot_url?: string;
+  font_urls?: string[];
 };
 
 export type WebsiteVideoBeat = {
@@ -153,8 +159,25 @@ export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
       })
       .parse(input),
   )
-  .handler(async ({ data }): Promise<WebsiteBrandKit> => {
+  .handler(async ({ data, context }): Promise<WebsiteBrandKit> => {
     const normalizedUrl = normalizeUrl(data.url);
+    const userId = (context as { userId?: string }).userId || "anonymous";
+    const request = getRequest();
+    const authToken = request?.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || undefined;
+
+    // 1) Playwright browser extract via capture API (FC worker)
+    const browserExtract = await requestBrowserExtract(normalizedUrl, authToken);
+    if (browserExtract?.success) {
+      return buildBrandKitFromBrowserExtract(normalizedUrl, browserExtract, userId);
+    }
+    if (browserExtract?.blocked) {
+      const fallback = buildFallbackBrandKit(normalizedUrl, [`${normalizedUrl} blocked in browser`]);
+      fallback.confidence_flags.push("site_blocked", "blocked_http_403_or_429", "browser_extract_blocked");
+      const meta = await fetchBasicMetaFallback(normalizedUrl);
+      return meta ? mergeMetaIntoBrandKit(fallback, meta) : fallback;
+    }
+
+    // 2) Plain HTTP fetch fallback
     const candidates = buildFetchCandidates(normalizedUrl).filter(isSafePublicHttpUrl);
     if (candidates.length === 0) {
       throw new Error("Refusing to fetch: URL resolves to a blocked address");
@@ -184,6 +207,7 @@ export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
           continue;
         }
         const kit = extractBrandKitFromHtml(candidate, html);
+        kit.extraction_method = "fetch";
         if (!/html|text|xml/i.test(contentType)) kit.confidence_flags.push("content_type_not_html");
         return kit;
       } catch (err) {
@@ -197,6 +221,7 @@ export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
       return mergeMetaIntoBrandKit(kit, meta);
     }
     const fallback = buildFallbackBrandKit(normalizedUrl, failures);
+    fallback.extraction_method = "fallback";
     if (sawBlocked) fallback.confidence_flags.push("site_blocked", "blocked_http_403_or_429");
     return fallback;
   });
@@ -364,6 +389,67 @@ function extractBrandKitFromHtml(url: string, html: string): WebsiteBrandKit {
   };
 }
 
+async function buildBrandKitFromBrowserExtract(
+  url: string,
+  extract: NonNullable<Awaited<ReturnType<typeof requestBrowserExtract>>>,
+  userId: string,
+): Promise<WebsiteBrandKit> {
+  const colors = extract.colors.length >= 3 ? extract.colors : ["#ffffff", "#111111", "#3b82f6", "#0a0a0a"];
+  const fonts = extract.fonts.length ? extract.fonts : ["Inter", "Inter"];
+  const flags: string[] = ["browser_extract_used"];
+  if (colors.length < 3) flags.push("color_extraction_low_confidence");
+  if (!extract.logo_url) flags.push("no_logo_detected");
+  if (!extract.description) flags.push("no_clear_tagline_found");
+
+  let heroUrl: string | undefined;
+  if (extract.hero_screenshot_base64) {
+    heroUrl =
+      (await persistHeroScreenshot({
+        userId,
+        projectId: `brand-${Date.now()}`,
+        imageBase64: extract.hero_screenshot_base64,
+      })) || undefined;
+  }
+
+  const navLinks = extract.nav_links
+    .filter((link) => link.label && link.href)
+    .map((link) => ({
+      page: link.href,
+      purpose: link.label.toLowerCase(),
+      capture_worthy: !/login|legal|privacy|terms|cookie/i.test(`${link.label} ${link.href}`),
+    }));
+
+  const text = extract.description || extract.title || "";
+  return {
+    brand: {
+      name: normalizeBrandName(extract.title || "", url),
+      tagline: extract.description || null,
+      primary_color_hex: colors[0] || "#ffffff",
+      secondary_color_hex: colors[1] || "#111111",
+      accent_color_hex: colors[2] || "#3b82f6",
+      neutral_color_hex: colors[3] || "#0a0a0a",
+      heading_typeface: fonts[0] || "Inter",
+      body_typeface: fonts[1] || fonts[0] || "Inter",
+      logo_asset_path: extract.logo_url || heroUrl || null,
+      voice_tone: inferVoiceTone(text),
+    },
+    product: {
+      one_line_description: extract.description || `${normalizeBrandName(extract.title || "", url)} website video`,
+      primary_use_cases: navLinks.slice(0, 5).map((p) => p.purpose),
+      key_features: navLinks.slice(0, 4).map((p) => ({ name: titleCase(p.purpose), benefit: `Explore ${p.purpose} on the live site.` })),
+      pricing_signal: null,
+      social_proof: [],
+    },
+    site_map: navLinks.length ? navLinks : [{ page: url, purpose: "homepage overview", capture_worthy: true }],
+    confidence_flags: flags,
+    source_url: url,
+    extracted_at: new Date().toISOString(),
+    extraction_method: "browser",
+    hero_screenshot_url: heroUrl,
+    font_urls: extract.font_urls,
+  };
+}
+
 function buildFallbackBrandKit(url: string, failures: string[]): WebsiteBrandKit {
   const parsed = new URL(url);
   const domain = parsed.hostname.replace(/^www\./, "");
@@ -409,6 +495,7 @@ function buildFallbackBrandKit(url: string, failures: string[]): WebsiteBrandKit
     ],
     source_url: url,
     extracted_at: new Date().toISOString(),
+    extraction_method: "fallback" as const,
   };
 }
 

@@ -21,7 +21,9 @@ import {
   type WebsiteRenderPipeline,
 } from "@/lib/website-render-pipeline";
 import { isSupabaseConfigured, supabase } from "@/integrations/supabase/client";
-import { generateWebsiteBeatClip } from "@/lib/website-video-clips";
+import { generateWebsiteBeatClipServer } from "@/lib/website-video-clips.server";
+import { buildExportBeats } from "@/lib/website-export-beats";
+import { createWebsiteProjectJob, summarizeJobProgress, updateBeatJob } from "@/lib/website-jobs";
 import { Player } from "@remotion/player";
 import { WebsiteMainComposition, websiteCompositionDurationFrames } from "@/remotion/website-main-composition";
 import { exportWebsiteVideoRemotion } from "@/lib/website-remotion-export";
@@ -80,6 +82,7 @@ function WebsiteVideoPage() {
   const [showVideoPlayer, setShowVideoPlayer] = useState(false);
   const [editingBeat, setEditingBeat] = useState<{ beatId: string; text: string } | null>(null);
   const [regeneratingBeatId, setRegeneratingBeatId] = useState<string | null>(null);
+  const [projectId, setProjectId] = useState<string | null>(null);
   const urlRef = useRef<HTMLInputElement>(null);
 
   const selectedType = useMemo(() => VIDEO_TYPES.find((type) => type.id === videoType) || VIDEO_TYPES[1], [videoType]);
@@ -138,6 +141,8 @@ function WebsiteVideoPage() {
       setPlan(nextPlan);
       setBeats(nextPlan.beats.map((beat) => ({ ...beat, progress: 5, done: false })));
       setStatus("Generating clear voice-over for each beat...");
+      const nextProjectId = `website-${Date.now()}`;
+      setProjectId(nextProjectId);
 
       const renderedBeats = await Promise.all(
         nextPlan.beats.map(async (beat, index) => {
@@ -167,9 +172,10 @@ function WebsiteVideoPage() {
 
       const pipelineDraft = buildWebsiteRenderPipeline({ brandKit: kit, beats: renderedBeats });
       setBeats(mergePipelineBeats(pipelineDraft.beats).map((beat) => ({ ...beat, assetStatus: "generating" as const, progress: 55 })));
-      setStatus(`Generating Qwen video clips for ${nextPlan.beats.length} beats (parallel x2)...`);
+      setStatus(`Generating clips and screen captures for ${nextPlan.beats.length} beats (parallel x2)...`);
 
-      const clipResults = new Map<string, Awaited<ReturnType<typeof generateWebsiteBeatClip>>>();
+      const clipResults = new Map<string, Awaited<ReturnType<typeof generateWebsiteBeatClipServer>>>();
+      let assetJob = createWebsiteProjectJob(nextProjectId, nextPlan.beats);
       const clipQueue = [...nextPlan.beats];
       const workers = Array.from({ length: 2 }, async () => {
         while (clipQueue.length > 0) {
@@ -182,19 +188,25 @@ function WebsiteVideoPage() {
               item.beat_id === beat.beat_id ? { ...item, assetStatus: "generating", progress: 58 } : item,
             ),
           );
-          const result = await generateWebsiteBeatClip({
-            brandKit: kit,
-            beat,
-            renderAsset,
-            onProgress: (progress) => {
-              setBeats((current) =>
-                current.map((item) =>
-                  item.beat_id === beat.beat_id ? { ...item, progress: Math.max(58, progress), assetStatus: "generating" } : item,
-                ),
-              );
+          assetJob = updateBeatJob(assetJob, beat.beat_id, { asset_status: "generating", progress: 58 });
+          const progress = summarizeJobProgress(assetJob);
+          setStatus(`Generating clips and captures… ${progress.ready}/${progress.total} ready`);
+          const result = await generateWebsiteBeatClipServer({
+            data: {
+              brandKit: kit,
+              beat,
+              renderAsset,
+              projectId: nextProjectId,
             },
           });
           clipResults.set(beat.beat_id, result);
+          assetJob = updateBeatJob(assetJob, beat.beat_id, {
+            asset_status: result.asset_status === "ready" ? "ready" : "failed",
+            asset_source: result.asset_source,
+            clip_url: result.clip_url,
+            progress: 100,
+            error: result.asset_error,
+          });
           setBeats((current) =>
             current.map((item) =>
               item.beat_id === beat.beat_id
@@ -317,11 +329,14 @@ function WebsiteVideoPage() {
       const draftPipeline = buildWebsiteRenderPipeline({ brandKit, beats: editedBeats });
       const renderAsset = draftPipeline.assets[beatId];
       if (renderAsset) {
-        setStatus("Regenerating Qwen video clip for this beat...");
-        const clip = await generateWebsiteBeatClip({
-          brandKit,
-          beat: { ...beat, vo_line: nextText },
-          renderAsset,
+        setStatus("Regenerating clip for this beat...");
+        const clip = await generateWebsiteBeatClipServer({
+          data: {
+            brandKit,
+            beat: { ...beat, vo_line: nextText },
+            renderAsset,
+            projectId: projectId || `website-${Date.now()}`,
+          },
         });
         editedBeats = editedBeats.map((item) =>
           item.beat_id === beatId
@@ -351,17 +366,7 @@ function WebsiteVideoPage() {
       await exportWebsiteVideoRemotion({
         brandName: brandKit.brand.name,
         colors: brandColors(brandKit),
-        beats: beats.map((beat) => ({
-          beat_id: beat.beat_id,
-          beat_purpose: beat.beat_purpose,
-          vo_line: beat.vo_line,
-          duration_seconds: getPreviewDuration(beat),
-          transition_out: beat.transition_out,
-          clipUrl: beat.clipUrl,
-          motionSpec: beat.motionSpec ?? beat.renderAsset?.motionGraphicSpec,
-          audioUrl: beat.audioUrl,
-          assetSource: beat.assetSource,
-        })),
+        beats: buildExportBeats(beats),
         title: `${brandKit.brand.name} - ${selectedType.label}`,
         onProgress: (progress) => setStatus(`Rendering website video… ${progress}%`),
       });
@@ -823,21 +828,20 @@ function WebsiteVideoPlayer({
   onDownload: () => void;
   downloading: boolean;
 }) {
-  const remotionBeats = useMemo(
-    () =>
-      beats.map((beat) => ({
-        beat_id: beat.beat_id,
-        beat_purpose: beat.beat_purpose,
-        vo_line: beat.vo_line,
-        duration_seconds: getPreviewDuration(beat),
-        transition_out: beat.transition_out,
-        clip_url: beat.clipUrl,
-        motion_spec: beat.motionSpec ?? beat.renderAsset?.motionGraphicSpec,
-        vo_audio_url: beat.audioUrl,
-        asset_source: beat.assetSource,
-      })),
-    [beats],
-  );
+  const remotionBeats = useMemo(() => {
+    const exportBeats = buildExportBeats(beats);
+    return exportBeats.map((beat) => ({
+      beat_id: beat.beat_id,
+      beat_purpose: beat.beat_purpose,
+      vo_line: beat.vo_line,
+      duration_seconds: beat.duration_seconds,
+      transition_out: beat.transition_out,
+      clip_url: beat.clipUrl,
+      motion_spec: beat.motionSpec,
+      vo_audio_url: beat.audioUrl,
+      asset_source: beat.assetSource,
+    }));
+  }, [beats]);
   const inputProps = useMemo(
     () => ({
       beats: remotionBeats,
@@ -970,6 +974,10 @@ function brandColors(brandKit: WebsiteBrandKit) {
     secondary: brandKit.brand.secondary_color_hex,
     accent: brandKit.brand.accent_color_hex,
     neutral: brandKit.brand.neutral_color_hex,
+    headingFont: `${brandKit.brand.heading_typeface}, Georgia, serif`,
+    bodyFont: `${brandKit.brand.body_typeface}, system-ui, sans-serif`,
+    logoUrl: brandKit.brand.logo_asset_path,
+    fontUrls: brandKit.font_urls,
   };
 }
 

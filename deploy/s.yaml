@@ -17,8 +17,8 @@ resources:
       runtime: custom.debian10
       code: ./dist
       handler: index.handler
-      timeout: 120
-      memorySize: 1024
+      timeout: 300
+      memorySize: 2048
       cpu: 1
       diskSize: 512
       instanceConcurrency: 10
@@ -37,3 +37,4 @@ resources:
         SARVAM_API_KEY: ""
         SARVAM_TTS_MODEL: bulbul:v3
         SARVAM_TTS_SPEAKER: meera
+        PLAYWRIGHT_ENABLED: "true"

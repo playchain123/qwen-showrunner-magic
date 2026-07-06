@@ -63,6 +63,7 @@ export function WebsiteBeatComposition({
           spec={spec}
           brandName={brandName}
           colors={colors}
+          logoUrl={colors.logoUrl}
           frameOverride={frame}
           animate={false}
           showFallbackBadge={assetSource === "fallback"}
