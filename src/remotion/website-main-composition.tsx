@@ -27,7 +27,7 @@ export type WebsiteMainCompositionProps = {
 };
 
 function resolveTransition(kind?: WebsiteRemotionBeat["transition_out"]) {
-  if (kind === "wipe") return wipe();
+  if (kind === "wipe") return wipe() as ReturnType<typeof fade>;
   if (kind === "cross_dissolve") return fade();
   return null;
 }
