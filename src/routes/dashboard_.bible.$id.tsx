@@ -1,285 +1,219 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useState } from "react";
+import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { getBibleSnapshot } from "@/lib/bible/loader.functions";
-import { runDirector } from "@/lib/bible/director.functions";
-import { runScreenwriter } from "@/lib/bible/screenwriter.functions";
-import type { BibleSnapshot, BibleStage } from "@/lib/bible/types";
-import { Button } from "@/components/ui/button";
-import { Loader2, Sparkles, BookOpen, Users, MapPin, ScrollText } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { Sidebar, TopBar } from "./dashboard";
+import {
+  getBible,
+  stageDirector,
+  stageScreenwriter,
+  stageArtDirector,
+  stageVoiceCaster,
+  stageShotPlanner,
+  stageShotRenderer,
+  renderShot,
+  runPipeline,
+} from "@/lib/bible/bible.functions";
 
 export const Route = createFileRoute("/dashboard_/bible/$id")({
   ssr: false,
-  component: BibleWorkspace,
+  component: BiblePage,
 });
 
-const STAGE_ORDER: BibleStage[] = [
-  "director",
-  "screenwriter",
-  "art_director",
-  "voice_caster",
-  "shot_planner",
-  "shot_renderer",
-  "voice_renderer",
-  "continuity_qc",
-  "assembler",
-  "done",
-];
+type StageKey = "director" | "screenwriter" | "art" | "voice" | "plan" | "render" | "all";
 
-function stageIndex(s: BibleStage) {
-  return STAGE_ORDER.indexOf(s);
-}
-
-function BibleWorkspace() {
+function BiblePage() {
   const { id } = Route.useParams();
-  const navigate = useNavigate();
-  const load = useServerFn(getBibleSnapshot);
-  const director = useServerFn(runDirector);
-  const screenwriter = useServerFn(runScreenwriter);
+  const get = useServerFn(getBible);
+  const q = useQuery({
+    queryKey: ["bible", id],
+    queryFn: () => get({ data: { bibleId: id } }),
+    refetchInterval: 5000,
+  });
 
-  const [snap, setSnap] = useState<BibleSnapshot | null>(null);
-  const [busy, setBusy] = useState<BibleStage | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<StageKey | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      const s = await load({ data: { bibleId: id } });
-      setSnap(s);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, [id, load]);
+  const director = useServerFn(stageDirector);
+  const screenwriter = useServerFn(stageScreenwriter);
+  const artDirector = useServerFn(stageArtDirector);
+  const voice = useServerFn(stageVoiceCaster);
+  const planner = useServerFn(stageShotPlanner);
+  const renderer = useServerFn(stageShotRenderer);
+  const oneShot = useServerFn(renderShot);
+  const pipeline = useServerFn(runPipeline);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  async function run(stage: BibleStage, fn: () => Promise<unknown>) {
-    setBusy(stage);
-    setError(null);
+  async function run(key: StageKey, fn: () => Promise<unknown>) {
+    setBusy(key);
+    setErr(null);
     try {
       await fn();
-      await refresh();
+      await q.refetch();
     } catch (e) {
-      setError((e as Error).message);
+      setErr(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
     }
   }
 
-  if (!snap) {
-    return (
-      <div className="min-h-screen bg-neutral-950 text-white flex items-center justify-center">
-        {error ? <div className="text-red-400 text-sm">{error}</div> : <Loader2 className="animate-spin" />}
-      </div>
-    );
-  }
-
-  const { bible, characters, locations, scenes } = snap;
-  const currentIdx = stageIndex(bible.stage);
+  const bible = q.data?.bible;
+  const characters = q.data?.characters ?? [];
+  const locations = q.data?.locations ?? [];
+  const scenes = q.data?.scenes ?? [];
+  const shots = q.data?.shots ?? [];
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-white">
-      <div className="max-w-5xl mx-auto p-6 space-y-6">
-        <header className="flex items-start justify-between gap-4">
-          <div>
-            <div className="text-xs uppercase tracking-[0.28em] text-white/45">Story Bible</div>
-            <h1 className="text-2xl font-semibold mt-1">{bible.project_id}</h1>
-            <p className="mt-2 text-sm text-white/70 max-w-2xl">{bible.brief}</p>
-          </div>
-          <div className="text-xs text-white/50">
-            stage <span className="text-white/90">{bible.stage}</span> · status{" "}
-            <span className="text-white/90">{bible.status}</span>
-          </div>
-        </header>
-
-        {error && (
-          <div className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-            {error}
-          </div>
-        )}
-
-        <StageProgress current={currentIdx} />
-
-        <StageCard
-          icon={<BookOpen size={16} />}
-          title="1. Director — plan & style bible"
-          done={currentIdx > stageIndex("director")}
-          busy={busy === "director"}
-          onRun={() => run("director", () => director({ data: { bibleId: id } }))}
-          runLabel={currentIdx > stageIndex("director") ? "Regenerate plan" : "Run Director"}
-        >
-          {"logline" in (bible.plan || {}) ? (
-            <div className="space-y-3 text-sm">
-              <div>
-                <div className="text-white/50 text-xs uppercase tracking-wider mb-1">Logline</div>
-                <div>{(bible.plan as { logline?: string }).logline}</div>
-              </div>
-              <div>
-                <div className="text-white/50 text-xs uppercase tracking-wider mb-1">Style</div>
-                <div className="flex gap-1.5 flex-wrap">
-                  {(bible.style_bible as { palette?: string[] }).palette?.map((c) => (
-                    <span key={c} className="h-6 w-6 rounded border border-white/10" style={{ background: c }} />
-                  ))}
-                </div>
-              </div>
+    <div className="min-h-screen flex bg-black text-white">
+      <Sidebar />
+      <div className="flex-1 flex flex-col">
+        <TopBar />
+        <div className="max-w-5xl mx-auto w-full px-6 py-8">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-serif-display">Story Bible</h1>
+              <p className="text-xs text-white/50 mt-1">
+                stage: <span className="text-white/80">{bible?.stage ?? "…"}</span> · status:{" "}
+                <span className="text-white/80">{bible?.status ?? "…"}</span>
+              </p>
             </div>
-          ) : (
-            <div className="text-sm text-white/50">Not run yet.</div>
+            <button
+              onClick={() => run("all", () => pipeline({ data: { bibleId: id } }))}
+              disabled={busy !== null}
+              className="px-4 py-2 rounded-full bg-blue-500 hover:bg-blue-400 text-white text-sm font-medium disabled:opacity-40"
+            >
+              {busy === "all" ? "Running full pipeline…" : "Run full pipeline"}
+            </button>
+          </div>
+          {bible?.brief && <p className="text-sm text-white/70 mt-3 italic">"{bible.brief}"</p>}
+          {err && <p className="text-xs text-red-400 mt-3">{err}</p>}
+
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-6">
+            <StageButton label="1. Director" busy={busy === "director"} onClick={() => run("director", () => director({ data: { bibleId: id } }))} />
+            <StageButton label="2. Screenwriter" busy={busy === "screenwriter"} onClick={() => run("screenwriter", () => screenwriter({ data: { bibleId: id } }))} />
+            <StageButton label="3. Art Director" busy={busy === "art"} onClick={() => run("art", () => artDirector({ data: { bibleId: id } }))} />
+            <StageButton label="4. Voice Caster" busy={busy === "voice"} onClick={() => run("voice", () => voice({ data: { bibleId: id } }))} />
+            <StageButton label="5. Shot Planner" busy={busy === "plan"} onClick={() => run("plan", () => planner({ data: { bibleId: id } }))} />
+            <StageButton label="6. Shot Renderer" busy={busy === "render"} onClick={() => run("render", () => renderer({ data: { bibleId: id } }))} />
+          </div>
+
+          {/* Plan */}
+          {bible?.plan && Object.keys(bible.plan as object).length > 0 && (
+            <Panel title="Plan">
+              <pre className="text-xs whitespace-pre-wrap text-white/70">{JSON.stringify(bible.plan, null, 2)}</pre>
+            </Panel>
           )}
-        </StageCard>
 
-        <div className="grid md:grid-cols-2 gap-4">
-          <MiniList icon={<Users size={14} />} title="Characters" empty="No characters yet — run Director.">
-            {characters.map((c) => (
-              <li key={c.id} className="py-2 border-b border-white/5 last:border-0">
-                <div className="text-sm font-medium">{c.name} <span className="text-white/40 text-xs">@{c.token}</span></div>
-                <div className="text-xs text-white/60 mt-0.5 line-clamp-2">{c.description}</div>
-                <div className="text-[10px] mt-1 flex gap-2">
-                  <Tag on={!!c.ref_image_url}>ref image</Tag>
-                  <Tag on={!!c.voice_id}>voice</Tag>
-                </div>
-              </li>
-            ))}
-          </MiniList>
-          <MiniList icon={<MapPin size={14} />} title="Locations" empty="No locations yet — run Director.">
-            {locations.map((l) => (
-              <li key={l.id} className="py-2 border-b border-white/5 last:border-0">
-                <div className="text-sm font-medium">{l.name} <span className="text-white/40 text-xs">@{l.token}</span></div>
-                <div className="text-xs text-white/60 mt-0.5 line-clamp-2">{l.description}</div>
-                <Tag on={!!l.ref_image_url}>ref image</Tag>
-              </li>
-            ))}
-          </MiniList>
-        </div>
+          {characters.length > 0 && (
+            <Panel title={`Characters (${characters.length})`}>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {characters.map((c) => (
+                  <div key={c.id} className="border border-white/10 rounded-lg p-3 bg-white/[0.03]">
+                    {c.ref_image_url ? (
+                      <img src={c.ref_image_url} alt={c.name} className="w-full aspect-video object-cover rounded mb-2" />
+                    ) : (
+                      <div className="w-full aspect-video bg-white/5 rounded mb-2 flex items-center justify-center text-[10px] text-white/40">no ref</div>
+                    )}
+                    <div className="text-xs font-medium">{c.name}</div>
+                    <div className="text-[10px] text-white/50">token: {c.token} · voice: {c.voice_id ?? "—"}</div>
+                    <div className="text-[10px] text-white/40 line-clamp-2 mt-1">{c.description}</div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
 
-        <StageCard
-          icon={<ScrollText size={16} />}
-          title="2. Screenwriter — scenes & locked dialogue"
-          done={currentIdx > stageIndex("screenwriter")}
-          busy={busy === "screenwriter"}
-          disabled={characters.length === 0}
-          onRun={() => run("screenwriter", () => screenwriter({ data: { bibleId: id } }))}
-          runLabel={scenes.length ? "Rewrite scenes" : "Run Screenwriter"}
-        >
-          {scenes.length === 0 ? (
-            <div className="text-sm text-white/50">Not run yet.</div>
-          ) : (
-            <ol className="space-y-3">
-              {scenes.map((s) => (
-                <li key={s.id} className="rounded-md border border-white/10 bg-white/[0.02] p-3">
-                  <div className="text-xs text-white/40 mb-1">Scene {s.scene_index} · ~{Math.round(s.duration_estimate)}s</div>
-                  <div className="text-sm">{s.beat}</div>
-                  {s.dialogue.length > 0 && (
-                    <div className="mt-2 space-y-1">
-                      {s.dialogue.map((d, i) => (
-                        <div key={i} className="text-xs">
-                          <span className="text-white/50">{d.speaker_token}:</span>{" "}
-                          <span className="text-white/90">"{d.text}"</span>
-                        </div>
-                      ))}
+          {locations.length > 0 && (
+            <Panel title={`Locations (${locations.length})`}>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {locations.map((l) => (
+                  <div key={l.id} className="border border-white/10 rounded-lg p-3 bg-white/[0.03]">
+                    {l.ref_image_url ? (
+                      <img src={l.ref_image_url} alt={l.name} className="w-full aspect-video object-cover rounded mb-2" />
+                    ) : (
+                      <div className="w-full aspect-video bg-white/5 rounded mb-2 flex items-center justify-center text-[10px] text-white/40">no ref</div>
+                    )}
+                    <div className="text-xs font-medium">{l.name}</div>
+                    <div className="text-[10px] text-white/50">token: {l.token}</div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
+
+          {scenes.length > 0 && (
+            <Panel title={`Scenes (${scenes.length})`}>
+              <div className="space-y-2">
+                {scenes.map((s) => (
+                  <div key={s.id} className="border border-white/10 rounded-lg p-3 bg-white/[0.03]">
+                    <div className="text-[10px] text-white/50">scene {s.scene_index} · ~{Number(s.duration_estimate)}s</div>
+                    <div className="text-sm mt-1">{s.beat}</div>
+                    {Array.isArray(s.dialogue) && s.dialogue.length > 0 && (
+                      <div className="mt-2 space-y-0.5">
+                        {(s.dialogue as Array<{ character_token: string; line: string }>).map((d, i) => (
+                          <div key={i} className="text-xs text-white/70">
+                            <span className="text-white/50">{d.character_token}:</span> "{d.line}"
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
+
+          {shots.length > 0 && (
+            <Panel title={`Shots (${shots.length})`}>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {shots.map((s) => (
+                  <div key={s.id} className="border border-white/10 rounded-lg p-3 bg-white/[0.03]">
+                    <div className="text-[10px] text-white/50 flex justify-between">
+                      <span>shot {s.shot_index} · seed {String(s.seed).slice(0, 8)} · {Number(s.duration_seconds)}s</span>
+                      <span className={`px-1.5 rounded ${s.status === "rendered" ? "bg-green-500/20 text-green-300" : s.status === "rendering" ? "bg-yellow-500/20 text-yellow-300" : s.status === "failed" ? "bg-red-500/20 text-red-300" : "bg-white/10 text-white/60"}`}>
+                        {s.status}
+                      </span>
                     </div>
-                  )}
-                </li>
-              ))}
-            </ol>
+                    <div className="text-xs mt-1 text-white/70 line-clamp-3">{s.visual_prompt}</div>
+                    {s.clip_url ? (
+                      <video src={s.clip_url} controls playsInline className="w-full aspect-video mt-2 rounded bg-black" />
+                    ) : (
+                      <button
+                        onClick={() => run("render", () => oneShot({ data: { bibleId: id, shotId: s.id } }))}
+                        disabled={busy !== null}
+                        className="text-[11px] mt-2 px-3 py-1 rounded border border-white/15 hover:bg-white/10 disabled:opacity-40"
+                      >
+                        Render this shot
+                      </button>
+                    )}
+                    {s.qc_notes && <div className="text-[10px] text-red-300/70 mt-2">{s.qc_notes}</div>}
+                  </div>
+                ))}
+              </div>
+            </Panel>
           )}
-        </StageCard>
-
-        <div className="rounded-lg border border-white/10 bg-white/[0.02] p-4 text-xs text-white/50">
-          Stages 3-9 (Art Director, Voice Caster, Shot Planner, Shot Renderer, Voice Renderer, Continuity QC,
-          Assembler) are next in the rollout. Once you're happy with the plan and scenes above, we'll wire
-          those in — each will read from this bible and never re-invent characters, locations, dialogue, or voices.
-        </div>
-
-        <div className="pt-2">
-          <Button variant="ghost" onClick={() => navigate({ to: "/dashboard" })}>← Back to dashboard</Button>
         </div>
       </div>
     </div>
   );
 }
 
-function StageProgress({ current }: { current: number }) {
+function StageButton({ label, busy, onClick }: { label: string; busy: boolean; onClick: () => void }) {
   return (
-    <div className="flex gap-1">
-      {STAGE_ORDER.slice(0, 9).map((s, i) => (
-        <div
-          key={s}
-          title={s}
-          className={`h-1.5 flex-1 rounded ${i < current ? "bg-emerald-400" : i === current ? "bg-white/60" : "bg-white/10"}`}
-        />
-      ))}
-    </div>
+    <button
+      onClick={onClick}
+      disabled={busy}
+      className="text-left px-3 py-2 rounded-lg border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] text-xs disabled:opacity-40"
+    >
+      {busy ? "Running…" : label}
+    </button>
   );
 }
 
-function StageCard({
-  icon,
-  title,
-  done,
-  busy,
-  disabled,
-  onRun,
-  runLabel,
-  children,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  done: boolean;
-  busy: boolean;
-  disabled?: boolean;
-  onRun: () => void;
-  runLabel: string;
-  children: React.ReactNode;
-}) {
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-lg border border-white/10 bg-white/[0.02] p-4">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <span className="text-white/60">{icon}</span>
-          {title}
-          {done && <span className="text-[10px] text-emerald-400 uppercase tracking-wider">locked</span>}
-        </div>
-        <Button size="sm" variant={done ? "outline" : "default"} disabled={busy || disabled} onClick={onRun}>
-          {busy ? <Loader2 className="animate-spin" size={14} /> : <Sparkles size={14} />}
-          <span className="ml-1.5">{runLabel}</span>
-        </Button>
-      </div>
+    <section className="mt-8">
+      <h2 className="text-xs uppercase tracking-widest text-white/40 mb-3">{title}</h2>
       {children}
     </section>
-  );
-}
-
-function MiniList({
-  icon,
-  title,
-  empty,
-  children,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  empty: string;
-  children: React.ReactNode;
-}) {
-  const hasChildren = Array.isArray(children) ? children.length > 0 : Boolean(children);
-  return (
-    <div className="rounded-lg border border-white/10 bg-white/[0.02] p-4">
-      <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-white/60 mb-2">
-        {icon}
-        {title}
-      </div>
-      {hasChildren ? <ul>{children}</ul> : <div className="text-sm text-white/40">{empty}</div>}
-    </div>
-  );
-}
-
-function Tag({ on, children }: { on: boolean; children: React.ReactNode }) {
-  return (
-    <span
-      className={`inline-block rounded px-1.5 py-0.5 ${on ? "bg-emerald-500/15 text-emerald-300" : "bg-white/5 text-white/40"}`}
-    >
-      {children}
-    </span>
   );
 }
