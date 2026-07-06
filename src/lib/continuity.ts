@@ -78,6 +78,7 @@ type StoryScene = {
   reference_image_direction?: string;
   shot_type?: string;
   editing_notes?: string;
+  bgm?: string;
 };
 
 type ReferenceBrief = { name: string; description?: string };

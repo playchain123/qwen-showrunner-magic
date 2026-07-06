@@ -460,7 +460,7 @@ export const generateVoice = createServerFn({ method: "POST" })
       })
       .parse(input),
   )
-  .handler(async ({ data }): Promise<{ audio_url: string; provider: string; localized_script?: string; target_language?: string; tts_speaker?: string; critique?: unknown }> => {
+  .handler(async ({ data }): Promise<{ audio_url: string; provider: string; localized_script?: string; target_language?: string; tts_speaker?: string; critique?: { issues?: string[]; verdict?: string; revision_note?: string | null; naturalness_score?: number; code_switch_quality?: number | null } | null }> => {
     const toDataUrl = (buffer: ArrayBuffer, mime = "audio/mpeg") => {
       const bytes = new Uint8Array(buffer);
       let bin = "";

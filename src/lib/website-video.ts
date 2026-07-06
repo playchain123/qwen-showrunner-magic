@@ -73,7 +73,7 @@ export type WebsiteVideoPlan = {
     energy_curve: string;
     downbeat_aligned_beats: string[];
   };
-  production_value_self_check: LintResult & {
+  production_value_self_check: Omit<LintResult, "verdict"> & {
     colors_used_total: number;
     typefaces_used_total: number;
     easing_families_used: number;

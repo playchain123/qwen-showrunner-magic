@@ -34,6 +34,7 @@ import {
   validateAndRepairScenes,
   type VisualBible,
 } from "@/lib/continuity";
+import { CONTINUITY_NEGATIVE_PROMPT } from "@/lib/continuity";
 import {
   MAKERS_DEMO_LIMITS,
   clampSceneCount,
