@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useNavigate, Outlet } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Plus, Home, Library, Upload, Sparkles, Film, FileText, Video, Package, X, Heart, LogOut, Copy, Pencil, Globe, BookOpen } from "lucide-react";
+import { ArrowUp, Plus, Home, Library, Upload, Sparkles, Film, FileText, Video, Package, X, Heart, LogOut, Copy, Pencil, Globe } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import slide1 from "@/assets/slide-1.jpg";
 import slide2 from "@/assets/slide-2.jpg";
