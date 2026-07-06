@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import {
   BROWSER_UA,
   classifyFetchFailure,
@@ -94,11 +95,70 @@ type LintResult = {
   verdict: "ship" | "revise" | "redesign";
 };
 
+function isSafePublicHttpUrl(raw: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return false;
+  if (u.username || u.password) return false;
+  const hostname = u.hostname.toLowerCase();
+  if (!hostname) return false;
+  // Block hostnames that resolve/refer to loopback, link-local, private, or metadata endpoints
+  if (
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname.endsWith(".local") ||
+    hostname.endsWith(".internal")
+  ) {
+    return false;
+  }
+  // IPv6 loopback / unspecified / link-local / unique-local
+  if (hostname.startsWith("[")) {
+    const v6 = hostname.slice(1, -1);
+    if (v6 === "::1" || v6 === "::" || /^fe80:/i.test(v6) || /^fc/i.test(v6) || /^fd/i.test(v6)) {
+      return false;
+    }
+  }
+  // IPv4 literal deny-list (loopback, private, link-local, CGNAT, metadata, broadcast, unspecified)
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    if (a === 10) return false;
+    if (a === 127) return false;
+    if (a === 0) return false;
+    if (a === 169 && b === 254) return false; // link-local + AWS/GCP/Azure metadata
+    if (a === 172 && b >= 16 && b <= 31) return false;
+    if (a === 192 && b === 168) return false;
+    if (a === 100 && b >= 64 && b <= 127) return false; // CGNAT
+    if (a >= 224) return false; // multicast + reserved + broadcast
+  }
+  return true;
+}
+
 export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) => z.object({ url: z.string().url() }).parse(input))
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) =>
+    z
+      .object({
+        url: z
+          .string()
+          .url()
+          .max(2048)
+          .refine(isSafePublicHttpUrl, {
+            message: "URL must point to a public http(s) host (private, loopback, and metadata addresses are blocked)",
+          }),
+      })
+      .parse(input),
+  )
   .handler(async ({ data }): Promise<WebsiteBrandKit> => {
     const normalizedUrl = normalizeUrl(data.url);
-    const candidates = buildFetchCandidates(normalizedUrl);
+    const candidates = buildFetchCandidates(normalizedUrl).filter(isSafePublicHttpUrl);
+    if (candidates.length === 0) {
+      throw new Error("Refusing to fetch: URL resolves to a blocked address");
+    }
     const failures: string[] = [];
     let sawBlocked = false;
     for (const candidate of candidates) {
