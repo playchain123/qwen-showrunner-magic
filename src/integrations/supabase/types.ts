@@ -14,6 +14,263 @@ export type Database = {
   }
   public: {
     Tables: {
+      bible_characters: {
+        Row: {
+          bible_id: string
+          created_at: string
+          description: string
+          id: string
+          name: string
+          ref_image_url: string | null
+          ref_image_variants: Json
+          token: string
+          updated_at: string
+          user_id: string
+          visual_seed: number
+          voice_id: string | null
+          voice_params: Json
+        }
+        Insert: {
+          bible_id: string
+          created_at?: string
+          description: string
+          id?: string
+          name: string
+          ref_image_url?: string | null
+          ref_image_variants?: Json
+          token: string
+          updated_at?: string
+          user_id: string
+          visual_seed?: number
+          voice_id?: string | null
+          voice_params?: Json
+        }
+        Update: {
+          bible_id?: string
+          created_at?: string
+          description?: string
+          id?: string
+          name?: string
+          ref_image_url?: string | null
+          ref_image_variants?: Json
+          token?: string
+          updated_at?: string
+          user_id?: string
+          visual_seed?: number
+          voice_id?: string | null
+          voice_params?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "bible_characters_bible_id_fkey"
+            columns: ["bible_id"]
+            isOneToOne: false
+            referencedRelation: "story_bibles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      bible_locations: {
+        Row: {
+          bible_id: string
+          created_at: string
+          description: string
+          id: string
+          lighting: string | null
+          name: string
+          palette: Json
+          ref_image_url: string | null
+          token: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          bible_id: string
+          created_at?: string
+          description: string
+          id?: string
+          lighting?: string | null
+          name: string
+          palette?: Json
+          ref_image_url?: string | null
+          token: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          bible_id?: string
+          created_at?: string
+          description?: string
+          id?: string
+          lighting?: string | null
+          name?: string
+          palette?: Json
+          ref_image_url?: string | null
+          token?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "bible_locations_bible_id_fkey"
+            columns: ["bible_id"]
+            isOneToOne: false
+            referencedRelation: "story_bibles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      bible_scenes: {
+        Row: {
+          beat: string
+          bible_id: string
+          character_ids: string[]
+          created_at: string
+          dialogue: Json
+          duration_estimate: number
+          id: string
+          location_id: string | null
+          locked: boolean
+          scene_index: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          beat: string
+          bible_id: string
+          character_ids?: string[]
+          created_at?: string
+          dialogue?: Json
+          duration_estimate?: number
+          id?: string
+          location_id?: string | null
+          locked?: boolean
+          scene_index: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          beat?: string
+          bible_id?: string
+          character_ids?: string[]
+          created_at?: string
+          dialogue?: Json
+          duration_estimate?: number
+          id?: string
+          location_id?: string | null
+          locked?: boolean
+          scene_index?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "bible_scenes_bible_id_fkey"
+            columns: ["bible_id"]
+            isOneToOne: false
+            referencedRelation: "story_bibles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bible_scenes_location_id_fkey"
+            columns: ["location_id"]
+            isOneToOne: false
+            referencedRelation: "bible_locations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      bible_shots: {
+        Row: {
+          attempt_count: number
+          audio_url: string | null
+          bible_id: string
+          camera: string | null
+          character_ids: string[]
+          clip_url: string | null
+          created_at: string
+          dialogue_slice: Json
+          duration_seconds: number
+          id: string
+          location_id: string | null
+          qc_notes: string | null
+          qc_score: number | null
+          scene_id: string
+          seed: number
+          shot_index: number
+          status: string
+          updated_at: string
+          user_id: string
+          visual_prompt: string
+        }
+        Insert: {
+          attempt_count?: number
+          audio_url?: string | null
+          bible_id: string
+          camera?: string | null
+          character_ids?: string[]
+          clip_url?: string | null
+          created_at?: string
+          dialogue_slice?: Json
+          duration_seconds?: number
+          id?: string
+          location_id?: string | null
+          qc_notes?: string | null
+          qc_score?: number | null
+          scene_id: string
+          seed?: number
+          shot_index: number
+          status?: string
+          updated_at?: string
+          user_id: string
+          visual_prompt: string
+        }
+        Update: {
+          attempt_count?: number
+          audio_url?: string | null
+          bible_id?: string
+          camera?: string | null
+          character_ids?: string[]
+          clip_url?: string | null
+          created_at?: string
+          dialogue_slice?: Json
+          duration_seconds?: number
+          id?: string
+          location_id?: string | null
+          qc_notes?: string | null
+          qc_score?: number | null
+          scene_id?: string
+          seed?: number
+          shot_index?: number
+          status?: string
+          updated_at?: string
+          user_id?: string
+          visual_prompt?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "bible_shots_bible_id_fkey"
+            columns: ["bible_id"]
+            isOneToOne: false
+            referencedRelation: "story_bibles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bible_shots_location_id_fkey"
+            columns: ["location_id"]
+            isOneToOne: false
+            referencedRelation: "bible_locations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bible_shots_scene_id_fkey"
+            columns: ["scene_id"]
+            isOneToOne: false
+            referencedRelation: "bible_scenes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       character_embeddings: {
         Row: {
           character_token: string
@@ -82,6 +339,48 @@ export type Database = {
           model_version?: string
           project_id?: string
           scene_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      story_bibles: {
+        Row: {
+          brief: string
+          created_at: string
+          global_seed: number
+          id: string
+          plan: Json
+          project_id: string
+          stage: string
+          status: string
+          style_bible: Json
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          brief: string
+          created_at?: string
+          global_seed?: number
+          id?: string
+          plan?: Json
+          project_id: string
+          stage?: string
+          status?: string
+          style_bible?: Json
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          brief?: string
+          created_at?: string
+          global_seed?: number
+          id?: string
+          plan?: Json
+          project_id?: string
+          stage?: string
+          status?: string
+          style_bible?: Json
+          updated_at?: string
           user_id?: string
         }
         Relationships: []
