@@ -26,10 +26,16 @@ export type CapturePayload = {
 };
 
 function captureApiBase() {
+  const viteEnv =
+    typeof import.meta !== "undefined" && import.meta.env
+      ? (import.meta.env as Record<string, string | undefined>)
+      : {};
   return (
     process.env.CAPTURE_API_BASE_URL ||
     process.env.VITE_API_BASE_URL ||
     process.env.VITE_CAPTURE_API_BASE_URL ||
+    viteEnv.VITE_API_BASE_URL ||
+    viteEnv.VITE_CAPTURE_API_BASE_URL ||
     ""
   ).replace(/\/$/, "");
 }

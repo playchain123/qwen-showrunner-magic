@@ -23,6 +23,7 @@ const routes: Record<string, ApiHandler> = {
   "POST /api/quota/check": quotaCheck,
   "POST /api/website/extract": handleWebsiteExtract,
   "POST /api/website/capture": handleWebsiteCapture,
+  "GET /api/health": healthCheck,
 };
 
 export async function handler(request: Request) {
@@ -64,6 +65,15 @@ async function quotaCheck(_request: Request, context: HandlerContext) {
     allowed: true,
     max_projects_per_user_per_day: maxProjects,
     request_id: context.requestId,
+  });
+}
+
+async function healthCheck(_request: Request, context: HandlerContext) {
+  return jsonResponse(context, 200, {
+    success: true,
+    stage: "health",
+    playwright_enabled: process.env.PLAYWRIGHT_ENABLED === "true",
+    routes: ["POST /api/website/extract", "POST /api/website/capture"],
   });
 }
 

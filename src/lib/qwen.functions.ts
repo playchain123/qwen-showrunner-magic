@@ -37,11 +37,16 @@ function isSafeExternalUrl(value: string): boolean {
   try {
     const u = new URL(value);
     if (u.protocol !== "https:") return false;
-    return ALLOWED_MEDIA_HOSTS.has(u.hostname);
+    if (ALLOWED_MEDIA_HOSTS.has(u.hostname)) return true;
+    if (/^dashscope-result[.-].*\.aliyuncs\.com$/i.test(u.hostname)) return true;
+    if (/^.*\.oss-[a-z0-9-]+\.aliyuncs\.com$/i.test(u.hostname)) return true;
+    return false;
   } catch {
     return false;
   }
 }
+
+export { isSafeExternalUrl };
 
 const safeMediaUrl = z
   .string()

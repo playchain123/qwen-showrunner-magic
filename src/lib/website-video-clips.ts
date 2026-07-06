@@ -1,6 +1,6 @@
-import { generateSceneImage, pollVideo, submitVideo } from "@/lib/qwen.functions";
+import { generateSceneImage, isSafeExternalUrl, pollVideo, submitVideo } from "@/lib/qwen.functions";
 import type { CompiledMotionSpec, WebsiteBeatRenderAsset } from "@/lib/website-render-pipeline";
-import { buildFallbackMotionCard } from "@/lib/website-render-pipeline";
+import { buildFallbackMotionCard, compileMotionGraphic } from "@/lib/website-render-pipeline";
 import type { WebsiteBrandKit, WebsiteVideoBeat } from "@/lib/website-video";
 import {
   compileBlockedFallbackMotion,
@@ -9,7 +9,7 @@ import {
 import { captureBeatRemote } from "@/lib/website-screen-capture";
 import { getVideoPollDelayMs, runWithConcurrency } from "@/lib/makers-runtime";
 
-const WEBSITE_VIDEO_SIZE = "1280*720";
+const WEBSITE_VIDEO_SIZE = "1920*1080";
 const MAX_POLL_ATTEMPTS = 72;
 const MAX_PARALLEL_CLIPS = 2;
 
@@ -84,11 +84,23 @@ function buildVideoPrompt(brandKit: WebsiteBrandKit, beat: WebsiteVideoBeat, ren
   ].join(" ");
 }
 
+function isAiVideoUnavailableError(message: string) {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("arrearage") ||
+    lower.includes("allowlist") ||
+    lower.includes("size must be") ||
+    lower.includes("access denied") ||
+    lower.includes("dashscope_api_key not configured")
+  );
+}
+
 function videoAttempts(stillUrl?: string): Array<{ model: VideoModel; imageUrl?: string }> {
   const attempts: Array<{ model: VideoModel; imageUrl?: string }> = [];
-  if (stillUrl) {
-    attempts.push({ model: "happyhorse-1.1-i2v", imageUrl: stillUrl });
-    attempts.push({ model: "wan2.2-i2v-plus", imageUrl: stillUrl });
+  const safeStill = stillUrl && isSafeExternalUrl(stillUrl) ? stillUrl : undefined;
+  if (safeStill) {
+    attempts.push({ model: "happyhorse-1.1-i2v", imageUrl: safeStill });
+    attempts.push({ model: "wan2.2-i2v-plus", imageUrl: safeStill });
   }
   attempts.push({ model: "happyhorse-1.1-t2v" });
   attempts.push({ model: "wan2.2-t2v-plus" });
@@ -115,7 +127,9 @@ async function submitAndPollWebsiteClip(prompt: string, attempts: Array<{ model:
       }
       throw new Error("Timed out waiting for website clip");
     } catch (err) {
-      failures.push(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      failures.push(message);
+      if (isAiVideoUnavailableError(message)) break;
     }
   }
   throw new Error(failures.join(" | ") || "All video engines failed");
@@ -245,15 +259,17 @@ export async function generateWebsiteBeatClip({
     };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
+    const shortReason = isAiVideoUnavailableError(reason) ? "ai_video_unavailable" : reason.slice(0, 80);
     const fallbackSpec =
+      compileMotionGraphic(brandKit, beat) ||
       renderAsset.motionGraphicSpec ||
-      buildFallbackMotionCard(brandKit, beat, `Clip generation failed: ${reason.slice(0, 80)}`);
+      buildFallbackMotionCard(brandKit, beat, shortReason);
     return {
       beat_id: beat.beat_id,
       motion_spec: fallbackSpec,
       asset_status: "ready",
       asset_source: "fallback",
-      asset_error: reason,
+      asset_error: shortReason,
       motion_only: true,
     };
   }

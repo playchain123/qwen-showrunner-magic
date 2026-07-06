@@ -1,5 +1,14 @@
 import type { WebsiteBrandKit, WebsiteVideoBeat, WebsiteVideoPlan } from "./website-video";
 import { buildFallbackMotionCard } from "./website-render-pipeline";
+import { isCaptureApiConfigured } from "./website-browser-api";
+
+export function isBoilerplateSentence(text: string) {
+  const lower = text.toLowerCase();
+  return (
+    /reviewed and used to improve|terms of service|privacy policy|cookie policy|all rights reserved|©|copyright|gdpr|ccpa|do not sell|sign up to|log in to|subscribe to/i.test(lower) ||
+    /chats may be reviewed|improve our ai models|by continuing|accept the terms/i.test(lower)
+  );
+}
 
 const BROWSER_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -9,10 +18,56 @@ export function isLiveFetchBlocked(brandKit: WebsiteBrandKit): boolean {
     (flag) =>
       flag === "live_fetch_failed" ||
       flag === "site_blocked" ||
+      flag === "low_quality_extraction" ||
       flag.startsWith("blocked_http_") ||
       flag.includes("HTTP 403") ||
       flag.includes("HTTP 429"),
   );
+}
+
+/** Flag kits where extracted copy is mostly legal boilerplate or disclaimers. */
+export function auditBrandKitQuality(brandKit: WebsiteBrandKit) {
+  const features = brandKit.product.key_features.map((f) => f.benefit).filter(Boolean);
+  if (features.length === 0) return brandKit;
+  const boilerplateCount = features.filter((f) => isBoilerplateSentence(f)).length;
+  if (boilerplateCount / features.length > 0.5) {
+    if (!brandKit.confidence_flags.includes("low_quality_extraction")) {
+      brandKit.confidence_flags.push("low_quality_extraction");
+    }
+    brandKit.product.key_features = brandKit.product.key_features.filter((f) => !isBoilerplateSentence(f.benefit));
+    if (brandKit.product.key_features.length === 0 && brandKit.brand.tagline && !isBoilerplateSentence(brandKit.brand.tagline)) {
+      brandKit.product.key_features = [{ name: brandKit.brand.name, benefit: brandKit.brand.tagline }];
+    }
+  }
+  if (isBoilerplateSentence(brandKit.product.one_line_description) && brandKit.brand.tagline && !isBoilerplateSentence(brandKit.brand.tagline)) {
+    brandKit.product.one_line_description = brandKit.brand.tagline;
+  }
+  return brandKit;
+}
+
+/** When capture worker is not deployed, reroute screen_capture beats to motion_graphic. */
+export function repurposePlanForCaptureUnavailable(plan: WebsiteVideoPlan): WebsiteVideoPlan {
+  if (isCaptureApiConfigured()) return plan;
+  const beats = plan.beats.map((beat) => {
+    if (beat.production_method !== "screen_capture") return beat;
+    return {
+      ...beat,
+      production_method: "motion_graphic" as const,
+      screen_capture_spec: null,
+      motion_graphic_spec: beat.motion_graphic_spec || {
+        layout: "split headline plus feature-callout stack using brand colors only",
+        elements: [
+          { type: "headline", content: beat.beat_purpose, animation: "fade_rise" },
+          { type: "supporting_copy", content: beat.vo_line, animation: "mask_wipe" },
+        ],
+        easing_family: "ease-out-expo",
+        colors_used: [],
+        typefaces_used: [],
+      },
+      ai_broll_spec: null,
+    };
+  });
+  return { ...plan, beats };
 }
 
 export function classifyFetchFailure(status: number): "blocked" | "http_error" | "ok" {

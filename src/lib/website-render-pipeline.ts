@@ -175,41 +175,55 @@ export function compileBeatAsset(
 
 export function compileMotionGraphic(brandKit: WebsiteBrandKit, beat: WebsiteVideoBeat): CompiledMotionSpec {
   const durationFrames = Math.max(90, Math.round(beat.duration_seconds * FPS));
-  const feature = brandKit.product.key_features[0];
-  const layout = chooseMotionLayout(beat, Boolean(feature));
+  const beatIndex = Math.max(0, Number(beat.beat_id.split("-").pop()) - 1 || 0);
+  const feature = brandKit.product.key_features[beatIndex % Math.max(1, brandKit.product.key_features.length)];
+  const layout =
+    layoutFromPlanHint(beat.motion_graphic_spec?.layout) || chooseMotionLayout(beat, Boolean(feature));
   const elements: CompiledMotionElement[] = [];
-  if (brandKit.brand.logo_asset_path && (layout === "logo_moment" || layout === "cta_card")) {
-    elements.push({
-      type: "logo",
-      content: brandKit.brand.name,
-      enter_animation: "scale_overshoot",
-      enter_frame: 2,
-      exit_frame: null,
-      color_token: "accent",
-      typeface_token: "heading",
-    });
+
+  const planElements = beat.motion_graphic_spec?.elements;
+  if (planElements?.length) {
+    for (const el of planElements) {
+      const mapped = mapPlanElementToCompiled(el, beat, brandKit);
+      if (mapped) elements.push(mapped);
+    }
   }
-  elements.push(
-    {
-      type: "headline",
-      content: beat.beat_purpose,
-      enter_animation: "fade_rise",
-      enter_frame: 4,
-      exit_frame: null,
-      color_token: "accent",
-      typeface_token: "heading",
-    },
-    {
-      type: "subhead",
-      content: fitCopy(beat.vo_line, 150),
-      enter_animation: "mask_wipe",
-      enter_frame: 18,
-      exit_frame: null,
-      color_token: "neutral",
-      typeface_token: "body",
-    },
-  );
-  if (layout === "feature_list" && feature) {
+
+  if (elements.length === 0) {
+    if (brandKit.brand.logo_asset_path && (layout === "logo_moment" || layout === "cta_card")) {
+      elements.push({
+        type: "logo",
+        content: brandKit.brand.name,
+        enter_animation: "scale_overshoot",
+        enter_frame: 2,
+        exit_frame: null,
+        color_token: "accent",
+        typeface_token: "heading",
+      });
+    }
+    elements.push(
+      {
+        type: "headline",
+        content: beat.beat_purpose,
+        enter_animation: "fade_rise",
+        enter_frame: 4,
+        exit_frame: null,
+        color_token: "accent",
+        typeface_token: "heading",
+      },
+      {
+        type: "subhead",
+        content: fitCopy(beat.vo_line, 150),
+        enter_animation: "mask_wipe",
+        enter_frame: 18,
+        exit_frame: null,
+        color_token: "neutral",
+        typeface_token: "body",
+      },
+    );
+  }
+
+  if (layout === "feature_list" && feature && !elements.some((e) => e.type === "feature_item")) {
     elements.push({
       type: "feature_item",
       content: `${feature.name}: ${feature.benefit}`,
@@ -220,7 +234,7 @@ export function compileMotionGraphic(brandKit: WebsiteBrandKit, beat: WebsiteVid
       typeface_token: "body",
     });
   }
-  if (layout === "cta_card") {
+  if (layout === "cta_card" && !elements.some((e) => e.type === "cta_button")) {
     elements.push({
       type: "cta_button",
       content: brandKit.brand.tagline || "Get started",
@@ -384,6 +398,71 @@ function chooseMotionLayout(beat: WebsiteVideoBeat, hasFeature: boolean): Motion
   if (/feature|workflow|step|how|manual|demo/.test(text) && hasFeature) return "feature_list";
   if (/logo|brand|intro|hook/.test(text)) return "logo_moment";
   return beat.production_method === "motion_graphic" ? "split_headline_and_visual" : "full_frame_headline";
+}
+
+function layoutFromPlanHint(hint?: string): MotionLayout | null {
+  if (!hint) return null;
+  const lower = hint.toLowerCase();
+  if (/proof|three-column/.test(lower)) return "stat_callout";
+  if (/cta|centered logo/.test(lower)) return "cta_card";
+  if (/split/.test(lower)) return "split_headline_and_visual";
+  if (/logo|hook|full-frame/.test(lower)) return "logo_moment";
+  if (/feature/.test(lower)) return "feature_list";
+  return "full_frame_headline";
+}
+
+function mapPlanElementToCompiled(
+  el: { type: string; content: string; animation?: string },
+  beat: WebsiteVideoBeat,
+  brandKit: WebsiteBrandKit,
+): CompiledMotionElement | null {
+  const anim = /scale|overshoot/i.test(el.animation || "") ? "scale_overshoot" : /mask|wipe/i.test(el.animation || "") ? "mask_wipe" : "fade_rise";
+  const frame = el.type === "logo" ? 2 : el.type === "headline" ? 4 : 18;
+  switch (el.type) {
+    case "logo":
+      return {
+        type: "logo",
+        content: brandKit.brand.name,
+        enter_animation: "scale_overshoot",
+        enter_frame: frame,
+        exit_frame: null,
+        color_token: "accent",
+        typeface_token: "heading",
+      };
+    case "headline":
+      return {
+        type: "headline",
+        content: el.content || beat.beat_purpose,
+        enter_animation: anim,
+        enter_frame: frame,
+        exit_frame: null,
+        color_token: "accent",
+        typeface_token: "heading",
+      };
+    case "supporting_copy":
+    case "subhead":
+      return {
+        type: "subhead",
+        content: fitCopy(el.content || beat.vo_line, 150),
+        enter_animation: "mask_wipe",
+        enter_frame: frame,
+        exit_frame: null,
+        color_token: "neutral",
+        typeface_token: "body",
+      };
+    case "cta_button":
+      return {
+        type: "cta_button",
+        content: el.content || brandKit.brand.tagline || "Get started",
+        enter_animation: "scale_overshoot",
+        enter_frame: 34,
+        exit_frame: null,
+        color_token: "primary",
+        typeface_token: "heading",
+      };
+    default:
+      return null;
+  }
 }
 
 function buildFallbackCaptureSteps(purpose: string) {

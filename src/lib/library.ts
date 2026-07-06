@@ -105,6 +105,84 @@ export type StyleProfile = {
 const LIBRARY_KEY = "makers:library";
 const GENERATION_LOG_KEY = "makers:generation-log";
 
+function isDataUrl(value?: string) {
+  return Boolean(value?.startsWith("data:"));
+}
+
+function slimLibraryScene(scene: LibraryScene): LibraryScene {
+  const slim: LibraryScene = {
+    title: scene.title,
+    assetStatus: scene.assetStatus,
+    assetSource: scene.assetSource,
+    caption: scene.caption,
+    spokenLine: scene.spokenLine,
+    shotType: scene.shotType,
+    durationSeconds: scene.durationSeconds,
+    visual: scene.visual,
+    editingNotes: scene.editingNotes,
+    colorGrade: scene.colorGrade,
+    localizedScript: scene.localizedScript,
+    targetLanguage: scene.targetLanguage,
+    ttsProvider: scene.ttsProvider,
+    ttsSpeaker: scene.ttsSpeaker,
+  };
+  if (scene.clipUrl && !isDataUrl(scene.clipUrl)) slim.clipUrl = scene.clipUrl;
+  if (scene.videoUrl && !isDataUrl(scene.videoUrl)) slim.videoUrl = scene.videoUrl;
+  if (scene.posterUrl && !isDataUrl(scene.posterUrl)) slim.posterUrl = scene.posterUrl;
+  if (scene.audioUrl && !isDataUrl(scene.audioUrl)) slim.audioUrl = scene.audioUrl;
+  return slim;
+}
+
+/** Strip heavy payloads before persisting website projects to localStorage. */
+export function slimWebsiteProjectForStorage(project: LibraryProject): LibraryProject {
+  if (project.type !== "website_video") return project;
+  const scenes = (project.scenes || project.timeline || []).map(slimLibraryScene);
+  const meta = project.metadata || {};
+  const flags = Array.isArray((meta as { confidenceFlags?: string[] }).confidenceFlags)
+    ? (meta as { confidenceFlags: string[] }).confidenceFlags
+    : [];
+  return {
+    id: project.id,
+    type: project.type,
+    title: project.title,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+    posterUrl: project.posterUrl && !isDataUrl(project.posterUrl) ? project.posterUrl : undefined,
+    durationSeconds: project.durationSeconds,
+    websiteUrl: project.websiteUrl,
+    videoType: project.videoType,
+    brandName: project.brandName,
+    productPitch: project.productPitch,
+    scenes,
+    metadata: {
+      source: "website",
+      websiteUrl: project.websiteUrl,
+      videoType: project.videoType,
+      confidenceFlags: flags,
+      beatCount: scenes.length,
+    },
+  };
+}
+
+function writeLibraryToStorage(projects: LibraryProject[]) {
+  try {
+    localStorage.setItem(LIBRARY_KEY, JSON.stringify(projects));
+    return true;
+  } catch (err) {
+    const isQuota =
+      err instanceof DOMException &&
+      (err.name === "QuotaExceededError" || err.code === 22 || err.code === 1014);
+    if (!isQuota) throw err;
+    const pruned = projects.slice(0, Math.max(5, Math.floor(projects.length / 2)));
+    try {
+      localStorage.setItem(LIBRARY_KEY, JSON.stringify(pruned));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
 export function readLibraryProjects() {
   const raw = localStorage.getItem(LIBRARY_KEY);
   if (!raw) return [];
@@ -113,13 +191,19 @@ export function readLibraryProjects() {
 }
 
 export function saveLibraryProject(project: LibraryProject, limit = 50) {
+  const stored =
+    project.type === "website_video" ? slimWebsiteProjectForStorage(project) : project;
   const existing = readLibraryProjects();
   const next = [
-    project,
-    ...existing.filter((item) => !(item.id === project.id && item.type === project.type)),
+    stored,
+    ...existing.filter((item) => !(item.id === stored.id && item.type === stored.type)),
   ].slice(0, limit);
-  localStorage.setItem(LIBRARY_KEY, JSON.stringify(next));
-  appendGenerationLog(project);
+  const ok = writeLibraryToStorage(next);
+  if (!ok) {
+    console.warn("[library] localStorage quota exceeded — project not saved");
+    return existing;
+  }
+  appendGenerationLog(stored);
   return next;
 }
 

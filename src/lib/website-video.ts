@@ -7,8 +7,10 @@ import {
   classifyFetchFailure,
   fetchBasicMetaFallback,
   mergeMetaIntoBrandKit,
+  auditBrandKitQuality,
+  isBoilerplateSentence,
 } from "./website-site-resilience";
-import { requestBrowserExtract } from "./website-browser-api";
+import { requestBrowserExtract, isCaptureApiConfigured } from "./website-browser-api";
 import { persistHeroScreenshot } from "./website-storage";
 
 export type WebsiteVideoType = "saas_launch" | "website_promo" | "user_demo" | "user_manual";
@@ -208,6 +210,8 @@ export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
         }
         const kit = extractBrandKitFromHtml(candidate, html);
         kit.extraction_method = "fetch";
+        auditBrandKitQuality(kit);
+        if (!isCaptureApiConfigured()) kit.confidence_flags.push("capture_api_unconfigured");
         if (!/html|text|xml/i.test(contentType)) kit.confidence_flags.push("content_type_not_html");
         return kit;
       } catch (err) {
@@ -223,6 +227,8 @@ export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
     const fallback = buildFallbackBrandKit(normalizedUrl, failures);
     fallback.extraction_method = "fallback";
     if (sawBlocked) fallback.confidence_flags.push("site_blocked", "blocked_http_403_or_429");
+    if (!isCaptureApiConfigured()) fallback.confidence_flags.push("capture_api_unconfigured");
+    auditBrandKitQuality(fallback);
     return fallback;
   });
 
@@ -348,15 +354,19 @@ function extractBrandKitFromHtml(url: string, html: string): WebsiteBrandKit {
   const text = cleanText(stripTags(html));
   const title = decodeHtml(matchFirst(html, /<title[^>]*>([\s\S]*?)<\/title>/i) || new URL(url).hostname.replace(/^www\./, ""));
   const description = decodeHtml(
-    matchFirst(html, /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) ||
     matchFirst(html, /<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i) ||
+    matchFirst(html, /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) ||
     "",
   );
   const colors = extractColors(html);
   const fonts = extractFonts(html);
   const navLinks = extractNavLinks(url, html);
-  const logo = absolutizeUrl(url, matchFirst(html, /<img[^>]+(?:alt=["'][^"']*logo[^"']*["'][^>]+src|src)=["']([^"']+)["']/i));
-  const features = extractFeatureCandidates(text);
+  const logo =
+    absolutizeUrl(url, matchFirst(html, /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)) ||
+    absolutizeUrl(url, matchFirst(html, /<img[^>]+(?:class=["'][^"']*logo[^"']*["'][^>]+src|src)=["']([^"']+)["']/i)) ||
+    absolutizeUrl(url, matchFirst(html, /<img[^>]+alt=["'][^"']*logo[^"']*["'][^>]+src=["']([^"']+)["']/i)) ||
+    absolutizeUrl(url, matchFirst(html, /<link[^>]+rel=["'](?:icon|shortcut icon|apple-touch-icon)["'][^>]+href=["']([^"']+)["']/i));
+  const features = extractFeatureCandidates(text, description);
   const flags: string[] = [];
   if (colors.length < 3) flags.push("color_extraction_low_confidence");
   if (!description) flags.push("no_clear_tagline_found");
@@ -420,7 +430,7 @@ async function buildBrandKitFromBrowserExtract(
     }));
 
   const text = extract.description || extract.title || "";
-  return {
+  const kit: WebsiteBrandKit = {
     brand: {
       name: normalizeBrandName(extract.title || "", url),
       tagline: extract.description || null,
@@ -448,6 +458,8 @@ async function buildBrandKitFromBrowserExtract(
     hero_screenshot_url: heroUrl,
     font_urls: extract.font_urls,
   };
+  if (!isCaptureApiConfigured()) kit.confidence_flags.push("capture_api_unconfigured");
+  return auditBrandKitQuality(kit);
 }
 
 function buildFallbackBrandKit(url: string, failures: string[]): WebsiteBrandKit {
@@ -561,11 +573,47 @@ function chooseProductionMethod(method: ProductionMethod, availableAiBroll: bool
 
 function buildVoiceLine(kit: WebsiteBrandKit, type: WebsiteVideoType, purpose: string, index: number) {
   const brand = kit.brand.name;
-  const feature = kit.product.key_features[index % Math.max(1, kit.product.key_features.length)]?.benefit || kit.product.one_line_description;
-  if (purpose.toLowerCase().includes("cta")) return `Visit ${brand} to explore the product, compare the details, and take the next step when you are ready.`;
-  if (purpose.toLowerCase().includes("walkthrough") || purpose.toLowerCase().includes("steps")) return `Now we move through the actual site experience, showing the pages and interactions that matter most for ${feature}.`;
-  if (type === "user_manual") return `In this section, follow the on-screen steps carefully and use the site structure to complete the task with confidence.`;
-  return `${brand} presents ${feature}, using the website itself as the source of truth for the story, visuals, and product flow.`;
+  const tagline = kit.brand.tagline || kit.product.one_line_description;
+  const feature = kit.product.key_features[index % Math.max(1, kit.product.key_features.length)];
+  const page = kit.site_map[index % Math.max(1, kit.site_map.length)];
+  const hostname = (() => {
+    try {
+      return new URL(kit.source_url).hostname.replace(/^www\./, "");
+    } catch {
+      return brand.toLowerCase().replace(/\s+/g, "");
+    }
+  })();
+  const lower = purpose.toLowerCase();
+
+  if (/hook|brand hook|cold open/.test(lower)) {
+    return tagline ? `${brand}. ${tagline}` : `Meet ${brand} — built for teams who need clarity, speed, and results.`;
+  }
+  if (/problem/.test(lower)) {
+    const pain = kit.product.primary_use_cases[0] || feature?.benefit || tagline;
+    return pain ? `Teams struggle with fragmented workflows. ${brand} solves ${pain}.` : `Here's the problem ${brand} was built to solve.`;
+  }
+  if (/reveal|value proposition/.test(lower)) {
+    return feature ? `Introducing ${feature.name}: ${feature.benefit}` : `${brand} brings your product story into focus.`;
+  }
+  if (/walkthrough|tour|steps|demo/.test(lower)) {
+    const pageLabel = page?.purpose || "the live product";
+    return `Let's walk through ${pageLabel} on ${hostname} and see how it works in practice.`;
+  }
+  if (/proof|social|differentiation/.test(lower)) {
+    const proof = kit.product.social_proof[0] || feature?.benefit;
+    return proof ? `${brand} earns trust: ${proof}.` : `See why teams choose ${brand} for reliable results.`;
+  }
+  if (/cta|call to action/.test(lower)) {
+    return `Ready to explore ${brand}? Visit ${hostname} and take the next step today.`;
+  }
+  if (type === "user_manual") {
+    return `Follow each on-screen step on ${hostname} to complete this section with confidence.`;
+  }
+  return feature ? `${beatPurposeFallback(purpose)}: ${feature.benefit}` : tagline || `${brand} — see it in action.`;
+}
+
+function beatPurposeFallback(purpose: string) {
+  return purpose.split(" ").slice(0, 4).join(" ");
 }
 
 function buildInteractionSequence(purpose: string, page: string) {
@@ -615,10 +663,19 @@ function extractNavLinks(baseUrl: string, html: string) {
   return uniqueBy(links, (item) => item.page);
 }
 
-function extractFeatureCandidates(text: string) {
-  const sentences = text.split(/[.!?]\s+/).map((s) => cleanText(s)).filter((s) => s.length > 32 && s.length < 160);
-  const ranked = sentences.filter((s) => /create|manage|automate|build|generate|track|collaborate|secure|integrate|launch|analyze|design|video|ai|team|customer|product/i.test(s));
-  return unique((ranked.length ? ranked : sentences).slice(0, 8));
+function extractFeatureCandidates(text: string, preferredDescription?: string) {
+  const sentences = text
+    .split(/[.!?]\s+/)
+    .map((s) => cleanText(s))
+    .filter((s) => s.length > 32 && s.length < 160 && !isBoilerplateSentence(s));
+  const ranked = sentences.filter((s) =>
+    /create|manage|automate|build|generate|track|collaborate|secure|integrate|launch|analyze|design|video|ai|team|customer|product|scale|platform|service/i.test(s),
+  );
+  const base = unique((ranked.length ? ranked : sentences).slice(0, 8));
+  if (preferredDescription && !isBoilerplateSentence(preferredDescription)) {
+    return unique([preferredDescription, ...base]).slice(0, 8);
+  }
+  return base;
 }
 
 function extractColors(html: string) {
@@ -694,11 +751,14 @@ function cleanText(value: string) {
 
 function decodeHtml(value: string) {
   return value
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, num) => String.fromCharCode(Number(num)))
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, "\"")
     .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
     .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, " ");
+    .replace(/&gt;/g, ">");
 }
 
 function matchFirst(value: string, pattern: RegExp) {

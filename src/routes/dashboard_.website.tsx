@@ -13,7 +13,9 @@ import {
   type WebsiteVideoPlan,
   type WebsiteVideoType,
 } from "@/lib/website-video";
-import { repurposePlanForBlockedSite } from "@/lib/website-site-resilience";
+import { repurposePlanForBlockedSite, repurposePlanForCaptureUnavailable } from "@/lib/website-site-resilience";
+import { isCaptureApiConfigured } from "@/lib/website-browser-api";
+import { slimWebsiteProjectForStorage } from "@/lib/library";
 import {
   buildWebsiteRenderPipeline,
   estimateVoiceDurationSeconds,
@@ -128,15 +130,17 @@ function WebsiteVideoPage() {
       setStatus(kit.confidence_flags.includes("fallback_brand_kit_used")
         ? "Website fetch was blocked/unavailable. Building a fallback plan from the domain..."
         : "Building website-to-video production plan...");
-      const nextPlan = repurposePlanForBlockedSite(
-        kit,
-        buildWebsiteVideoPlan({
-          brandKit: kit,
-          videoType,
-          targetDurationSeconds: safeDuration,
-          availableAiBroll: true,
-          clientStyleProfile: buildWebsiteStyleProfile(kit.brand.name, voiceLanguage),
-        }),
+      const nextPlan = repurposePlanForCaptureUnavailable(
+        repurposePlanForBlockedSite(
+          kit,
+          buildWebsiteVideoPlan({
+            brandKit: kit,
+            videoType,
+            targetDurationSeconds: safeDuration,
+            availableAiBroll: true,
+            clientStyleProfile: buildWebsiteStyleProfile(kit.brand.name, voiceLanguage),
+          }),
+        ),
       );
       setPlan(nextPlan);
       setBeats(nextPlan.beats.map((beat) => ({ ...beat, progress: 5, done: false })));
@@ -386,67 +390,50 @@ function WebsiteVideoPage() {
 
   function saveWebsiteProject(kit: WebsiteBrandKit, nextPlan: WebsiteVideoPlan, renderedBeats: BeatPreview[], pipeline: WebsiteRenderPipeline | null) {
     const now = new Date().toISOString();
-    saveLibraryProject({
-      id: `website-${Date.now()}`,
-      type: "website_video",
-      title: `${kit.brand.name} - ${selectedType.label}`,
-      createdAt: now,
-      updatedAt: now,
-      posterUrl: kit.brand.logo_asset_path || undefined,
-      durationSeconds: nextPlan.total_duration_seconds,
-      websiteUrl: kit.source_url,
-      videoType: selectedType.label,
-      productPitch: kit.product.one_line_description,
-      scenes: renderedBeats.map((beat) => ({
-        title: beat.beat_purpose,
-        assetStatus: beat.assetStatus || "ready",
-        assetSource: beat.assetSource,
-        clipUrl: beat.clipUrl,
-        videoUrl: beat.clipUrl,
-        motionSpec: beat.motionSpec ?? beat.renderAsset?.motionGraphicSpec,
-        visual: `${beat.production_method}: ${beat.screen_capture_spec?.interaction_sequence.join(", ") || beat.motion_graphic_spec?.layout || "AI B-roll context"}`,
-        caption: beat.vo_line,
-        spokenLine: beat.vo_line,
-        audioUrl: beat.audioUrl,
-        localizedScript: beat.localizedScript,
-        targetLanguage: beat.targetLanguage,
-        ttsProvider: beat.ttsProvider,
-        ttsSpeaker: beat.ttsSpeaker,
-        regionalCritique: typeof beat.regionalCritique === "object" && beat.regionalCritique ? beat.regionalCritique as Record<string, unknown> : undefined,
-        shotType: beat.production_method,
-        durationSeconds: beat.duration_seconds,
-        colorGrade: `${kit.brand.primary_color_hex}, ${kit.brand.secondary_color_hex}, ${kit.brand.accent_color_hex}`,
-        editingNotes: `Transition: ${beat.transition_out}. Render asset: ${beat.renderAsset?.production_method || beat.production_method}. ${beat.screen_capture_spec ? `Capture ${beat.screen_capture_spec.source_page}` : "Motion graphics using brand kit"}`,
-      })),
-      timeline: renderedBeats.map((beat) => ({
-        title: beat.beat_purpose,
-        assetStatus: beat.assetStatus || "ready",
-        assetSource: beat.assetSource,
-        clipUrl: beat.clipUrl,
-        videoUrl: beat.clipUrl,
-        motionSpec: beat.motionSpec ?? beat.renderAsset?.motionGraphicSpec,
-        caption: beat.vo_line,
-        spokenLine: beat.vo_line,
-        audioUrl: beat.audioUrl,
-        localizedScript: beat.localizedScript,
-        targetLanguage: beat.targetLanguage,
-        ttsProvider: beat.ttsProvider,
-        ttsSpeaker: beat.ttsSpeaker,
-        regionalCritique: typeof beat.regionalCritique === "object" && beat.regionalCritique ? beat.regionalCritique as Record<string, unknown> : undefined,
-        visual: beat.production_method,
-        shotType: beat.production_method,
-        durationSeconds: beat.duration_seconds,
-        editingNotes: beat.transition_out,
-      })),
-      metadata: {
-        source: "website",
-        brandKit: kit,
-        websiteVideoPlan: nextPlan,
-        renderPipeline: pipeline,
-        renderAssets: pipeline?.assets,
-        renderChecklist: pipeline?.checklist,
-      },
+    const scene = (beat: BeatPreview) => ({
+      title: beat.beat_purpose,
+      assetStatus: beat.assetStatus || "ready",
+      assetSource: beat.assetSource,
+      clipUrl: beat.clipUrl?.startsWith("data:") ? undefined : beat.clipUrl,
+      videoUrl: beat.clipUrl?.startsWith("data:") ? undefined : beat.clipUrl,
+      visual: `${beat.production_method}: ${beat.screen_capture_spec?.interaction_sequence.join(", ") || beat.motion_graphic_spec?.layout || "AI B-roll context"}`,
+      caption: beat.vo_line,
+      spokenLine: beat.vo_line,
+      audioUrl: beat.audioUrl?.startsWith("data:") ? undefined : beat.audioUrl,
+      localizedScript: beat.localizedScript,
+      targetLanguage: beat.targetLanguage,
+      ttsProvider: beat.ttsProvider,
+      ttsSpeaker: beat.ttsSpeaker,
+      shotType: beat.production_method,
+      durationSeconds: beat.duration_seconds,
+      colorGrade: `${kit.brand.primary_color_hex}, ${kit.brand.secondary_color_hex}, ${kit.brand.accent_color_hex}`,
+      editingNotes: beat.assetSource === "fallback" ? `Fallback: ${beat.renderAsset?.asset_error || "visual unavailable"}` : `Transition: ${beat.transition_out}`,
     });
+    try {
+      saveLibraryProject(
+        slimWebsiteProjectForStorage({
+          id: `website-${Date.now()}`,
+          type: "website_video",
+          title: `${kit.brand.name} - ${selectedType.label}`,
+          createdAt: now,
+          updatedAt: now,
+          brandName: kit.brand.name,
+          posterUrl: kit.brand.logo_asset_path?.startsWith("data:") ? undefined : kit.brand.logo_asset_path || undefined,
+          durationSeconds: nextPlan.total_duration_seconds,
+          websiteUrl: kit.source_url,
+          videoType: selectedType.label,
+          productPitch: kit.product.one_line_description,
+          scenes: renderedBeats.map(scene),
+          metadata: {
+            source: "website",
+            confidenceFlags: kit.confidence_flags,
+            beatCount: renderedBeats.length,
+          },
+        }),
+      );
+    } catch (err) {
+      console.warn("[website] library save failed:", err instanceof Error ? err.message : String(err));
+    }
   }
 
   return (
@@ -485,6 +472,12 @@ function WebsiteVideoPage() {
                 className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm outline-none focus:border-white/30"
               />
             </div>
+
+            {!isCaptureApiConfigured() && (
+              <div className="rounded-md border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-[11px] text-amber-200">
+                Screen capture worker not configured — set <code className="text-amber-100">VITE_API_BASE_URL</code> to your deployed FC worker URL for real site recordings.
+              </div>
+            )}
 
             <div>
               <div className="text-[11px] uppercase tracking-widest text-white/40 mb-2">Video Type</div>
@@ -726,7 +719,11 @@ function WebsiteVideoPage() {
                         {beat.screen_capture_spec && <div>Capture: {beat.screen_capture_spec.source_page}</div>}
                         {beat.motion_graphic_spec && <div>Motion: {beat.motion_graphic_spec.layout}</div>}
                         {beat.clipUrl && <div className="text-emerald-300">Qwen video clip ready</div>}
-                        {beat.assetSource === "fallback" && <div className="text-amber-300">Clip failed — {beat.renderAsset?.asset_error || "using motion fallback"}</div>}
+                        {beat.assetSource === "fallback" && (
+                          <div className="text-amber-300">
+                            {formatBeatAssetError(beat.renderAsset?.asset_error)}
+                          </div>
+                        )}
                         {beat.renderAsset?.captureChoreography && <div>Choreography: {beat.renderAsset.captureChoreography.interaction_sequence.join(" -> ")}</div>}
                         {beat.renderAsset?.motionGraphicSpec && <div>Compiled layers: {beat.renderAsset.motionGraphicSpec.elements.length}</div>}
                         {beat.renderAsset?.brollPromptSpec && <div>B-roll prompt compiled</div>}
@@ -884,6 +881,15 @@ function WebsiteVideoPlayer({
       </div>
     </div>
   );
+}
+
+function formatBeatAssetError(error?: string) {
+  if (!error) return "Using branded motion fallback";
+  if (error === "ai_video_unavailable") return "AI video unavailable (billing or API) — using branded motion";
+  if (error === "capture_api_unavailable") return "Screen capture worker not configured — using branded motion";
+  if (error === "site_blocked") return "Site blocked live capture — using branded motion";
+  if (error.length > 120) return `Clip unavailable — using branded motion`;
+  return `Clip failed — ${error}`;
 }
 
 function normalizeUrlInput(value: string) {
