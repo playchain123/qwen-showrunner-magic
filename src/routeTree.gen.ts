@@ -17,6 +17,7 @@ import { Route as DashboardProfileRouteImport } from './routes/dashboard_.profil
 import { Route as DashboardLibraryRouteImport } from './routes/dashboard_.library'
 import { Route as DashboardAdsRouteImport } from './routes/dashboard_.ads'
 import { Route as DashboardBibleNewRouteImport } from './routes/dashboard_.bible.new'
+import { Route as DashboardBibleIdRouteImport } from './routes/dashboard_.bible.$id'
 import { Route as DashboardAgentIdRouteImport } from './routes/dashboard_.agent.$id'
 
 const DashboardRoute = DashboardRouteImport.update({
@@ -59,6 +60,11 @@ const DashboardBibleNewRoute = DashboardBibleNewRouteImport.update({
   path: '/dashboard/bible/new',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DashboardBibleIdRoute = DashboardBibleIdRouteImport.update({
+  id: '/dashboard_/bible/$id',
+  path: '/dashboard/bible/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DashboardAgentIdRoute = DashboardAgentIdRouteImport.update({
   id: '/dashboard_/agent/$id',
   path: '/dashboard/agent/$id',
@@ -74,6 +80,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/profile': typeof DashboardProfileRoute
   '/dashboard/website': typeof DashboardWebsiteRoute
   '/dashboard/agent/$id': typeof DashboardAgentIdRoute
+  '/dashboard/bible/$id': typeof DashboardBibleIdRoute
   '/dashboard/bible/new': typeof DashboardBibleNewRoute
 }
 export interface FileRoutesByTo {
@@ -85,6 +92,7 @@ export interface FileRoutesByTo {
   '/dashboard/profile': typeof DashboardProfileRoute
   '/dashboard/website': typeof DashboardWebsiteRoute
   '/dashboard/agent/$id': typeof DashboardAgentIdRoute
+  '/dashboard/bible/$id': typeof DashboardBibleIdRoute
   '/dashboard/bible/new': typeof DashboardBibleNewRoute
 }
 export interface FileRoutesById {
@@ -97,6 +105,7 @@ export interface FileRoutesById {
   '/dashboard_/profile': typeof DashboardProfileRoute
   '/dashboard_/website': typeof DashboardWebsiteRoute
   '/dashboard_/agent/$id': typeof DashboardAgentIdRoute
+  '/dashboard_/bible/$id': typeof DashboardBibleIdRoute
   '/dashboard_/bible/new': typeof DashboardBibleNewRoute
 }
 export interface FileRouteTypes {
@@ -110,6 +119,7 @@ export interface FileRouteTypes {
     | '/dashboard/profile'
     | '/dashboard/website'
     | '/dashboard/agent/$id'
+    | '/dashboard/bible/$id'
     | '/dashboard/bible/new'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -121,6 +131,7 @@ export interface FileRouteTypes {
     | '/dashboard/profile'
     | '/dashboard/website'
     | '/dashboard/agent/$id'
+    | '/dashboard/bible/$id'
     | '/dashboard/bible/new'
   id:
     | '__root__'
@@ -132,6 +143,7 @@ export interface FileRouteTypes {
     | '/dashboard_/profile'
     | '/dashboard_/website'
     | '/dashboard_/agent/$id'
+    | '/dashboard_/bible/$id'
     | '/dashboard_/bible/new'
   fileRoutesById: FileRoutesById
 }
@@ -144,6 +156,7 @@ export interface RootRouteChildren {
   DashboardProfileRoute: typeof DashboardProfileRoute
   DashboardWebsiteRoute: typeof DashboardWebsiteRoute
   DashboardAgentIdRoute: typeof DashboardAgentIdRoute
+  DashboardBibleIdRoute: typeof DashboardBibleIdRoute
   DashboardBibleNewRoute: typeof DashboardBibleNewRoute
 }
 
@@ -205,6 +218,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardBibleNewRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/dashboard_/bible/$id': {
+      id: '/dashboard_/bible/$id'
+      path: '/dashboard/bible/$id'
+      fullPath: '/dashboard/bible/$id'
+      preLoaderRoute: typeof DashboardBibleIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/dashboard_/agent/$id': {
       id: '/dashboard_/agent/$id'
       path: '/dashboard/agent/$id'
@@ -224,6 +244,7 @@ const rootRouteChildren: RootRouteChildren = {
   DashboardProfileRoute: DashboardProfileRoute,
   DashboardWebsiteRoute: DashboardWebsiteRoute,
   DashboardAgentIdRoute: DashboardAgentIdRoute,
+  DashboardBibleIdRoute: DashboardBibleIdRoute,
   DashboardBibleNewRoute: DashboardBibleNewRoute,
 }
 export const routeTree = rootRouteImport
