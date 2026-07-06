@@ -4,6 +4,14 @@ import { clampSceneCount, normalizeSceneDuration } from "./makers-runtime";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { SceneSpecSchema, type SceneSpec } from "./scene-spec";
 import type { QualityResult } from "./quality-gate";
+import {
+  buildLocalizationPrompt,
+  chooseSarvamSpeaker,
+  critiqueRegionalScript,
+  inferRegister,
+  resolveTTSProvider,
+  type LocalizationResult,
+} from "./tts-routing";
 
 const DASHSCOPE_BASE = "https://dashscope-intl.aliyuncs.com";
 const CHAT_URL = `${DASHSCOPE_BASE}/compatible-mode/v1/chat/completions`;
@@ -85,6 +93,69 @@ async function fetchWithTimeout(
   }
 }
 
+async function compileLocalizedScriptForVoice({
+  beatId,
+  sourceLine,
+  targetLanguage,
+  brandVoiceTone,
+  clientStyleProfile,
+}: {
+  beatId: string;
+  sourceLine: string;
+  targetLanguage: string;
+  brandVoiceTone: string;
+  clientStyleProfile: string;
+}): Promise<LocalizationResult> {
+  const fallback: LocalizationResult = {
+    beat_id: beatId,
+    target_language: targetLanguage,
+    localized_script: sourceLine,
+    script_notes: "Localization compiler unavailable; source script preserved. Verify phrasing before final export.",
+    register: inferRegister(brandVoiceTone),
+  };
+  const key = process.env.DASHSCOPE_API_KEY;
+  if (!key) return fallback;
+  try {
+    const res = await fetchWithTimeout(CHAT_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: qwenModel("QWEN_FAST_MODEL", "qwen-plus"),
+        messages: [
+          {
+            role: "system",
+            content: buildLocalizationPrompt({
+              beatId,
+              sourceLine,
+              targetLanguage,
+              brandVoiceTone,
+              clientStyleProfile,
+            }),
+          },
+          { role: "user", content: sourceLine },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.55,
+        max_tokens: 800,
+      }),
+    }, 45_000, `localize ${targetLanguage}`);
+    if (!res.ok) return fallback;
+    const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const content = json.choices?.[0]?.message?.content || "";
+    const parsed = JSON.parse(content) as Partial<LocalizationResult>;
+    if (!parsed.localized_script || !parsed.target_language) return fallback;
+    return {
+      beat_id: parsed.beat_id || beatId,
+      target_language: parsed.target_language || targetLanguage,
+      localized_script: parsed.localized_script,
+      script_notes: parsed.script_notes || "Localized for natural spoken delivery.",
+      register: parsed.register === "formal" || parsed.register === "casual_slang" ? parsed.register : "conversational",
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 type Scene = {
   title: string;
   visual: string;
@@ -147,6 +218,7 @@ export const generateStoryboard = createServerFn({ method: "POST" })
       `- Every scene must include a specific location and maintain geographic/story continuity from the previous scene.`,
       `- Vary shot types: wide establishing, medium, close-up, insert, action, reaction. No two consecutive scenes use the same shot_type.`,
       `- If the prompt asks for Tamil, Malayalam, Hindi, Telugu, Kannada, Bengali, Marathi, Punjabi, Urdu, or any Indian language, write clean native colloquial dialogue in that language's script with human slang and natural phrasing. Do not produce broken mixed-language output unless the user asks for Hinglish/Tanglish/etc.`,
+      `- If the prompt asks for Tanglish, Hinglish, Manglish, Benglish, or other code-switched Indian speech, keep brand/product names, technical terms, UI terms, and numbers in English, but use the regional language for verbs, connectors, emotion, and everyday phrasing. This must sound like real local speech, not literal translation.`,
       `- Assign each scene a language, voice_tone, and pitch (low/medium/high) suitable for the character and emotion.`,
       `- Add clean bgm and sfx cues for each scene: realistic ambience, Foley, impacts, transitions, room tone, emotional score.`,
       `- Add professional editing_notes and color_grade for every scene: match cut, J-cut/L-cut, whip pan, speed ramp, rack focus, chromatic VFX, teal-orange grade, bleach bypass, warm film print, etc.`,
@@ -335,10 +407,12 @@ export const generateVoice = createServerFn({ method: "POST" })
         language: z.string().default("English"),
         tone: z.string().optional().default("natural cinematic dialogue"),
         pitch: z.enum(["low", "medium", "high"]).optional().default("medium"),
+        beatId: z.string().optional().default("voice-line"),
+        clientStyleProfile: z.string().optional().default(""),
       })
       .parse(input),
   )
-  .handler(async ({ data }): Promise<{ audio_url: string; provider: string }> => {
+  .handler(async ({ data }): Promise<{ audio_url: string; provider: string; localized_script?: string; target_language?: string; tts_speaker?: string; critique?: unknown }> => {
     const toDataUrl = (buffer: ArrayBuffer, mime = "audio/mpeg") => {
       const bytes = new Uint8Array(buffer);
       let bin = "";
@@ -380,13 +454,85 @@ export const generateVoice = createServerFn({ method: "POST" })
     };
     const emotion = detectEmotion(`${data.text} ${data.tone}`);
     const pitchWord = data.pitch === "low" ? "low chest resonance" : data.pitch === "high" ? "bright forward placement" : "balanced";
+    const route = resolveTTSProvider(data.language);
+    const localized = route.provider === "sarvam-bulbul-v3"
+      ? await compileLocalizedScriptForVoice({
+          beatId: data.beatId,
+          sourceLine: data.text,
+          targetLanguage: route.normalizedLanguage,
+          brandVoiceTone: data.tone,
+          clientStyleProfile: data.clientStyleProfile,
+        })
+      : {
+          beat_id: data.beatId,
+          target_language: route.normalizedLanguage,
+          localized_script: data.text,
+          script_notes: "Qwen-supported language; source script used directly.",
+          register: inferRegister(data.tone),
+        };
+    const critique = route.provider === "sarvam-bulbul-v3"
+      ? critiqueRegionalScript({
+          localizedScript: localized.localized_script,
+          targetLanguage: localized.target_language,
+          register: localized.register,
+          sourceLine: data.text,
+        })
+      : null;
     const richInstructions = [
       `You are a professional on-screen film actor delivering an in-world line — never a narrator, never an announcer.`,
-      `Language: ${data.language}. Speak with clean native pronunciation, natural colloquial rhythm and human phrasing. No robotic cadence.`,
+      `Language: ${localized.target_language}. Speak with clean native pronunciation, natural colloquial rhythm and human phrasing. No robotic cadence.`,
       `Emotion: ${emotion}. Vocal placement: ${pitchWord}.`,
       `Directorial note: ${data.tone}.`,
       `Deliver with real breaths, micro-pauses, and dynamic pitch that matches the emotion.`,
     ].join(" ");
+
+    if (route.provider === "sarvam-bulbul-v3") {
+      const sarvamKey = process.env.SARVAM_API_KEY || process.env.SARVAM_AI_API_KEY;
+      if (!sarvamKey) {
+        throw new Error(`SARVAM_API_KEY not configured for ${route.normalizedLanguage}. This language must not be routed to Qwen3-TTS-Flash.`);
+      }
+      const speaker = process.env.SARVAM_TTS_SPEAKER || chooseSarvamSpeaker(route.normalizedLanguage, data.tone, data.pitch);
+      const endpoint = process.env.SARVAM_TTS_URL || "https://api.sarvam.ai/text-to-speech";
+      const res = await fetchWithTimeout(endpoint, {
+        method: "POST",
+        headers: {
+          "api-subscription-key": sarvamKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text: localized.localized_script,
+          target_language_code: route.languageCode,
+          model: process.env.SARVAM_TTS_MODEL || "bulbul:v3",
+          speaker,
+          pace: 1,
+          enable_preprocessing: true,
+        }),
+      }, 60_000, `sarvam tts ${route.normalizedLanguage}`);
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        throw new Error(`Sarvam TTS failed (${res.status}): ${t.slice(0, 240)}`);
+      }
+      const contentType = res.headers.get("content-type") || "";
+      if (/application\/json/i.test(contentType)) {
+        const json = await res.json() as { audio?: string; audios?: string[]; audio_url?: string };
+        const b64 = json.audio || json.audios?.[0];
+        if (json.audio_url) {
+          return { audio_url: json.audio_url, provider: "sarvam-bulbul-v3", localized_script: localized.localized_script, target_language: localized.target_language, tts_speaker: speaker, critique };
+        }
+        if (b64) {
+          return { audio_url: `data:audio/wav;base64,${b64}`, provider: "sarvam-bulbul-v3", localized_script: localized.localized_script, target_language: localized.target_language, tts_speaker: speaker, critique };
+        }
+        throw new Error("Sarvam TTS response did not include audio");
+      }
+      return {
+        audio_url: toDataUrl(await res.arrayBuffer(), contentType.includes("wav") ? "audio/wav" : "audio/mpeg"),
+        provider: "sarvam-bulbul-v3",
+        localized_script: localized.localized_script,
+        target_language: localized.target_language,
+        tts_speaker: speaker,
+        critique,
+      };
+    }
 
     const dashKey = process.env.DASHSCOPE_API_KEY;
     if (dashKey) {
@@ -400,7 +546,7 @@ export const generateVoice = createServerFn({ method: "POST" })
           body: JSON.stringify({
             model: qwenModel("QWEN_TTS_MODEL", "qwen3-tts-flash"),
             input: {
-              text: data.text,
+              text: localized.localized_script,
               voice: data.voice,
               language_type: data.language,
             },
@@ -412,9 +558,9 @@ export const generateVoice = createServerFn({ method: "POST" })
             output?: { audio?: { url?: string; data?: string } };
           };
           const url = j.output?.audio?.url;
-          if (url) return { audio_url: url, provider: "qwen3-tts-flash" };
+          if (url) return { audio_url: url, provider: "qwen3-tts-flash", localized_script: localized.localized_script, target_language: localized.target_language };
           const b64 = j.output?.audio?.data;
-          if (b64) return { audio_url: `data:audio/mpeg;base64,${b64}`, provider: "qwen3-tts-flash" };
+          if (b64) return { audio_url: `data:audio/mpeg;base64,${b64}`, provider: "qwen3-tts-flash", localized_script: localized.localized_script, target_language: localized.target_language };
         }
       } catch {
         // fall through to optional fallback
@@ -434,14 +580,14 @@ export const generateVoice = createServerFn({ method: "POST" })
             },
             body: JSON.stringify({
               model: "openai/gpt-4o-mini-tts",
-              input: data.text,
+              input: localized.localized_script,
               voice: mapGatewayVoice(data.voice),
               response_format: "mp3",
               instructions: richInstructions,
             }),
           }, 60_000, "gateway tts fallback");
           if (res.ok) {
-            return { audio_url: toDataUrl(await res.arrayBuffer()), provider: "gateway-tts" };
+            return { audio_url: toDataUrl(await res.arrayBuffer()), provider: "gateway-tts", localized_script: localized.localized_script, target_language: localized.target_language };
           }
         } catch {
           // provider error handled below
@@ -449,7 +595,7 @@ export const generateVoice = createServerFn({ method: "POST" })
       }
     }
 
-    throw new Error("Qwen TTS provider unavailable");
+    throw new Error(`${route.provider} provider unavailable`);
   });
 
 /** Generate a cinematic scene poster image via Qwen-Image. */
@@ -461,6 +607,7 @@ export const generateSceneImage = createServerFn({ method: "POST" })
         prompt: z.string().min(3).max(4000),
         referenceImages: z.array(safeMediaUrl).max(4).optional().default([]),
         referenceWeight: z.number().min(0).max(1).optional().default(0.75),
+        negativePrompt: z.string().optional().default(""),
       })
       .parse(input),
   )
@@ -511,7 +658,9 @@ export const generateSceneImage = createServerFn({ method: "POST" })
           ],
         },
         parameters: {
-          negative_prompt: "Low resolution, low quality, distorted limbs, malformed fingers, blurry faces, waxy skin, watermark, subtitles, text overlay.",
+          negative_prompt:
+            data.negativePrompt ||
+            "Low resolution, low quality, distorted limbs, malformed fingers, blurry faces, waxy skin, watermark, subtitles, text overlay.",
           prompt_extend: true,
           watermark: false,
           size: process.env.QWEN_IMAGE_SIZE || "1664*928",

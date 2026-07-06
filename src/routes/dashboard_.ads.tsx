@@ -8,10 +8,13 @@ import { pickBgm } from "@/lib/free-sounds";
 import { saveLibraryProject } from "@/lib/library";
 import {
   buildAdVisualBible,
+  buildOptimizedScenePrompt,
+  compileBrandAssetReferences,
+  formatOptimizedScenePrompt,
   formatProductContinuity,
+  formatReferenceRouting,
   formatVisualBible,
   validateAndRepairScenes,
-  CONTINUITY_NEGATIVE_PROMPT,
 } from "@/lib/continuity";
 import {
   MAKERS_DEMO_LIMITS,
@@ -34,6 +37,11 @@ type AdShot = {
   done: boolean;
   videoUrl?: string;
   audioUrl?: string;
+  localizedScript?: string;
+  targetLanguage?: string;
+  ttsProvider?: string;
+  ttsSpeaker?: string;
+  regionalCritique?: unknown;
   posterUrl?: string;
   durationSeconds: number;
   colorGrade?: string;
@@ -100,7 +108,16 @@ function CinematicAds() {
       const toneObj = TONES.find((t) => t.id === tone) || TONES[0];
       const brief = `A ${toneObj.label.toLowerCase()} 15-30 second cinematic ad for ${brand}. Pitch: ${pitch}. Structure: 1) hook shot, 2) product/context, 3) emotional beat with talent, 4) CTA reveal ("${cta}"). Style: ${toneObj.desc}. No narrator voice-over — in-world dialogue only. Every shot MUST feature the brand's uploaded ${assets.some((a) => a.kind === "product") ? "product prominently" : "identity"}. Keep talent and product consistent across every shot.`;
       const referenceBrief = assets.map((a) => ({ name: a.name, description: a.kind === "product" ? "Hero product — must appear in every shot" : a.kind === "logo" ? "Brand logo — subtle placement + endcard" : "Brand talent — same face across all shots" }));
-      const story = await generateStoryboard({ data: { prompt: brief, sceneCount: MAKERS_DEMO_LIMITS.maxScenes, learningContext: "", referenceImages: referenceBrief } });
+      const compiledReferences = compileBrandAssetReferences(assets.map((asset) => ({ kind: asset.kind, name: asset.name })));
+      const referenceRouting = formatReferenceRouting(compiledReferences);
+      const story = await generateStoryboard({
+        data: {
+          prompt: brief,
+          sceneCount: MAKERS_DEMO_LIMITS.maxScenes,
+          learningContext: referenceRouting ? `Reference routing map: ${referenceRouting}` : "",
+          referenceImages: referenceBrief,
+        },
+      });
       const initialBible = buildAdVisualBible({
         brand,
         pitch,
@@ -138,21 +155,61 @@ function CinematicAds() {
         MAKERS_DEMO_LIMITS.maxParallelVideoJobs,
         async (s, idx) => {
           try {
-            const imgPrompt = [productContinuity, s.visual || s.video_prompt, s.color_grade ? `Color grade: ${s.color_grade}` : "", `Brand: ${brand}. Hero product/logo/talent must remain identical to references.`, `Negative prompt: ${CONTINUITY_NEGATIVE_PROMPT}`].filter(Boolean).join("\n");
+            const previousScene = story.scenes[idx - 1];
+            const nextScene = story.scenes[idx + 1];
+            const optimizedPrompt = buildOptimizedScenePrompt({
+              scene: s,
+              bible: visualBible,
+              sceneIndex: idx,
+              sceneCount: story.scenes.length,
+              previousVisual: previousScene?.visual || previousScene?.video_prompt,
+              nextVisual: nextScene?.visual || nextScene?.video_prompt,
+              referenceWeight: assets.length ? 0.9 : 0.7,
+              references: compiledReferences,
+              userStyleProfile: `${toneObj.label}: ${toneObj.desc}`,
+            });
+            const imgPrompt = [
+              formatOptimizedScenePrompt(optimizedPrompt, "image"),
+              productContinuity,
+              referenceRouting ? `Reference compiler routing: ${referenceRouting}` : "",
+              s.visual || s.video_prompt,
+              s.color_grade ? `Color grade: ${s.color_grade}` : "",
+              `Brand: ${brand}. Hero product/logo/talent must remain identical to references.`,
+              `Negative prompt: ${optimizedPrompt.negative_prompt}`,
+            ].filter(Boolean).join("\n");
             let storyboardStillUrl: string | undefined;
             try {
-              const img = await generateSceneImage({ data: { prompt: imgPrompt, referenceImages: assets.map((a) => a.dataUrl), referenceWeight: 0.9 } });
+              const img = await generateSceneImage({
+                data: {
+                  prompt: imgPrompt,
+                  referenceImages: assets.map((a) => a.dataUrl),
+                  referenceWeight: optimizedPrompt.continuity.reference_image_weight,
+                  negativePrompt: optimizedPrompt.negative_prompt,
+                },
+              });
               storyboardStillUrl = img.image_url;
               setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, posterUrl: img.image_url } : sh)));
             } catch {
               // T2V fallback below still carries the product bible.
             }
             const voiceP = s.spoken_line
-              ? generateVoice({ data: { text: s.spoken_line, voice: "Cherry", language: s.language || "English", tone: `premium YouTube ad voice-over, cinematic, emotional, natural, ${toneObj.label.toLowerCase()}`, pitch: s.pitch || "medium" } })
-                  .then((v) => setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, audioUrl: v.audio_url } : sh))))
+              ? generateVoice({ data: { text: s.spoken_line, voice: "Cherry", language: s.language || "English", tone: `premium YouTube ad voice-over, cinematic, emotional, natural, ${toneObj.label.toLowerCase()}`, pitch: s.pitch || "medium", beatId: `ad-${idx + 1}` } })
+                  .then((v) => setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, audioUrl: v.audio_url, localizedScript: v.localized_script, targetLanguage: v.target_language, ttsProvider: v.provider, ttsSpeaker: v.tts_speaker, regionalCritique: v.critique } : sh))))
                   .catch(() => {})
               : Promise.resolve();
-            const fullPrompt = [productContinuity, `Project visual bible summary: ${formatVisualBible(visualBible)}`, s.video_prompt, `Brand: ${brand}. Product/logo/talent from reference must appear and remain identical.`, s.color_grade ? `Color grade: ${s.color_grade}` : "", `No product geometry changes, no logo drift, no package swap, no random colorway, no disconnected location style.`, `Negative prompt: ${CONTINUITY_NEGATIVE_PROMPT}`].filter(Boolean).join("\n");
+            const fullPrompt = [
+              formatOptimizedScenePrompt(optimizedPrompt, "video"),
+              productContinuity,
+              referenceRouting ? `Reference compiler routing: ${referenceRouting}` : "",
+              `Project visual bible summary: ${formatVisualBible(visualBible)}`,
+              s.video_prompt,
+              previousScene ? `Previous ad shot visual: ${previousScene.visual || previousScene.video_prompt}` : "",
+              nextScene ? `Next ad shot setup: ${nextScene.visual || nextScene.video_prompt}` : "",
+              `Brand: ${brand}. Product/logo/talent from reference must appear and remain identical.`,
+              s.color_grade ? `Color grade: ${s.color_grade}` : "",
+              `No product geometry changes, no logo drift, no package swap, no random colorway, no disconnected location style.`,
+              `Negative prompt: ${optimizedPrompt.negative_prompt}`,
+            ].filter(Boolean).join("\n");
             const videoUrl = await submitAndPollAdVideo(fullPrompt, buildAdVideoAttempts(storyboardStillUrl), (p) => {
               setShots((c) => c.map((sh, i) => (i === idx ? { ...sh, progress: p } : sh)));
             });
@@ -190,6 +247,11 @@ function CinematicAds() {
             title: shot.title,
             videoUrl: shot.videoUrl,
             audioUrl: shot.audioUrl,
+            localizedScript: shot.localizedScript,
+            targetLanguage: shot.targetLanguage,
+            ttsProvider: shot.ttsProvider,
+            ttsSpeaker: shot.ttsSpeaker,
+            regionalCritique: typeof shot.regionalCritique === "object" && shot.regionalCritique ? shot.regionalCritique as Record<string, unknown> : undefined,
             posterUrl: shot.posterUrl,
             visual: shot.visual,
             caption: shot.spokenLine,
@@ -204,6 +266,11 @@ function CinematicAds() {
             title: `Ad shot ${index + 1}`,
             videoUrl: shot.videoUrl,
             audioUrl: shot.audioUrl,
+            localizedScript: shot.localizedScript,
+            targetLanguage: shot.targetLanguage,
+            ttsProvider: shot.ttsProvider,
+            ttsSpeaker: shot.ttsSpeaker,
+            regionalCritique: typeof shot.regionalCritique === "object" && shot.regionalCritique ? shot.regionalCritique as Record<string, unknown> : undefined,
             posterUrl: shot.posterUrl,
             visual: shot.visual,
             spokenLine: shot.spokenLine,
@@ -215,6 +282,7 @@ function CinematicAds() {
             tone,
             toneDescription: toneObj.desc,
             visualBible,
+            compiledReferences,
             assets: assets.map((asset) => ({ kind: asset.kind, name: asset.name })),
           },
         });

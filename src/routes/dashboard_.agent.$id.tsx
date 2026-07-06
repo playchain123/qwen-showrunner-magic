@@ -23,12 +23,15 @@ import { pickBgm } from "@/lib/free-sounds";
 import { saveLibraryProject } from "@/lib/library";
 import {
   buildShortFilmVisualBible,
+  buildOptimizedScenePrompt,
+  compileReferenceImages,
   findCharacterBible,
   formatCharacterLock,
+  formatOptimizedScenePrompt,
+  formatReferenceRouting,
   formatSceneContinuity,
   formatVisualBible,
   validateAndRepairScenes,
-  CONTINUITY_NEGATIVE_PROMPT,
   type VisualBible,
 } from "@/lib/continuity";
 import {
@@ -60,6 +63,11 @@ type StoryCard = {
   done: boolean;
   videoUrl?: string;
   audioUrl?: string;
+  localizedScript?: string;
+  targetLanguage?: string;
+  ttsProvider?: string;
+  ttsSpeaker?: string;
+  regionalCritique?: unknown;
   posterUrl?: string;
   visual?: string;
   location?: string;
@@ -208,8 +216,17 @@ function AgentWorkspace() {
       const sceneCount = chooseSceneCount(prompt);
       const learningContext = readLearningContext();
       const referenceBrief = refs.map((r) => ({ name: r.name, description: r.description || "user uploaded character/style reference image" }));
+      const compiledReferences = compileReferenceImages(referenceBrief);
+      const referenceRouting = formatReferenceRouting(compiledReferences);
       // 1. Storyboard via Qwen — prompt-aware scene count with persistent learning context
-      const story = await generateStoryboard({ data: { prompt, sceneCount, learningContext, referenceImages: referenceBrief } });
+      const story = await generateStoryboard({
+        data: {
+          prompt,
+          sceneCount,
+          learningContext: [learningContext, referenceRouting ? `Reference routing map: ${referenceRouting}` : ""].filter(Boolean).join("\n"),
+          referenceImages: referenceBrief,
+        },
+      });
       const initialBible = buildShortFilmVisualBible({
         prompt,
         title: story.title,
@@ -326,6 +343,17 @@ function AgentWorkspace() {
               previousVisual: previousScene?.visual || previousScene?.video_prompt,
               nextVisual: nextScene?.visual || nextScene?.video_prompt,
             });
+            const optimizedPrompt = buildOptimizedScenePrompt({
+              scene: s,
+              bible,
+              sceneIndex: idx,
+              sceneCount: scenes.length,
+              previousVisual: previousScene?.visual || previousScene?.video_prompt,
+              nextVisual: nextScene?.visual || nextScene?.video_prompt,
+              referenceWeight: refWeight,
+              references: compiledReferences,
+              userStyleProfile: learningContext,
+            });
             const spokenLine = s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, "");
 
             // §1.1 Cinematographer v2 — compile a structured SceneSpec. Falls
@@ -354,7 +382,9 @@ function AgentWorkspace() {
             // Generate the storyboard still first. I2V animation of this Qwen-Image
             // still is the continuity-first path; T2V remains the safety fallback.
             const imgPrompt = [
+              formatOptimizedScenePrompt(optimizedPrompt, "image"),
               continuityPrompt,
+              referenceRouting ? `Reference compiler routing: ${referenceRouting}` : "",
               s.visual || s.video_prompt,
               spec ? `Cinematographer spec: ${spec.positive_prompt}` : "",
               spec ? `Camera: ${spec.camera.shot_type}, ${spec.camera.lens_mm}mm, ${spec.camera.movement}. Lighting: ${spec.lighting.key_source} (${spec.lighting.quality}, ${spec.lighting.color_temp_k}K, ${spec.lighting.mood}).` : "",
@@ -366,7 +396,7 @@ function AgentWorkspace() {
               s.color_grade ? `Color grade: ${s.color_grade}` : "",
               s.character ? `Featured character: ${s.character}` : "",
               `Storyboard still for scene ${idx + 1} of ${scenes.length}; match wardrobe, lighting, geography, and emotional continuity.`,
-              `Negative prompt: ${compiledNegatives}`,
+              `Negative prompt: ${compiledNegatives ?? optimizedPrompt.negative_prompt}`,
             ].filter(Boolean).join("\n");
             let storyboardStillUrl: string | undefined;
             let agentTrace: QualityResult[] = [];
@@ -375,7 +405,7 @@ function AgentWorkspace() {
                 // §2.6 Quality-Critique gate: draft → critique → conditional refine.
                 const gateSpec: SceneSpec = {
                   ...spec,
-                  negative_prompt: compiledNegatives,
+                  negative_prompt: compiledNegatives ?? spec.negative_prompt,
                   reference_image_weight: Math.max(spec.reference_image_weight, routing?.referenceWeightFloor ?? spec.reference_image_weight),
                 };
                 const { frame, trace } = await generateSceneWithQualityGate({
@@ -413,7 +443,8 @@ function AgentWorkspace() {
                   data: {
                     prompt: imgPrompt,
                     referenceImages: refs.map((r) => r.dataUrl),
-                    referenceWeight: refWeight,
+                    referenceWeight: optimizedPrompt.continuity.reference_image_weight ?? refWeight,
+                    negativePrompt: compiledNegatives ?? optimizedPrompt.negative_prompt,
                   },
                 });
                 storyboardStillUrl = img.image_url;
@@ -444,14 +475,18 @@ function AgentWorkspace() {
                 language: s.language || "English",
                 tone: characterLock?.voiceStyle || s.voice_tone || "natural film dialogue",
                 pitch: s.pitch || "medium",
+                beatId: `scene-${idx + 1}`,
+                clientStyleProfile: learningContext,
               },
             })
               .then((v) => {
-                setCards((c) => c.map((card, i) => (i === idx ? { ...card, audioUrl: v.audio_url } : card)));
+                setCards((c) => c.map((card, i) => (i === idx ? { ...card, audioUrl: v.audio_url, localizedScript: v.localized_script, targetLanguage: v.target_language, ttsProvider: v.provider, ttsSpeaker: v.tts_speaker, regionalCritique: v.critique } : card)));
               })
               .catch(() => {});
             const fullPrompt = [
+              formatOptimizedScenePrompt(optimizedPrompt, "video"),
               continuityPrompt,
+              referenceRouting ? `Reference compiler routing: ${referenceRouting}` : "",
               s.video_prompt,
               spec ? `Cinematographer positive: ${spec.positive_prompt}` : "",
               `Project visual bible summary: ${formatVisualBible(bible)}`,
@@ -466,7 +501,7 @@ function AgentWorkspace() {
               s.sfx ? `On-screen action must support these clean SFX cues: ${s.sfx}` : "",
               spokenLine ? `Lip-sync exactly to this spoken line, matching mouth movement and emotional delivery: "${spokenLine}"` : "",
               `Scene ${idx + 1} of ${scenes.length}. Match wardrobe, lighting mood, geography, eyeline and motion continuity from the previous shot; stage the last movement so it leads naturally into the next cut. No black frames, no fade-to-black, no title cards, no watermarks, seamless edit-ready plate.`,
-              `Negative prompt: ${compiledNegatives}`,
+              `Negative prompt: ${compiledNegatives ?? optimizedPrompt.negative_prompt}`,
               `Render as one continuous ${normalizeSceneDuration(s.duration_seconds)}-second cinematic shot.`,
             ].filter(Boolean).join("\n");
             const attempts = routing
@@ -532,10 +567,15 @@ function AgentWorkspace() {
           location: c.location,
           caption: c.caption,
           spokenLine: c.spokenLine,
+          localizedScript: c.localizedScript,
           character: c.character,
           shotType: c.shotType,
           language: c.language,
+          targetLanguage: c.targetLanguage,
           voiceTone: c.voiceTone,
+          ttsProvider: c.ttsProvider,
+          ttsSpeaker: c.ttsSpeaker,
+          regionalCritique: typeof c.regionalCritique === "object" && c.regionalCritique ? c.regionalCritique as Record<string, unknown> : undefined,
           pitch: c.pitch,
           bgm: c.bgm,
           sfx: c.sfx,
@@ -562,6 +602,7 @@ function AgentWorkspace() {
             source: "agent",
             prompt,
             visualBible: bible,
+            compiledReferences,
             referenceImages: refs.map((r) => ({ name: r.name, description: r.description })),
           },
         });
