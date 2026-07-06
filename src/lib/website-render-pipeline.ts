@@ -91,20 +91,26 @@ export function buildWebsiteRenderPipeline({
   beats,
 }: {
   brandKit: WebsiteBrandKit;
-  beats: Array<WebsiteVideoBeat & { audioUrl?: string; actualVoDurationSeconds?: number }>;
+  beats: Array<WebsiteVideoBeat & { audioUrl?: string; actualVoDurationSeconds?: number; clipUrl?: string; motionSpec?: CompiledMotionSpec }>;
 }): WebsiteRenderPipeline {
   const compiled = beats.map((beat) => {
-    const renderAsset = compileBeatAsset(brandKit, beat);
+    const renderAsset = compileBeatAsset(brandKit, beat, beat.clipUrl);
+    const clipUrl = beat.clipUrl || renderAsset.clip_url;
+    const motionSpec = beat.motionSpec || renderAsset.motionGraphicSpec;
+    const assetStatus = clipUrl || motionSpec ? "ready" : renderAsset.asset_status;
     return {
       ...beat,
       planned_duration_seconds: beat.duration_seconds,
       actual_vo_duration_seconds: beat.actualVoDurationSeconds || estimateVoiceDurationSeconds(beat.vo_line),
-      asset_status: renderAsset.asset_status,
-      clip_url: renderAsset.clip_url,
-      motion_spec: renderAsset.motionGraphicSpec,
+      asset_status: assetStatus,
+      clip_url: clipUrl,
+      motion_spec: motionSpec,
       vo_audio_url: beat.audioUrl,
       render_asset: {
         ...renderAsset,
+        clip_url: clipUrl,
+        motionGraphicSpec: motionSpec,
+        asset_status: assetStatus,
         voAudioUrl: beat.audioUrl,
       },
     };
@@ -113,40 +119,55 @@ export function buildWebsiteRenderPipeline({
   const assets = Object.fromEntries(reconciledBeats.map((beat) => [beat.beat_id, beat.render_asset]));
   return {
     fps: FPS,
-    target: "browser_canvas_now",
+    target: "remotion_worker_ready",
     beats: reconciledBeats,
     assets,
     checklist: buildRenderChecklist(reconciledBeats, assets),
   };
 }
 
-export function compileBeatAsset(brandKit: WebsiteBrandKit, beat: WebsiteVideoBeat): WebsiteBeatRenderAsset {
-  if (beat.production_method === "screen_capture") {
+export function compileBeatAsset(
+  brandKit: WebsiteBrandKit,
+  beat: WebsiteVideoBeat,
+  existingClipUrl?: string,
+): WebsiteBeatRenderAsset {
+  if (existingClipUrl) {
     return {
       beat_id: beat.beat_id,
       production_method: beat.production_method,
       asset_status: "ready",
-      asset_source: "fallback",
+      asset_source: "generated",
+      clip_url: existingClipUrl,
+      motionGraphicSpec: compileMotionGraphic(brandKit, beat),
+      captureChoreography:
+        beat.production_method === "screen_capture" ? compileCaptureChoreography(beat) : undefined,
+      brollPromptSpec: beat.production_method === "ai_broll" ? compileBrollPrompt(brandKit, beat) : undefined,
+    };
+  }
+  if (beat.production_method === "screen_capture") {
+    return {
+      beat_id: beat.beat_id,
+      production_method: beat.production_method,
+      asset_status: "pending",
+      asset_source: "captured",
       captureChoreography: compileCaptureChoreography(beat),
-      motionGraphicSpec: buildFallbackMotionCard(brandKit, beat, "Screen capture visual fallback"),
-      asset_error: "No browser capture worker is attached in this runtime; using branded motion card fallback.",
+      motionGraphicSpec: buildFallbackMotionCard(brandKit, beat, "Screen capture visual"),
     };
   }
   if (beat.production_method === "ai_broll") {
     return {
       beat_id: beat.beat_id,
       production_method: beat.production_method,
-      asset_status: "ready",
-      asset_source: "fallback",
+      asset_status: "pending",
+      asset_source: "generated",
       brollPromptSpec: compileBrollPrompt(brandKit, beat),
-      motionGraphicSpec: buildFallbackMotionCard(brandKit, beat, "AI b-roll visual fallback"),
-      asset_error: "No async b-roll worker is attached in this runtime; using branded motion card fallback.",
+      motionGraphicSpec: buildFallbackMotionCard(brandKit, beat, "AI b-roll visual"),
     };
   }
   return {
     beat_id: beat.beat_id,
     production_method: beat.production_method,
-    asset_status: "ready",
+    asset_status: "pending",
     asset_source: "compiled",
     motionGraphicSpec: compileMotionGraphic(brandKit, beat),
   };

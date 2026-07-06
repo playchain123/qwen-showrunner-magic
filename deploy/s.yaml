@@ -34,3 +34,6 @@ resources:
         QWEN_IMAGE_MODEL: qwen-image-2.0
         QWEN_VIDEO_MODEL: wan2.2-t2v-plus
         QWEN_TTS_MODEL: qwen3-tts-flash
+        SARVAM_API_KEY: ""
+        SARVAM_TTS_MODEL: bulbul:v3
+        SARVAM_TTS_SPEAKER: meera

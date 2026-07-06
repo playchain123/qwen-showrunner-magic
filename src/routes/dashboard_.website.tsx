@@ -13,13 +13,25 @@ import {
   type WebsiteVideoPlan,
   type WebsiteVideoType,
 } from "@/lib/website-video";
+import { repurposePlanForBlockedSite } from "@/lib/website-site-resilience";
 import {
   buildWebsiteRenderPipeline,
   estimateVoiceDurationSeconds,
   type WebsiteBeatRenderAsset,
   type WebsiteRenderPipeline,
 } from "@/lib/website-render-pipeline";
-import { supabase } from "@/integrations/supabase/client";
+import { isSupabaseConfigured, supabase } from "@/integrations/supabase/client";
+import { generateWebsiteBeatClip } from "@/lib/website-video-clips";
+import { Player } from "@remotion/player";
+import { WebsiteMainComposition, websiteCompositionDurationFrames } from "@/remotion/website-main-composition";
+import { exportWebsiteVideoRemotion } from "@/lib/website-remotion-export";
+import {
+  buildWebsiteStyleProfile,
+  readWebsiteSpeakerMemory,
+  WEBSITE_VOICE_LANGUAGES,
+  writeWebsiteSpeakerMemory,
+  type WebsiteVoiceLanguage,
+} from "@/lib/website-voice-languages";
 
 export const Route = createFileRoute("/dashboard_/website")({
   ssr: false,
@@ -56,6 +68,7 @@ function WebsiteVideoPage() {
   const [url, setUrl] = useState("");
   const [videoType, setVideoType] = useState<WebsiteVideoType>("website_promo");
   const [targetDuration, setTargetDuration] = useState(180);
+  const [voiceLanguage, setVoiceLanguage] = useState<WebsiteVoiceLanguage>("english");
   const [brandKit, setBrandKit] = useState<WebsiteBrandKit | null>(null);
   const [plan, setPlan] = useState<WebsiteVideoPlan | null>(null);
   const [renderPipeline, setRenderPipeline] = useState<WebsiteRenderPipeline | null>(null);
@@ -71,14 +84,30 @@ function WebsiteVideoPage() {
 
   const selectedType = useMemo(() => VIDEO_TYPES.find((type) => type.id === videoType) || VIDEO_TYPES[1], [videoType]);
 
-  async function generate() {
-    if (!url.trim()) {
-      alert("Add a website URL first.");
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) {
+      navigate({ to: "/auth", search: { mode: "login" } });
       return;
     }
     supabase.auth.getUser().then(({ data }) => {
       if (!data.user) navigate({ to: "/auth", search: { mode: "login" } });
     });
+  }, [navigate]);
+
+  async function generate() {
+    if (!url.trim()) {
+      alert("Add a website URL first.");
+      return;
+    }
+    if (!isSupabaseConfigured || !supabase) {
+      navigate({ to: "/auth", search: { mode: "login" } });
+      return;
+    }
+    const { data: authData } = await supabase.auth.getUser();
+    if (!authData.user) {
+      navigate({ to: "/auth", search: { mode: "login" } });
+      return;
+    }
     setRunning(true);
     setBrandKit(null);
     setPlan(null);
@@ -96,13 +125,16 @@ function WebsiteVideoPage() {
       setStatus(kit.confidence_flags.includes("fallback_brand_kit_used")
         ? "Website fetch was blocked/unavailable. Building a fallback plan from the domain..."
         : "Building website-to-video production plan...");
-      const nextPlan = buildWebsiteVideoPlan({
-        brandKit: kit,
-        videoType,
-        targetDurationSeconds: safeDuration,
-        availableAiBroll: true,
-        clientStyleProfile: readWebsiteStyleMemory(kit.brand.name),
-      });
+      const nextPlan = repurposePlanForBlockedSite(
+        kit,
+        buildWebsiteVideoPlan({
+          brandKit: kit,
+          videoType,
+          targetDurationSeconds: safeDuration,
+          availableAiBroll: true,
+          clientStyleProfile: buildWebsiteStyleProfile(kit.brand.name, voiceLanguage),
+        }),
+      );
       setPlan(nextPlan);
       setBeats(nextPlan.beats.map((beat) => ({ ...beat, progress: 5, done: false })));
       setStatus("Generating clear voice-over for each beat...");
@@ -114,28 +146,120 @@ function WebsiteVideoPage() {
               data: {
                 text: beat.vo_line,
                 voice: index % 2 === 0 ? "Cherry" : "Ethan",
-                language: "English",
+                language: voiceLanguage,
                 tone: kit.brand.voice_tone,
                 pitch: "medium",
                 beatId: beat.beat_id,
-                clientStyleProfile: readWebsiteStyleMemory(kit.brand.name),
+                clientStyleProfile: buildWebsiteStyleProfile(kit.brand.name, voiceLanguage),
+                preferredSpeaker: readWebsiteSpeakerMemory(kit.brand.name, voiceLanguage),
               },
             });
+            if (voice.tts_speaker && voice.target_language) {
+              writeWebsiteSpeakerMemory(kit.brand.name, voice.target_language, voice.tts_speaker);
+            }
             const audioDuration = await resolveAudioDurationSeconds(voice.audio_url, beat.vo_line);
-            return { ...beat, audioUrl: voice.audio_url, localizedScript: voice.localized_script, targetLanguage: voice.target_language, ttsProvider: voice.provider, ttsSpeaker: voice.tts_speaker, regionalCritique: voice.critique, actualVoDurationSeconds: audioDuration, done: true, progress: 100 };
+            return { ...beat, audioUrl: voice.audio_url, localizedScript: voice.localized_script, targetLanguage: voice.target_language, ttsProvider: voice.provider, ttsSpeaker: voice.tts_speaker, regionalCritique: voice.critique, actualVoDurationSeconds: audioDuration, done: true, progress: 50 };
           } catch {
-            return { ...beat, actualVoDurationSeconds: estimateVoiceDurationSeconds(beat.vo_line), done: true, progress: 100 };
+            return { ...beat, actualVoDurationSeconds: estimateVoiceDurationSeconds(beat.vo_line), done: true, progress: 50 };
           }
         }),
       );
-      const pipeline = buildWebsiteRenderPipeline({ brandKit: kit, beats: renderedBeats });
-      const pipelineBeats = mergePipelineBeats(pipeline.beats);
+
+      const pipelineDraft = buildWebsiteRenderPipeline({ brandKit: kit, beats: renderedBeats });
+      setBeats(mergePipelineBeats(pipelineDraft.beats).map((beat) => ({ ...beat, assetStatus: "generating" as const, progress: 55 })));
+      setStatus(`Generating Qwen video clips for ${nextPlan.beats.length} beats (parallel x2)...`);
+
+      const clipResults = new Map<string, Awaited<ReturnType<typeof generateWebsiteBeatClip>>>();
+      const clipQueue = [...nextPlan.beats];
+      const workers = Array.from({ length: 2 }, async () => {
+        while (clipQueue.length > 0) {
+          const beat = clipQueue.shift();
+          if (!beat) break;
+          const renderAsset = pipelineDraft.assets[beat.beat_id];
+          if (!renderAsset) continue;
+          setBeats((current) =>
+            current.map((item) =>
+              item.beat_id === beat.beat_id ? { ...item, assetStatus: "generating", progress: 58 } : item,
+            ),
+          );
+          const result = await generateWebsiteBeatClip({
+            brandKit: kit,
+            beat,
+            renderAsset,
+            onProgress: (progress) => {
+              setBeats((current) =>
+                current.map((item) =>
+                  item.beat_id === beat.beat_id ? { ...item, progress: Math.max(58, progress), assetStatus: "generating" } : item,
+                ),
+              );
+            },
+          });
+          clipResults.set(beat.beat_id, result);
+          setBeats((current) =>
+            current.map((item) =>
+              item.beat_id === beat.beat_id
+                ? {
+                    ...item,
+                    clipUrl: result.clip_url,
+                    motionSpec: result.motion_spec ?? item.motionSpec ?? renderAsset.motionGraphicSpec,
+                    assetStatus: result.asset_status === "ready" ? "ready" : "failed",
+                    assetSource: result.asset_source,
+                    progress: 100,
+                    renderAsset: {
+                      ...item.renderAsset!,
+                      clip_url: result.clip_url,
+                      motionGraphicSpec: result.motion_spec ?? item.renderAsset?.motionGraphicSpec,
+                      asset_status: result.asset_status,
+                      asset_source: result.asset_source,
+                      asset_error: result.asset_error,
+                    },
+                  }
+                : item,
+            ),
+          );
+        }
+      });
+      await Promise.all(workers);
+
+      const pipeline = buildWebsiteRenderPipeline({
+        brandKit: kit,
+        beats: renderedBeats.map((beat) => {
+          const clip = clipResults.get(beat.beat_id);
+          return {
+            ...beat,
+            clipUrl: clip?.clip_url,
+            motionSpec: clip?.motion_spec,
+          };
+        }),
+      });
+      const pipelineBeats = mergePipelineBeats(pipeline.beats).map((beat) => {
+        const clip = clipResults.get(beat.beat_id);
+        if (!clip) return beat;
+        return {
+          ...beat,
+          clipUrl: clip.clip_url ?? beat.clipUrl,
+          motionSpec: clip.motion_spec ?? beat.motionSpec,
+          assetStatus: clip.asset_status,
+          assetSource: clip.asset_source,
+          renderAsset: beat.renderAsset
+            ? {
+                ...beat.renderAsset,
+                clip_url: clip.clip_url,
+                asset_status: clip.asset_status,
+                asset_source: clip.asset_source,
+                asset_error: clip.asset_error,
+              }
+            : beat.renderAsset,
+        };
+      });
       setBeats(pipelineBeats);
       setPlan({ ...nextPlan, beats: pipeline.beats });
       setRenderPipeline(pipeline);
       saveWebsiteProject(kit, { ...nextPlan, beats: pipeline.beats }, pipelineBeats, pipeline);
       writeWebsiteStyleMemory(kit.brand.name, nextPlan);
-      setStatus("Website render pipeline ready - compiled assets, reconciled timing, and saved to Library.");
+      setStatus(
+        `Website video ready — ${[...clipResults.values()].filter((c) => c.clip_url || c.motion_spec).length}/${clipResults.size} beats with real visuals.`,
+      );
     } catch (err) {
       setStatus(`Failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -164,14 +288,18 @@ function WebsiteVideoPage() {
           data: {
             text: nextText,
             voice: beats.findIndex((item) => item.beat_id === beatId) % 2 === 0 ? "Cherry" : "Ethan",
-            language: "English",
+            language: beat.targetLanguage || voiceLanguage,
             tone: brandKit.brand.voice_tone,
             pitch: "medium",
             beatId,
-            clientStyleProfile: readWebsiteStyleMemory(brandKit.brand.name),
+            clientStyleProfile: buildWebsiteStyleProfile(brandKit.brand.name, beat.targetLanguage || voiceLanguage),
+            preferredSpeaker: readWebsiteSpeakerMemory(brandKit.brand.name, beat.targetLanguage || voiceLanguage),
           },
         });
         audioUrl = voice.audio_url;
+        if (voice.tts_speaker && voice.target_language) {
+          writeWebsiteSpeakerMemory(brandKit.brand.name, voice.target_language, voice.tts_speaker);
+        }
         voiceMeta = {
           localizedScript: voice.localized_script,
           targetLanguage: voice.target_language,
@@ -183,9 +311,24 @@ function WebsiteVideoPage() {
         audioUrl = beat.audioUrl;
       }
       const actualVoDurationSeconds = audioUrl ? await resolveAudioDurationSeconds(audioUrl, nextText) : estimateVoiceDurationSeconds(nextText);
-      const editedBeats = beats.map((item) =>
+      let editedBeats = beats.map((item) =>
         item.beat_id === beatId ? { ...item, vo_line: nextText, audioUrl, ...voiceMeta, actualVoDurationSeconds, done: true, progress: 100 } : item,
       );
+      const draftPipeline = buildWebsiteRenderPipeline({ brandKit, beats: editedBeats });
+      const renderAsset = draftPipeline.assets[beatId];
+      if (renderAsset) {
+        setStatus("Regenerating Qwen video clip for this beat...");
+        const clip = await generateWebsiteBeatClip({
+          brandKit,
+          beat: { ...beat, vo_line: nextText },
+          renderAsset,
+        });
+        editedBeats = editedBeats.map((item) =>
+          item.beat_id === beatId
+            ? { ...item, clipUrl: clip.clip_url, assetStatus: clip.asset_status, assetSource: clip.asset_source }
+            : item,
+        );
+      }
       const pipeline = buildWebsiteRenderPipeline({ brandKit, beats: editedBeats });
       const nextBeats = mergePipelineBeats(pipeline.beats);
       setBeats(nextBeats);
@@ -203,16 +346,34 @@ function WebsiteVideoPage() {
   async function downloadVideo() {
     if (!brandKit || beats.length === 0) return;
     setDownloading(true);
-    setStatus("Rendering website video download...");
+    setStatus("Rendering website video (Remotion MP4)...");
     try {
+      await exportWebsiteVideoRemotion({
+        brandName: brandKit.brand.name,
+        colors: brandColors(brandKit),
+        beats: beats.map((beat) => ({
+          beat_id: beat.beat_id,
+          beat_purpose: beat.beat_purpose,
+          vo_line: beat.vo_line,
+          duration_seconds: getPreviewDuration(beat),
+          transition_out: beat.transition_out,
+          clipUrl: beat.clipUrl,
+          motionSpec: beat.motionSpec ?? beat.renderAsset?.motionGraphicSpec,
+          audioUrl: beat.audioUrl,
+          assetSource: beat.assetSource,
+        })),
+        title: `${brandKit.brand.name} - ${selectedType.label}`,
+        onProgress: (progress) => setStatus(`Rendering website video… ${progress}%`),
+      });
+      setStatus("MP4 download ready (Remotion WebCodecs).");
+    } catch (remotionErr) {
+      setStatus(`Remotion export unavailable (${remotionErr instanceof Error ? remotionErr.message : String(remotionErr)}). Falling back to canvas export…`);
       await renderWebsiteVideoDownload({
         brandKit,
         beats,
         title: `${brandKit.brand.name} - ${selectedType.label}`,
       });
-      setStatus("Video download ready.");
-    } catch (err) {
-      setStatus(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
+      setStatus("WebM download ready (canvas fallback).");
     } finally {
       setDownloading(false);
     }
@@ -237,7 +398,7 @@ function WebsiteVideoPage() {
         assetSource: beat.assetSource,
         clipUrl: beat.clipUrl,
         videoUrl: beat.clipUrl,
-        motionSpec: beat.motionSpec,
+        motionSpec: beat.motionSpec ?? beat.renderAsset?.motionGraphicSpec,
         visual: `${beat.production_method}: ${beat.screen_capture_spec?.interaction_sequence.join(", ") || beat.motion_graphic_spec?.layout || "AI B-roll context"}`,
         caption: beat.vo_line,
         spokenLine: beat.vo_line,
@@ -258,7 +419,7 @@ function WebsiteVideoPage() {
         assetSource: beat.assetSource,
         clipUrl: beat.clipUrl,
         videoUrl: beat.clipUrl,
-        motionSpec: beat.motionSpec,
+        motionSpec: beat.motionSpec ?? beat.renderAsset?.motionGraphicSpec,
         caption: beat.vo_line,
         spokenLine: beat.vo_line,
         audioUrl: beat.audioUrl,
@@ -351,6 +512,24 @@ function WebsiteVideoPage() {
                 className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm outline-none focus:border-white/30"
               />
               <div className="mt-1 text-[10px] text-white/35">Valid website videos are 180-240 seconds.</div>
+            </div>
+
+            <div>
+              <div className="text-[11px] uppercase tracking-widest text-white/40 mb-1">Voice Language</div>
+              <select
+                value={voiceLanguage}
+                onChange={(e) => setVoiceLanguage(e.target.value as WebsiteVoiceLanguage)}
+                className="w-full bg-white/5 border border-white/10 rounded-md px-3 py-2 text-sm outline-none focus:border-white/30"
+              >
+                {WEBSITE_VOICE_LANGUAGES.map((option) => (
+                  <option key={option.value} value={option.value} className="bg-neutral-900">
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <div className="mt-1 text-[10px] text-white/35">
+                Indian languages and code-switched modes route to Sarvam Bulbul V3 with localized scripts.
+              </div>
             </div>
 
             <button disabled={running} onClick={generate} className="w-full h-11 rounded-md bg-white text-black text-sm font-medium disabled:opacity-60 flex items-center justify-center gap-2">
@@ -458,9 +637,13 @@ function WebsiteVideoPage() {
                         durationSeconds={beats[0].duration_seconds}
                         progress={0.25}
                         colors={brandColors(brandKit)}
-                        assetStatus={beats[0].assetStatus}
-                        clipUrl={beats[0].clipUrl}
-                        motionSpec={beats[0].motionSpec}
+            assetStatus={beats[0].assetStatus}
+            assetSource={beats[0].assetSource}
+            clipUrl={beats[0].clipUrl}
+            motionSpec={beats[0].motionSpec}
+            audioUrl={beats[0].audioUrl}
+                        autoPlayVideo
+                        muted
                       />
                     ) : (
                       <div className="h-full flex items-center justify-center text-white/40">
@@ -487,42 +670,58 @@ function WebsiteVideoPage() {
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                   {beats.map((beat, index) => (
                     <div key={beat.beat_id} className="rounded-lg border border-white/10 bg-white/[0.03] overflow-hidden">
-                      <div className="aspect-video bg-neutral-950 relative p-5 flex flex-col justify-between">
-                        <div className="flex items-center justify-between text-[10px] uppercase tracking-widest text-white/45">
-                          <span>{beat.production_method.replace("_", " ")}</span>
+                      <div className="aspect-video bg-neutral-950 relative">
+                        {brandKit && (
+                          <WebsiteBeatPreview
+                            brandName={brandKit.brand.name}
+                            title={`${brandKit.brand.name} - ${selectedType.label}`}
+                            description={brandKit.product.one_line_description}
+                            productionMethod={beat.production_method}
+                            beatPurpose={beat.beat_purpose}
+                            voLine={beat.vo_line}
+                            startSeconds={beat.start_seconds}
+                            durationSeconds={beat.duration_seconds}
+                            progress={0.2}
+                            colors={brandColors(brandKit)}
+                            assetStatus={beat.assetStatus}
+                            assetSource={beat.assetSource}
+                            clipUrl={beat.clipUrl}
+                            motionSpec={beat.motionSpec}
+                            audioUrl={beat.audioUrl}
+                            autoPlayVideo={Boolean(beat.clipUrl)}
+                            muted
+                          />
+                        )}
+                      </div>
+                      <div className="p-3 text-[11px] text-white/50 space-y-1">
+                        <div className="font-medium text-white/80">{beat.beat_purpose}</div>
+                        {editingBeat?.beatId === beat.beat_id ? (
+                          <textarea
+                            value={editingBeat.text}
+                            onChange={(event) => setEditingBeat({ beatId: beat.beat_id, text: event.target.value })}
+                            className="mt-1 h-20 w-full resize-none rounded-md border border-white/15 bg-black/40 p-3 text-xs leading-relaxed outline-none focus:border-white/35"
+                          />
+                        ) : (
+                          <div className="text-xs text-white/55 leading-relaxed line-clamp-2">{beat.vo_line}</div>
+                        )}
+                        <div className="flex items-center justify-between pt-1">
                           <span>{formatTime(beat.start_seconds)} - {formatTime(beat.start_seconds + beat.duration_seconds)}</span>
-                        </div>
-                        <div>
-                          <div className="text-xl font-semibold">{beat.beat_purpose}</div>
-                          {editingBeat?.beatId === beat.beat_id ? (
-                            <textarea
-                              value={editingBeat.text}
-                              onChange={(event) => setEditingBeat({ beatId: beat.beat_id, text: event.target.value })}
-                              className="mt-3 h-24 w-full resize-none rounded-md border border-white/15 bg-black/40 p-3 text-xs leading-relaxed outline-none focus:border-white/35"
-                            />
-                          ) : (
-                            <div className="mt-2 text-xs text-white/55 leading-relaxed line-clamp-3">{beat.vo_line}</div>
-                          )}
-                        </div>
-                        <div className="flex items-center justify-between text-[11px] text-white/45">
-                          <span>{beat.transition_out}</span>
                           <div className="flex items-center gap-2">
                             <button onClick={() => void navigator.clipboard?.writeText(beat.vo_line)} className="flex items-center gap-1 hover:text-white" title="Copy beat prompt">
-                              <Copy className="h-3.5 w-3.5" /> Copy
+                              <Copy className="h-3.5 w-3.5" />
                             </button>
                             <button onClick={() => setEditingBeat({ beatId: beat.beat_id, text: beat.vo_line })} className="flex items-center gap-1 hover:text-white" title="Edit this beat">
-                              <Pencil className="h-3.5 w-3.5" /> Edit
+                              <Pencil className="h-3.5 w-3.5" />
                             </button>
                             <button onClick={() => setPlaying(beat)} className="flex items-center gap-1 hover:text-white">
-                              {beat.audioUrl ? <Volume2 className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />} Preview
+                              {beat.audioUrl ? <Volume2 className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
                             </button>
                           </div>
                         </div>
-                      </div>
-                      <div className="p-3 text-[11px] text-white/50 space-y-1">
                         {beat.screen_capture_spec && <div>Capture: {beat.screen_capture_spec.source_page}</div>}
                         {beat.motion_graphic_spec && <div>Motion: {beat.motion_graphic_spec.layout}</div>}
-                        {beat.assetSource === "fallback" && <div className="text-amber-300">Using fallback visual: {beat.renderAsset?.asset_error || "capture unavailable"}</div>}
+                        {beat.clipUrl && <div className="text-emerald-300">Qwen video clip ready</div>}
+                        {beat.assetSource === "fallback" && <div className="text-amber-300">Clip failed — {beat.renderAsset?.asset_error || "using motion fallback"}</div>}
                         {beat.renderAsset?.captureChoreography && <div>Choreography: {beat.renderAsset.captureChoreography.interaction_sequence.join(" -> ")}</div>}
                         {beat.renderAsset?.motionGraphicSpec && <div>Compiled layers: {beat.renderAsset.motionGraphicSpec.elements.length}</div>}
                         {beat.renderAsset?.brollPromptSpec && <div>B-roll prompt compiled</div>}
@@ -596,12 +795,13 @@ function BeatModal({ beat, brandKit, title, onClose }: { beat: BeatPreview; bran
             progress={0.35}
             colors={brandColors(brandKit)}
             assetStatus={beat.assetStatus}
+            assetSource={beat.assetSource}
             clipUrl={beat.clipUrl}
             motionSpec={beat.motionSpec}
+            audioUrl={beat.audioUrl}
+            autoPlayVideo
+            muted={false}
           />
-        </div>
-        <div className="mt-4">
-          {beat.audioUrl && <audio src={beat.audioUrl} controls autoPlay className="mt-5 w-full" />}
         </div>
       </div>
     </div>
@@ -623,55 +823,41 @@ function WebsiteVideoPlayer({
   onDownload: () => void;
   downloading: boolean;
 }) {
-  const [index, setIndex] = useState(0);
-  const [progress, setProgress] = useState(0);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const beat = beats[index] || beats[0];
-
-  useEffect(() => {
-    setProgress(0);
-    const startedAt = performance.now();
-    const durationMs = getPreviewDuration(beat) * 1000;
-    let frame = 0;
-    const tick = () => {
-      const elapsed = performance.now() - startedAt;
-      const nextProgress = Math.min(1, elapsed / durationMs);
-      setProgress(nextProgress);
-      if (nextProgress >= 1) {
-        setIndex((current) => (current + 1) % beats.length);
-        return;
-      }
-      frame = window.requestAnimationFrame(tick);
-    };
-    frame = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(frame);
-  }, [beat, beats.length]);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.currentTime = 0;
-    void audio.play().catch(() => undefined);
-  }, [beat.audioUrl]);
+  const remotionBeats = useMemo(
+    () =>
+      beats.map((beat) => ({
+        beat_id: beat.beat_id,
+        beat_purpose: beat.beat_purpose,
+        vo_line: beat.vo_line,
+        duration_seconds: getPreviewDuration(beat),
+        transition_out: beat.transition_out,
+        clip_url: beat.clipUrl,
+        motion_spec: beat.motionSpec ?? beat.renderAsset?.motionGraphicSpec,
+        vo_audio_url: beat.audioUrl,
+        asset_source: beat.assetSource,
+      })),
+    [beats],
+  );
+  const inputProps = useMemo(
+    () => ({
+      beats: remotionBeats,
+      brandName: brandKit.brand.name,
+      colors: brandColors(brandKit),
+    }),
+    [remotionBeats, brandKit],
+  );
+  const durationInFrames = websiteCompositionDurationFrames(remotionBeats);
 
   return (
     <div className="fixed inset-0 z-50 bg-black/95 flex flex-col">
       <div className="h-14 border-b border-white/10 flex items-center justify-between px-5">
         <div>
           <div className="text-sm font-medium">{title}</div>
-          <div className="text-[11px] text-white/40">
-            Beat {index + 1} of {beats.length} - {beat.beat_purpose}
-          </div>
+          <div className="text-[11px] text-white/40">Remotion timeline preview — matches export assembly</div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setIndex((value) => (value - 1 + beats.length) % beats.length)} className="h-9 w-9 rounded-md border border-white/15 flex items-center justify-center text-white/70 hover:text-white">
-            <ArrowLeft className="h-4 w-4" />
-          </button>
-          <button onClick={() => setIndex((value) => (value + 1) % beats.length)} className="h-9 w-9 rounded-md border border-white/15 flex items-center justify-center text-white/70 hover:text-white">
-            <ArrowRight className="h-4 w-4" />
-          </button>
           <button disabled={downloading} onClick={onDownload} className="h-9 rounded-md bg-white px-4 text-xs font-medium text-black disabled:opacity-60 flex items-center gap-2">
-            <Download className="h-3.5 w-3.5" /> {downloading ? "Rendering" : "Download"}
+            <Download className="h-3.5 w-3.5" /> {downloading ? "Rendering" : "Download MP4"}
           </button>
           <button onClick={onClose} className="h-9 w-9 rounded-md border border-white/15 flex items-center justify-center text-white/70 hover:text-white">
             <X className="h-4 w-4" />
@@ -679,30 +865,19 @@ function WebsiteVideoPlayer({
         </div>
       </div>
       <div className="flex-1 min-h-0 p-5 flex items-center justify-center">
-        <div className="w-full max-w-6xl aspect-video rounded-xl overflow-hidden border border-white/10 shadow-2xl shadow-black">
-          <WebsiteBeatPreview
-            brandName={brandKit.brand.name}
-            title={title}
-            description={brandKit.product.one_line_description}
-            productionMethod={beat.production_method}
-            beatPurpose={beat.beat_purpose}
-            voLine={beat.vo_line}
-            startSeconds={beat.start_seconds}
-            durationSeconds={beat.duration_seconds}
-            progress={progress}
-            colors={brandColors(brandKit)}
-            assetStatus={beat.assetStatus}
-            clipUrl={beat.clipUrl}
-            motionSpec={beat.motionSpec}
+        <div className="w-full max-w-6xl aspect-video rounded-xl overflow-hidden border border-white/10 shadow-2xl shadow-black bg-black">
+          <Player
+            component={WebsiteMainComposition}
+            inputProps={inputProps}
+            durationInFrames={durationInFrames}
+            fps={30}
+            compositionWidth={1280}
+            compositionHeight={720}
+            controls
+            style={{ width: "100%", height: "100%" }}
           />
         </div>
       </div>
-      <div className="px-5 pb-5">
-        <div className="h-1 rounded-full bg-white/10 overflow-hidden">
-          <div className="h-full bg-white transition-[width] duration-100" style={{ width: `${Math.round(progress * 100)}%` }} />
-        </div>
-      </div>
-      {beat.audioUrl && <audio ref={audioRef} src={beat.audioUrl} />}
     </div>
   );
 }
@@ -888,10 +1063,58 @@ async function drawBeatFrames(
   title: string,
   durationSeconds: number,
 ) {
+  if (beat.clipUrl) {
+    await drawBeatVideoClip(ctx, canvas, beat, brandKit, title, durationSeconds);
+    return;
+  }
   const fps = 30;
   const totalFrames = Math.max(1, Math.round(durationSeconds * fps));
   for (let frame = 0; frame < totalFrames; frame += 1) {
     drawBeatFrame(ctx, canvas, brandKit, beat, title, frame / totalFrames);
+    await sleep(1000 / fps);
+  }
+}
+
+async function drawBeatVideoClip(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  beat: BeatPreview,
+  brandKit: WebsiteBrandKit,
+  title: string,
+  durationSeconds: number,
+) {
+  const video = document.createElement("video");
+  video.src = beat.clipUrl!;
+  video.muted = true;
+  video.playsInline = true;
+  video.crossOrigin = "anonymous";
+  await new Promise<void>((resolve, reject) => {
+    video.onloadeddata = () => resolve();
+    video.onerror = () => reject(new Error("Failed to load beat clip"));
+    video.load();
+  });
+  const fps = 30;
+  const totalFrames = Math.max(1, Math.round(durationSeconds * fps));
+  const frameDuration = Math.min(video.duration || durationSeconds, durationSeconds) / totalFrames;
+  for (let frame = 0; frame < totalFrames; frame += 1) {
+    video.currentTime = Math.min(video.duration || durationSeconds, frame * frameDuration);
+    await new Promise<void>((resolve) => {
+      const onSeeked = () => {
+        video.removeEventListener("seeked", onSeeked);
+        resolve();
+      };
+      video.addEventListener("seeked", onSeeked);
+      if (Math.abs(video.currentTime - frame * frameDuration) < 0.01) resolve();
+    });
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.fillRect(0, canvas.height - 120, canvas.width, 120);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "600 28px Arial";
+    ctx.fillText(beat.beat_purpose, 48, canvas.height - 72);
+    ctx.font = "400 18px Arial";
+    ctx.fillStyle = "rgba(255,255,255,0.8)";
+    wrapCanvasText(ctx, beat.vo_line, 48, canvas.height - 40, canvas.width - 96, 22, 2);
     await sleep(1000 / fps);
   }
 }
@@ -910,7 +1133,7 @@ function drawBeatFrame(
   const secondary = validColor(brandKit.brand.secondary_color_hex, "#2a2a2a");
   const accent = validColor(brandKit.brand.accent_color_hex, "#ffffff");
   const neutral = validColor(brandKit.brand.neutral_color_hex, "#080808");
-  const motionSpec = beat.renderAsset?.motionGraphicSpec;
+  const motionSpec = beat.motionSpec || beat.renderAsset?.motionGraphicSpec;
   const captureSpec = beat.renderAsset?.captureChoreography;
   const brollSpec = beat.renderAsset?.brollPromptSpec;
   const panelTitle = motionSpec?.layout?.replaceAll("_", " ") || captureSpec?.framing?.replaceAll("_", " ") || brollSpec?.positive_prompt.split(".")[0] || beat.production_method;

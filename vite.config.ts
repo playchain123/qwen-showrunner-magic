@@ -5,29 +5,32 @@
 //     error logger plugins, and sandbox detection (port/host/strictPort).
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
+import { loadEnv } from "vite";
+
+const mode = process.env.MODE || process.env.NODE_ENV || "development";
+const env = loadEnv(mode, process.cwd(), "");
 
 const publicSupabaseUrl =
-  process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
+  env.VITE_SUPABASE_URL || env.SUPABASE_URL || "";
 const publicSupabasePublishableKey =
-  process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-  process.env.VITE_SUPABASE_ANON_KEY ||
-  process.env.SUPABASE_PUBLISHABLE_KEY ||
-  process.env.SUPABASE_ANON_KEY ||
+  env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+  env.VITE_SUPABASE_ANON_KEY ||
+  env.SUPABASE_PUBLISHABLE_KEY ||
+  env.SUPABASE_ANON_KEY ||
   "";
+
+const supabaseDefine =
+  publicSupabaseUrl && publicSupabasePublishableKey
+    ? {
+        "import.meta.env.VITE_SUPABASE_URL": JSON.stringify(publicSupabaseUrl),
+        "import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY": JSON.stringify(publicSupabasePublishableKey),
+        "import.meta.env.VITE_SUPABASE_ANON_KEY": JSON.stringify(publicSupabasePublishableKey),
+      }
+    : {};
 
 export default defineConfig({
   vite: {
-    define: {
-      // Browser code still reads import.meta.env.VITE_* only; this safely maps
-      // Lovable Cloud's public backend values into Vite's frontend namespace.
-      "import.meta.env.VITE_SUPABASE_URL": JSON.stringify(publicSupabaseUrl),
-      "import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY": JSON.stringify(
-        publicSupabasePublishableKey,
-      ),
-      "import.meta.env.VITE_SUPABASE_ANON_KEY": JSON.stringify(
-        publicSupabasePublishableKey,
-      ),
-    },
+    define: supabaseDefine,
   },
   tanstackStart: {
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).

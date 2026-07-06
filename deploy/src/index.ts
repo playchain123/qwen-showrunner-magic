@@ -1,24 +1,29 @@
-type ApiHandler = (request: Request, context: RequestContext) => Promise<Response>;
+import {
+  handleImage,
+  handleRender,
+  handleScript,
+  handleStoryboard,
+  handleVideoStatus,
+  handleVideoSubmit,
+  handleVoice,
+  type HandlerContext,
+} from "./handlers.js";
 
-type RequestContext = {
-  requestId: string;
-  startedAt: number;
-  userId: string | null;
-};
+type ApiHandler = (request: Request, context: HandlerContext) => Promise<Response>;
 
 const routes: Record<string, ApiHandler> = {
-  "POST /api/script": notImplemented("script_generation", "qwen-text"),
-  "POST /api/storyboard": notImplemented("storyboard_generation", "qwen-text"),
-  "POST /api/image": notImplemented("image_generation", "qwen-image"),
-  "POST /api/video": notImplemented("video_generation", "wan"),
-  "GET /api/video-status": notImplemented("video_status", "dashscope"),
-  "POST /api/voice": notImplemented("voice_generation", "qwen-tts"),
-  "POST /api/render": notImplemented("render", "ffmpeg"),
+  "POST /api/script": handleScript,
+  "POST /api/storyboard": handleStoryboard,
+  "POST /api/image": handleImage,
+  "POST /api/video": handleVideoSubmit,
+  "GET /api/video-status": handleVideoStatus,
+  "POST /api/voice": handleVoice,
+  "POST /api/render": handleRender,
   "POST /api/quota/check": quotaCheck,
 };
 
 export async function handler(request: Request) {
-  const context: RequestContext = {
+  const context: HandlerContext = {
     requestId: crypto.randomUUID(),
     startedAt: Date.now(),
     userId: readBearerSubject(request),
@@ -39,7 +44,7 @@ export async function handler(request: Request) {
   try {
     return await route(request, context);
   } catch (error) {
-    return jsonResponse(context, 500, {
+    return jsonResponse(context, error instanceof Error && error.message === "Authorization required" ? 401 : 500, {
       success: false,
       stage: "server",
       message: error instanceof Error ? error.message : "Unhandled backend error",
@@ -48,31 +53,8 @@ export async function handler(request: Request) {
   }
 }
 
-function notImplemented(stage: string, provider: string): ApiHandler {
-  return async (_request, context) => {
-    logTrace(context, stage, provider, "not_implemented");
-    return jsonResponse(context, 501, {
-      success: false,
-      stage,
-      provider,
-      message: "Function Compute route scaffold is ready; provider implementation is pending.",
-      retryable: false,
-      agent_trace: [
-        {
-          agent: stageToAgent(stage),
-          provider,
-          status: "pending_implementation",
-          latency_ms: Date.now() - context.startedAt,
-          request_id: context.requestId,
-        },
-      ],
-    });
-  };
-}
-
-async function quotaCheck(_request: Request, context: RequestContext) {
+async function quotaCheck(_request: Request, context: HandlerContext) {
   const maxProjects = Number(process.env.MAX_PROJECTS_PER_USER_PER_DAY || 3);
-  logTrace(context, "quota", "backend", "allowed");
   return jsonResponse(context, 200, {
     success: true,
     stage: "quota",
@@ -82,7 +64,7 @@ async function quotaCheck(_request: Request, context: RequestContext) {
   });
 }
 
-function jsonResponse(context: RequestContext, status: number, body: Record<string, unknown>) {
+function jsonResponse(context: HandlerContext, status: number, body: Record<string, unknown>) {
   return new Response(
     JSON.stringify(
       {
@@ -103,19 +85,6 @@ function jsonResponse(context: RequestContext, status: number, body: Record<stri
   );
 }
 
-function logTrace(context: RequestContext, stage: string, provider: string, status: string) {
-  console.log(
-    JSON.stringify({
-      request_id: context.requestId,
-      user_id: context.userId,
-      stage,
-      provider,
-      status,
-      latency_ms: Date.now() - context.startedAt,
-    }),
-  );
-}
-
 function readBearerSubject(request: Request) {
   const header = request.headers.get("authorization");
   if (!header?.startsWith("Bearer ")) return null;
@@ -129,17 +98,4 @@ function readBearerSubject(request: Request) {
   } catch {
     return null;
   }
-}
-
-function stageToAgent(stage: string) {
-  const agents: Record<string, string> = {
-    script_generation: "Writer",
-    storyboard_generation: "Director",
-    image_generation: "Cinematographer",
-    video_generation: "Video Producer",
-    video_status: "Video Producer",
-    voice_generation: "Voice Actor",
-    render: "Editor",
-  };
-  return agents[stage] ?? "Backend";
 }

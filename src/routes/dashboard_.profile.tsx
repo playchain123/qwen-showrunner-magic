@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { BarChart3, Brain, Clock, Film, RefreshCw } from "lucide-react";
 import { Sidebar, TopBar } from "./dashboard";
 import { buildStyleProfile, readGenerationLogs, type GenerationLogEntry, type StyleProfile } from "@/lib/library";
-import { supabase } from "@/integrations/supabase/client";
+import { isSupabaseConfigured, supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/dashboard_/profile")({
   ssr: false,
@@ -16,6 +16,10 @@ function StyleProfilePage() {
   const profile = useMemo<StyleProfile>(() => buildStyleProfile(logs), [logs]);
 
   useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) {
+      navigate({ to: "/auth", search: { mode: "login" } });
+      return;
+    }
     supabase.auth.getUser().then(({ data }) => {
       if (!data.user) navigate({ to: "/auth", search: { mode: "login" } });
     });

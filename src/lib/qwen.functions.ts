@@ -99,12 +99,14 @@ async function compileLocalizedScriptForVoice({
   targetLanguage,
   brandVoiceTone,
   clientStyleProfile,
+  revisionNote,
 }: {
   beatId: string;
   sourceLine: string;
   targetLanguage: string;
   brandVoiceTone: string;
   clientStyleProfile: string;
+  revisionNote?: string;
 }): Promise<LocalizationResult> {
   const fallback: LocalizationResult = {
     beat_id: beatId,
@@ -132,7 +134,7 @@ async function compileLocalizedScriptForVoice({
               clientStyleProfile,
             }),
           },
-          { role: "user", content: sourceLine },
+          { role: "user", content: revisionNote ? `${sourceLine}\n\nRevision required: ${revisionNote}` : sourceLine },
         ],
         response_format: { type: "json_object" },
         temperature: 0.55,
@@ -154,6 +156,51 @@ async function compileLocalizedScriptForVoice({
   } catch {
     return fallback;
   }
+}
+
+async function resolveLocalizedScriptForVoice({
+  beatId,
+  sourceLine,
+  targetLanguage,
+  brandVoiceTone,
+  clientStyleProfile,
+}: {
+  beatId: string;
+  sourceLine: string;
+  targetLanguage: string;
+  brandVoiceTone: string;
+  clientStyleProfile: string;
+}) {
+  let localized = await compileLocalizedScriptForVoice({
+    beatId,
+    sourceLine,
+    targetLanguage,
+    brandVoiceTone,
+    clientStyleProfile,
+  });
+  let critique = critiqueRegionalScript({
+    localizedScript: localized.localized_script,
+    targetLanguage: localized.target_language,
+    register: localized.register,
+    sourceLine,
+  });
+  for (let attempt = 0; attempt < 2 && critique.verdict === "revise"; attempt += 1) {
+    localized = await compileLocalizedScriptForVoice({
+      beatId,
+      sourceLine,
+      targetLanguage,
+      brandVoiceTone,
+      clientStyleProfile,
+      revisionNote: critique.revision_note || critique.issues.join("; "),
+    });
+    critique = critiqueRegionalScript({
+      localizedScript: localized.localized_script,
+      targetLanguage: localized.target_language,
+      register: localized.register,
+      sourceLine,
+    });
+  }
+  return { localized, critique };
 }
 
 type Scene = {
@@ -409,6 +456,7 @@ export const generateVoice = createServerFn({ method: "POST" })
         pitch: z.enum(["low", "medium", "high"]).optional().default("medium"),
         beatId: z.string().optional().default("voice-line"),
         clientStyleProfile: z.string().optional().default(""),
+        preferredSpeaker: z.string().optional().default(""),
       })
       .parse(input),
   )
@@ -455,8 +503,8 @@ export const generateVoice = createServerFn({ method: "POST" })
     const emotion = detectEmotion(`${data.text} ${data.tone}`);
     const pitchWord = data.pitch === "low" ? "low chest resonance" : data.pitch === "high" ? "bright forward placement" : "balanced";
     const route = resolveTTSProvider(data.language);
-    const localized = route.provider === "sarvam-bulbul-v3"
-      ? await compileLocalizedScriptForVoice({
+    const localizedBundle = route.provider === "sarvam-bulbul-v3"
+      ? await resolveLocalizedScriptForVoice({
           beatId: data.beatId,
           sourceLine: data.text,
           targetLanguage: route.normalizedLanguage,
@@ -464,20 +512,17 @@ export const generateVoice = createServerFn({ method: "POST" })
           clientStyleProfile: data.clientStyleProfile,
         })
       : {
-          beat_id: data.beatId,
-          target_language: route.normalizedLanguage,
-          localized_script: data.text,
-          script_notes: "Qwen-supported language; source script used directly.",
-          register: inferRegister(data.tone),
+          localized: {
+            beat_id: data.beatId,
+            target_language: route.normalizedLanguage,
+            localized_script: data.text,
+            script_notes: "Qwen-supported language; source script used directly.",
+            register: inferRegister(data.tone),
+          },
+          critique: null,
         };
-    const critique = route.provider === "sarvam-bulbul-v3"
-      ? critiqueRegionalScript({
-          localizedScript: localized.localized_script,
-          targetLanguage: localized.target_language,
-          register: localized.register,
-          sourceLine: data.text,
-        })
-      : null;
+    const localized = localizedBundle.localized;
+    const critique = localizedBundle.critique;
     const richInstructions = [
       `You are a professional on-screen film actor delivering an in-world line — never a narrator, never an announcer.`,
       `Language: ${localized.target_language}. Speak with clean native pronunciation, natural colloquial rhythm and human phrasing. No robotic cadence.`,
@@ -491,7 +536,7 @@ export const generateVoice = createServerFn({ method: "POST" })
       if (!sarvamKey) {
         throw new Error(`SARVAM_API_KEY not configured for ${route.normalizedLanguage}. This language must not be routed to Qwen3-TTS-Flash.`);
       }
-      const speaker = process.env.SARVAM_TTS_SPEAKER || chooseSarvamSpeaker(route.normalizedLanguage, data.tone, data.pitch);
+      const speaker = data.preferredSpeaker || process.env.SARVAM_TTS_SPEAKER || chooseSarvamSpeaker(route.normalizedLanguage, data.tone, data.pitch);
       const endpoint = process.env.SARVAM_TTS_URL || "https://api.sarvam.ai/text-to-speech";
       const res = await fetchWithTimeout(endpoint, {
         method: "POST",

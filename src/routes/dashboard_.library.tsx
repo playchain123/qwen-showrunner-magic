@@ -229,24 +229,36 @@ function LibraryProjectPlayer({
   const [muted, setMuted] = useState(false);
   const [reviewed, setReviewed] = useState<string>("");
   const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const fallbackRef = useRef<number | null>(null);
   const isWebsiteScene = project.type === "website_video";
 
   useEffect(() => {
-    const video = videoRef.current;
     const clip = scene?.videoUrl || scene?.clipUrl;
-    if (video && clip) {
+    const video = videoRef.current;
+    const audio = audioRef.current;
+
+    if (video && clip && !isWebsiteScene) {
       video.src = clip;
       video.currentTime = 0;
+      video.muted = muted;
       video.load();
-      video.play().catch(() => {});
+      void video.play().catch(() => undefined);
     }
+
+    if (audio && scene?.audioUrl) {
+      audio.src = scene.audioUrl;
+      audio.currentTime = 0;
+      audio.muted = muted;
+      void audio.play().catch(() => undefined);
+    }
+
     if (fallbackRef.current) window.clearTimeout(fallbackRef.current);
     fallbackRef.current = window.setTimeout(onNext, Math.max(5, scene?.durationSeconds || 7) * 1000 + 1200);
     return () => {
       if (fallbackRef.current) window.clearTimeout(fallbackRef.current);
     };
-  }, [scene?.videoUrl, scene?.clipUrl, scene?.durationSeconds, onNext]);
+  }, [scene?.videoUrl, scene?.clipUrl, scene?.audioUrl, scene?.durationSeconds, onNext, muted, isWebsiteScene]);
 
   if (!scene) return null;
 
@@ -282,6 +294,8 @@ function LibraryProjectPlayer({
         {isWebsiteScene ? (
           <WebsiteBeatPreview
             {...buildWebsiteScenePreviewProps(project, scene, index, 0.35)}
+            audioUrl={scene.audioUrl}
+            assetSource={scene.assetSource}
             autoPlayVideo
             muted={muted}
             onEnded={onNext}
@@ -293,7 +307,7 @@ function LibraryProjectPlayer({
               ref={videoRef}
               autoPlay
               playsInline
-              muted
+              muted={muted}
               preload="metadata"
               poster={scene.posterUrl}
               onEnded={onNext}
@@ -302,7 +316,7 @@ function LibraryProjectPlayer({
             />
           </>
         )}
-        {scene.audioUrl && <audio key={scene.audioUrl} src={scene.audioUrl} autoPlay muted={muted} />}
+        {!isWebsiteScene && scene.audioUrl && <audio ref={audioRef} src={scene.audioUrl} preload="auto" muted={muted} />}
         {project.type === "website_video" && scene.assetSource === "fallback" && (
           <div className="absolute top-32 left-4 z-10 rounded-full border border-amber-300/30 bg-amber-400/15 px-3 py-1 text-[11px] font-medium text-amber-200">
             Using fallback visual
@@ -397,8 +411,10 @@ function buildWebsiteScenePreviewProps(project: LibraryProject, scene: LibrarySc
       neutral: brandKit?.brand?.neutral_color_hex,
     },
     assetStatus: scene.assetStatus || (scene.clipUrl || scene.videoUrl || scene.motionSpec ? "ready" as const : "pending" as const),
+    assetSource: scene.assetSource,
     clipUrl: scene.clipUrl || scene.videoUrl,
     motionSpec: scene.motionSpec as CompiledMotionSpec | undefined,
+    audioUrl: scene.audioUrl,
   };
 }
 

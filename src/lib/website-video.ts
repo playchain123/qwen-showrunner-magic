@@ -1,5 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import {
+  BROWSER_UA,
+  classifyFetchFailure,
+  fetchBasicMetaFallback,
+  mergeMetaIntoBrandKit,
+} from "./website-site-resilience";
 
 export type WebsiteVideoType = "saas_launch" | "website_promo" | "user_demo" | "user_manual";
 export type ProductionMethod = "screen_capture" | "motion_graphic" | "ai_broll";
@@ -94,18 +100,21 @@ export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
     const normalizedUrl = normalizeUrl(data.url);
     const candidates = buildFetchCandidates(normalizedUrl);
     const failures: string[] = [];
+    let sawBlocked = false;
     for (const candidate of candidates) {
       try {
         const res = await fetch(candidate, {
           redirect: "follow",
           headers: {
-            "User-Agent": "Mozilla/5.0 (compatible; Makers Website-to-Video Brand Extractor/1.0)",
+            "User-Agent": BROWSER_UA,
             Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
           },
         });
         if (!res.ok) {
+          const kind = classifyFetchFailure(res.status);
           failures.push(`${candidate} HTTP ${res.status}`);
+          if (kind === "blocked") sawBlocked = true;
           continue;
         }
         const contentType = res.headers.get("content-type") || "";
@@ -121,7 +130,15 @@ export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
         failures.push(`${candidate} ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    return buildFallbackBrandKit(normalizedUrl, failures);
+    const meta = await fetchBasicMetaFallback(normalizedUrl);
+    if (meta) {
+      const kit = buildFallbackBrandKit(normalizedUrl, failures);
+      if (sawBlocked) kit.confidence_flags.push("site_blocked", "blocked_http_403_or_429");
+      return mergeMetaIntoBrandKit(kit, meta);
+    }
+    const fallback = buildFallbackBrandKit(normalizedUrl, failures);
+    if (sawBlocked) fallback.confidence_flags.push("site_blocked", "blocked_http_403_or_429");
+    return fallback;
   });
 
 export function buildWebsiteVideoPlan({

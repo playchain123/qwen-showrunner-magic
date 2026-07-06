@@ -39,6 +39,7 @@ function readPublicEnv(value: string | undefined): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+// Vite injects VITE_* at build time; vite.config maps SUPABASE_* when needed.
 const supabaseUrl = readPublicEnv(import.meta.env.VITE_SUPABASE_URL);
 const supabasePublishableKey =
   readPublicEnv(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY) ||

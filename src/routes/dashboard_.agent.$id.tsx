@@ -112,6 +112,7 @@ function AgentWorkspace() {
   const [openScene, setOpenScene] = useState<number | null>(null);
   const [bibleOpen, setBibleOpen] = useState(false);
   const [bibleBusy, setBibleBusy] = useState(false);
+  const [finalFilmUrl, setFinalFilmUrl] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
   const startedRef = useRef(false);
@@ -212,6 +213,7 @@ function AgentWorkspace() {
     setFilmTitle("");
     setLogline("");
     setVisualBible(null);
+    setFinalFilmUrl(null);
     try {
       const sceneCount = chooseSceneCount(prompt);
       const learningContext = readLearningContext();
@@ -524,32 +526,36 @@ function AgentWorkspace() {
 
       setTasks((t) => t.map((task) => ({ ...task, done: true })));
 
-      // §5 — Client-side ffmpeg post: grade each clip, concat into a single
-      // film file. Fire-and-forget so it doesn't block library save / auto-play.
-      void (async () => {
-        try {
-          const clipUrls = (
-            await new Promise<StoryCard[]>((resolve) => setCards((c) => { resolve(c); return c; }))
-          )
-            .map((c) => c.videoUrl)
-            .filter((u): u is string => Boolean(u));
-          if (clipUrls.length === 0) return;
+      let masterFilmUrl: string | undefined;
+      try {
+        const clipUrls = (
+          await new Promise<StoryCard[]>((resolve) => setCards((c) => { resolve(c); return c; }))
+        )
+          .map((c) => c.videoUrl)
+          .filter((u): u is string => Boolean(u));
+        if (clipUrls.length > 1) {
           const graded: string[] = [];
           for (const url of clipUrls) {
             try { graded.push(await gradeClip(url)); } catch { graded.push(url); }
           }
-          const finalUrl = await concatClips(graded);
-          setMessages((m) => [...m, { role: "agent", text: `🎞 Post-processing complete — deflicker, film grain, vignette and grade applied. Final master ready.` }]);
-          setCards((c) => c.map((card, i) => (i === 0 ? { ...card, videoUrl: card.videoUrl, posterUrl: card.posterUrl } : card)));
-          void finalUrl;
-        } catch {
-          // ffmpeg.wasm can OOM on very long films — degrade silently.
+          masterFilmUrl = await concatClips(graded);
+          setFinalFilmUrl(masterFilmUrl);
+          setMessages((m) => [...m, { role: "agent", text: `🎞 Post-processing complete — graded master film stitched from ${clipUrls.length} clips. Press ▶ Play Film or download from the first scene card.` }]);
+        } else if (clipUrls.length === 1) {
+          masterFilmUrl = clipUrls[0];
+          setFinalFilmUrl(masterFilmUrl);
         }
-      })();
+      } catch {
+        // ffmpeg.wasm can OOM on very long films — per-scene playback still works.
+      }
 
+      const totalSeconds = story.scenes.reduce(
+        (sum, scene) => sum + normalizeSceneDuration(scene.duration_seconds),
+        0,
+      );
       setMessages((m) => [
         ...m,
-        { role: "agent", text: `Final cut is locked — ~${story.scenes.length * 8}s full film with every video scene rendered, dialogue mixed, ambient sound and score ready. Press ▶ Play Film.` },
+        { role: "agent", text: `Final cut is locked — ~${totalSeconds}s full film with every video scene rendered, dialogue mixed, ambient sound and score ready. Press ▶ Play Film.` },
       ]);
       // Auto-play once ready
       setTimeout(() => setPlayingFilm(true), 400);
@@ -594,7 +600,7 @@ function AgentWorkspace() {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           posterUrl: finalCards.find((c) => c.posterUrl)?.posterUrl,
-          finalVideoUrl: finalCards.find((c) => c.videoUrl)?.videoUrl,
+          finalVideoUrl: masterFilmUrl ?? finalCards.find((c) => c.videoUrl)?.videoUrl,
           sceneVideos: finalCards.map((c) => c.videoUrl).filter((url): url is string => Boolean(url)),
           durationSeconds: finalCards.reduce((sum, c) => sum + (c.durationSeconds || 0), 0),
           scenes: scenesForLibrary,
@@ -1284,7 +1290,7 @@ function ContextPanel({ cards, title, logline, onScene, references = [] }: { car
                   <p className="mt-1 line-clamp-2 text-xs text-white/65">{card.visual || card.caption}</p>
                 </div>
                 <div className="text-right text-[11px] text-white/45">
-                  <div>{card.durationSeconds || 8}s</div>
+                  <div>{card.durationSeconds || normalizeSceneDuration(undefined)}s</div>
                   <div>{card.done && card.videoUrl ? "rendered" : `${card.progress}%`}</div>
                 </div>
               </div>
