@@ -10,14 +10,21 @@ import { loadEnv } from "vite";
 const mode = process.env.MODE || process.env.NODE_ENV || "development";
 const env = loadEnv(mode, process.cwd(), "");
 
+// Public browser auth config. These values are publishable client config, not
+// private backend secrets, and keep the login form usable even when build-time
+// VITE_* values are not injected by the deployment environment.
+const fallbackSupabaseUrl = "https://acecxckmvlaxygbvubub.supabase.co";
+const fallbackSupabasePublishableKey =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFjZWN4Y2ttdmxheHlnYnZ1YnViIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI5MzI2MzksImV4cCI6MjA5ODUwODYzOX0.T1B7jnNAmDeB8pWGq4cmmct6Fa7mS-oJjW2szcUlxBE";
+
 const publicSupabaseUrl =
-  env.VITE_SUPABASE_URL || env.SUPABASE_URL || "";
+  env.VITE_SUPABASE_URL || env.SUPABASE_URL || fallbackSupabaseUrl;
 const publicSupabasePublishableKey =
   env.VITE_SUPABASE_PUBLISHABLE_KEY ||
   env.VITE_SUPABASE_ANON_KEY ||
   env.SUPABASE_PUBLISHABLE_KEY ||
   env.SUPABASE_ANON_KEY ||
-  "";
+  fallbackSupabasePublishableKey;
 
 const supabaseDefine =
   publicSupabaseUrl && publicSupabasePublishableKey

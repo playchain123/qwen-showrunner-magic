@@ -25,7 +25,7 @@ function NewBiblePage() {
     setErr(null);
     try {
       const res = await create({ data: { brief: brief.trim() } });
-      navigate({ to: "/dashboard_/bible/$id", params: { id: res.id } });
+      navigate({ to: "/dashboard/bible/$id", params: { id: res.id } });
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
       setBusy(false);
@@ -66,7 +66,7 @@ function NewBiblePage() {
             {(data?.bibles ?? []).map((b) => (
               <button
                 key={b.id}
-                onClick={() => navigate({ to: "/dashboard_/bible/$id", params: { id: b.id } })}
+                onClick={() => navigate({ to: "/dashboard/bible/$id", params: { id: b.id } })}
                 className="w-full text-left rounded-xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] px-4 py-3"
               >
                 <div className="text-xs text-white/50">
