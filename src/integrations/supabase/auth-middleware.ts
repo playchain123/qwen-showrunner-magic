@@ -4,7 +4,41 @@ import { getRequest } from '@tanstack/react-start/server'
 import { createClient } from '@supabase/supabase-js'
 import type { Database } from './types'
 
+type DemoSupabaseResult = { data: null; error: Error };
 
+function demoModeEnabled(): boolean {
+  return process.env.DEMO_MODE === 'true' || process.env.VITE_DEMO_MODE === 'true' || process.env.NODE_ENV === 'development';
+}
+
+function createDemoSupabaseResult(): DemoSupabaseResult {
+  return {
+    data: null,
+    error: new Error('Supabase is not configured in local/demo mode'),
+  };
+}
+
+function createDemoSupabaseBuilder() {
+  const builder = {
+    insert: () => builder,
+    upsert: () => Promise.resolve({ data: null, error: null }),
+    select: () => builder,
+    eq: () => builder,
+    order: () => builder,
+    single: () => Promise.resolve(createDemoSupabaseResult()),
+    then: (
+      resolve: (value: DemoSupabaseResult) => unknown,
+      reject?: (reason: unknown) => unknown,
+    ) => Promise.resolve(createDemoSupabaseResult()).then(resolve, reject),
+  };
+  return builder;
+}
+
+function createDemoSupabaseClient() {
+  return {
+    from: () => createDemoSupabaseBuilder(),
+    rpc: () => Promise.resolve(createDemoSupabaseResult()),
+  };
+}
 
 function isNewSupabaseApiKey(value: string): boolean {
   return value.startsWith('sb_publishable_') || value.startsWith('sb_secret_');
@@ -45,6 +79,16 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
         ...(!SUPABASE_PUBLISHABLE_KEY ? ['SUPABASE_PUBLISHABLE_KEY or VITE_SUPABASE_PUBLISHABLE_KEY'] : []),
       ];
       const message = `Missing Supabase environment variable(s): ${missing.join(', ')}. Connect Supabase in Lovable Cloud.`;
+      if (demoModeEnabled()) {
+        console.warn(`[Supabase] ${message} Continuing with local demo auth.`);
+        return next({
+          context: {
+            supabase: createDemoSupabaseClient() as unknown as ReturnType<typeof createClient<Database>>,
+            userId: 'local-demo-user',
+            claims: { sub: 'local-demo-user', role: 'authenticated' },
+          },
+        });
+      }
       console.error(`[Supabase] ${message}`);
       throw new Error(message);
     }
@@ -52,12 +96,30 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
     const request = getRequest();
 
     if (!request?.headers) {
+      if (demoModeEnabled()) {
+        return next({
+          context: {
+            supabase: createDemoSupabaseClient() as unknown as ReturnType<typeof createClient<Database>>,
+            userId: 'local-demo-user',
+            claims: { sub: 'local-demo-user', role: 'authenticated' },
+          },
+        });
+      }
       throw new Error('Unauthorized: No request headers available');
     }
 
     const authHeader = request.headers.get('authorization');
 
     if (!authHeader) {
+      if (demoModeEnabled()) {
+        return next({
+          context: {
+            supabase: createDemoSupabaseClient() as unknown as ReturnType<typeof createClient<Database>>,
+            userId: 'local-demo-user',
+            claims: { sub: 'local-demo-user', role: 'authenticated' },
+          },
+        });
+      }
       throw new Error('Unauthorized: No authorization header provided');
     }
 

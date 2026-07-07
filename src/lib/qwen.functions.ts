@@ -5,6 +5,7 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { SceneSpecSchema, type SceneSpec } from "./scene-spec";
 import type { QualityResult } from "./quality-gate";
 import { MODEL_STRATEGY } from "./model-strategy";
+import { compactVideoPrompt, RICH_VIDEO_PROMPT_MAX_CHARS } from "./prompt-limits";
 import {
   buildLocalizationPrompt,
   chooseSarvamSpeaker,
@@ -229,6 +230,69 @@ type Storyboard = {
   scenes: Scene[];
 };
 
+function requestedTotalSeconds(prompt: string): number | null {
+  const duration = prompt.match(/duration\s*:?\s*(\d{1,3})\s*(?:seconds?|secs?|s)?/i);
+  if (duration) return Number(duration[1]);
+  const seconds = prompt.match(/(\d{1,3})\s*(?:seconds?|secs?)\b/i);
+  return seconds ? Number(seconds[1]) : null;
+}
+
+function targetSceneDuration(prompt: string, sceneCount: number) {
+  const total = requestedTotalSeconds(prompt);
+  if (!total || sceneCount <= 0) return normalizeSceneDuration(undefined);
+  return normalizeSceneDuration(Math.ceil(total / sceneCount));
+}
+
+function ensureStoryboardSceneCount(story: Storyboard, sceneCount: number, prompt: string): Storyboard {
+  const duration = targetSceneDuration(prompt, sceneCount);
+  const existing = story.scenes.slice(0, sceneCount).map((scene, index) => ({
+    ...scene,
+    title: scene.title || `Scene ${index + 1}`,
+    duration_seconds: duration,
+  }));
+  if (existing.length >= sceneCount) return { ...story, scenes: existing };
+
+  const base = existing[0] || {
+    title: story.title || "Makers Film",
+    visual: prompt,
+    dialogue: "",
+    video_prompt: prompt,
+    character: "Hero",
+    spoken_line: "",
+    caption: "",
+    language: "English",
+    voice_tone: "natural cinematic",
+    pitch: "medium" as const,
+    bgm: "restrained cinematic score",
+    sfx: "room tone and subtle Foley",
+    color_grade: "warm realistic cinematic grade",
+    editing_notes: "continuity cut",
+  };
+  const beats = ["Setup", "Pressure", "Payoff", "Aftermath"];
+  while (existing.length < sceneCount) {
+    const index = existing.length;
+    const beat = beats[index] || `Beat ${index + 1}`;
+    const previous = existing[index - 1] || base;
+    existing.push({
+      ...base,
+      title: `${beat}: ${base.title || story.title || "Scene"}`,
+      visual: `${beat} progression for "${story.title || "the film"}": ${previous.visual || base.visual || prompt}`.slice(0, 700),
+      video_prompt: [
+        `${beat} scene ${index + 1} of ${sceneCount}.`,
+        previous.video_prompt || previous.visual || base.video_prompt || prompt,
+        "Advance the story clearly from the previous scene while preserving the same character identity, wardrobe, location logic, lighting palette, and emotional continuity.",
+      ].join(" "),
+      caption: previous.caption || previous.spoken_line || previous.dialogue || base.caption || "",
+      spoken_line: index + 1 === sceneCount
+        ? "One chance can change everything."
+        : previous.spoken_line || previous.dialogue || "I have to keep going.",
+      duration_seconds: duration,
+      editing_notes: index + 1 === sceneCount ? "emotional L-cut into hopeful ending" : "match cut into the next story beat",
+    });
+  }
+  return { ...story, scenes: existing };
+}
+
 /** Generate a full short-drama storyboard from a logline using Qwen3.7 planning models. */
 export const generateStoryboard = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -256,7 +320,7 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
 
     const sceneCount = clampSceneCount(data.sceneCount);
-    const sceneSeconds = normalizeSceneDuration(undefined);
+    const sceneSeconds = targetSceneDuration(data.prompt, sceneCount);
     const system = [
       `You are Makers, an AI showrunner + screenwriter + professional film editor trained in Adobe Premiere Pro, After Effects, DaVinci Resolve, cinematic camera blocking, color grading, VFX, SFX, Foley, trailer pacing, and short-drama continuity. Given a logline, produce a concise cinematic short film script and shot-list of EXACTLY ${sceneCount} scenes. Each scene is designed as a ${sceneSeconds}-second dramatic shot and the full hackathon demo must stay under 15 seconds.`,
       `HARD RULES:`,
@@ -337,11 +401,7 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     if (!parsed.scenes || !Array.isArray(parsed.scenes)) {
       throw new Error("Storyboard missing scenes");
     }
-    parsed.scenes = parsed.scenes.slice(0, sceneCount).map((scene) => ({
-      ...scene,
-      duration_seconds: normalizeSceneDuration(scene.duration_seconds),
-    }));
-    return parsed;
+    return ensureStoryboardSceneCount(parsed, sceneCount, data.prompt);
   });
 
 /** Submit a text-to-video or image-to-video task to Qwen Cloud (async). Returns task_id. */
@@ -350,7 +410,7 @@ export const submitVideo = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
     z
       .object({
-        prompt: z.string().min(3).max(4000),
+        prompt: z.string().min(3).max(RICH_VIDEO_PROMPT_MAX_CHARS).transform((value) => compactVideoPrompt(value)),
         size: z.string().default("1280*720"),
         model: z
           .enum(["happyhorse-1.1-t2v", "wan2.2-t2v-plus", "happyhorse-1.1-i2v", "wan2.2-i2v-plus"])
