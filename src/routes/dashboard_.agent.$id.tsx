@@ -21,6 +21,7 @@ import { generateSceneWithQualityGate, type QualityResult } from "@/lib/quality-
 import { gradeClip, concatClips } from "@/lib/ffmpeg-post";
 import { pickBgm } from "@/lib/free-sounds";
 import { saveLibraryProject } from "@/lib/library";
+import { MODEL_STRATEGY, buildHackathonAgentTrace, HACKATHON_ARCHITECTURE_SUMMARY } from "@/lib/model-strategy";
 import {
   buildShortFilmVisualBible,
   buildOptimizedScenePrompt,
@@ -87,6 +88,7 @@ type StoryCard = {
   referenceImageDirection?: string;
   continuityPrompt?: string;
   agentTrace?: QualityResult[];
+  modelTrace?: ReturnType<typeof buildHackathonAgentTrace>;
   routingReason?: string;
   characterSimilarity?: number | null;
 };
@@ -514,12 +516,13 @@ function AgentWorkspace() {
             const attempts = routing
               ? buildRoutedVideoAttempts(routing, storyboardStillUrl)
               : buildVideoAttempts(storyboardStillUrl);
+            const firstAttemptModel = attempts[0]?.model || MODEL_STRATEGY.videoT2v;
             const videoUrl = await submitAndPollVideo(fullPrompt, attempts, (progress) => {
               setCards((c) => c.map((card, i) => (i === idx ? { ...card, progress } : card)));
             });
             await voiceP;
             setCards((c) =>
-              c.map((card, i) => (i === idx ? { ...card, progress: 100, done: true, videoUrl } : card)),
+              c.map((card, i) => (i === idx ? { ...card, progress: 100, done: true, videoUrl, modelTrace: buildHackathonAgentTrace({ "Video Producer": firstAttemptModel, "Voice Agent": card.ttsProvider || MODEL_STRATEGY.tts }) } : card)),
             );
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -595,6 +598,7 @@ function AgentWorkspace() {
           editingNotes: c.editingNotes,
           referenceImageDirection: c.referenceImageDirection,
           continuityPrompt: c.continuityPrompt,
+          agentTrace: c.modelTrace || buildHackathonAgentTrace({ "Voice Agent": c.ttsProvider || MODEL_STRATEGY.tts }),
         }));
         saveLibraryProject({
           id,
@@ -611,6 +615,9 @@ function AgentWorkspace() {
           scenes: scenesForLibrary,
           metadata: {
             source: "agent",
+            architecture: HACKATHON_ARCHITECTURE_SUMMARY,
+            modelStrategy: MODEL_STRATEGY,
+            agentTrace: buildHackathonAgentTrace(),
             prompt,
             visualBible: bible,
             compiledReferences,
@@ -1366,11 +1373,11 @@ function buildVideoAttempts(storyboardStillUrl?: string): VideoAttempt[] {
   const attempts: VideoAttempt[] = [];
   if (storyboardStillUrl) {
     attempts.push(
-      { model: "happyhorse-1.1-i2v", imageUrl: storyboardStillUrl },
-      { model: "wan2.2-i2v-plus", imageUrl: storyboardStillUrl },
+      { model: MODEL_STRATEGY.videoPrimary as VideoModel, imageUrl: storyboardStillUrl },
+      { model: MODEL_STRATEGY.videoI2vFallback as VideoModel, imageUrl: storyboardStillUrl },
     );
   }
-  attempts.push({ model: "happyhorse-1.1-t2v" }, { model: "wan2.2-t2v-plus" });
+  attempts.push({ model: MODEL_STRATEGY.videoT2v as VideoModel }, { model: MODEL_STRATEGY.videoFallback as VideoModel });
   return attempts;
 }
 
@@ -1391,8 +1398,8 @@ function buildRoutedVideoAttempts(
   if (routing.fallback) push(routing.fallback);
   // Safety net: also try the opposite-mode engine so a still-image failure
   // never leaves the scene un-rendered.
-  if (!attempts.some((a) => a.model === "happyhorse-1.1-t2v")) attempts.push({ model: "happyhorse-1.1-t2v" });
-  if (!attempts.some((a) => a.model === "wan2.2-t2v-plus")) attempts.push({ model: "wan2.2-t2v-plus" });
+  if (!attempts.some((a) => a.model === MODEL_STRATEGY.videoT2v)) attempts.push({ model: MODEL_STRATEGY.videoT2v as VideoModel });
+  if (!attempts.some((a) => a.model === MODEL_STRATEGY.videoFallback)) attempts.push({ model: MODEL_STRATEGY.videoFallback as VideoModel });
   return attempts;
 }
 

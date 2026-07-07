@@ -1,4 +1,4 @@
-export type TTSProvider = "qwen3-tts-flash" | "sarvam-bulbul-v3";
+export type TTSProvider = "qwen3-tts-instruct-flash" | "sarvam-bulbul-v3";
 
 export type TTSRoute = {
   provider: TTSProvider;
@@ -92,7 +92,7 @@ export function normalizeTargetLanguage(language: string | undefined | null) {
 export function resolveTTSProvider(targetLanguage: string | undefined | null): TTSRoute {
   const normalizedLanguage = normalizeTargetLanguage(targetLanguage);
   if (QWEN_SUPPORTED.has(normalizedLanguage)) {
-    return { provider: "qwen3-tts-flash", normalizedLanguage, isCodeSwitched: false };
+    return { provider: "qwen3-tts-instruct-flash", normalizedLanguage, isCodeSwitched: false };
   }
   const languageCode = SARVAM_LANGUAGE_CODES[normalizedLanguage];
   if (languageCode) {

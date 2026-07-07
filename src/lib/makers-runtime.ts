@@ -1,10 +1,10 @@
 export const MAKERS_DEMO_LIMITS = {
-  maxScenes: 3,
-  maxSecondsPerScene: 5,
-  defaultSecondsPerScene: 4,
-  maxTotalVideoSeconds: 15,
-  maxParallelImageJobs: 2,
-  maxParallelVideoJobs: 3,
+  maxScenes: readPositiveInt("MAX_SCENES", 3),
+  maxSecondsPerScene: readPositiveInt("MAX_SCENE_DURATION", 5),
+  defaultSecondsPerScene: readPositiveInt("DEFAULT_SCENE_DURATION", 4),
+  maxTotalVideoSeconds: readPositiveInt("MAX_TOTAL_VIDEO_SECONDS", 16),
+  maxParallelImageJobs: readPositiveInt("MAX_PARALLEL_IMAGE_JOBS", 2),
+  maxParallelVideoJobs: readPositiveInt("MAX_PARALLEL_VIDEO_JOBS", 3),
   maxVideoPollAttempts: 60,
   videoPollBackoffMs: [5000, 10000, 15000],
 } as const;
@@ -42,4 +42,16 @@ export async function runWithConcurrency<T>(
   }
 
   await Promise.all(executing);
+}
+
+function readPositiveInt(name: string, fallback: number) {
+  const value = readEnv(name);
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readEnv(name: string) {
+  if (typeof process !== "undefined" && process.env?.[name]) return process.env[name];
+  const viteEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
+  return viteEnv?.[name] ?? viteEnv?.[`VITE_${name}`];
 }

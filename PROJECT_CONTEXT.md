@@ -163,17 +163,26 @@ Backend-only:
 - `DASHSCOPE_API_KEY`
 - `QWEN_WORKSPACE_ID`
 - `QWEN_REGION`
-- `QWEN_SCRIPT_MODEL`
+- `QWEN_PLANNER_MODEL`
+- `QWEN_FINAL_MODEL`
 - `QWEN_FAST_MODEL`
 - `QWEN_IMAGE_MODEL`
-- `QWEN_VIDEO_MODEL`
+- `QWEN_IMAGE_PRO_MODEL`
+- `QWEN_VIDEO_PRIMARY_MODEL`
+- `QWEN_VIDEO_T2V_MODEL`
+- `QWEN_VIDEO_FALLBACK_MODEL`
+- `QWEN_VIDEO_I2V_FALLBACK_MODEL`
 - `QWEN_TTS_MODEL`
+- `QWEN_TRANSCRIBE_MODEL`
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `DEMO_MODE`
 - `MAX_SCENES`
 - `MAX_PARALLEL_VIDEO_JOBS`
+- `DEFAULT_SCENE_DURATION`
+- `MAX_TOTAL_VIDEO_SECONDS`
 - `MAX_VIDEO_SECONDS_PER_PROJECT`
+- `MAX_REGENS_PER_SCENE`
 - `MAX_PROJECTS_PER_USER_PER_DAY`
 
 Frontend-safe:
@@ -187,3 +196,5 @@ Frontend-safe:
 When changing this repo, preserve Lovable as the UI layer and move AI provider calls, secrets, quotas, expensive job orchestration, and Alibaba deployment proof into backend/serverless code.
 
 The first implementation target should be a stable Qwen-first 3-scene flow, not the full 30 to 90 second product.
+
+Makers uses a Qwen-powered agentic showrunner pipeline. Qwen3.7 models handle planning, writing, storyboarding, visual bible creation, cinematography, prompt compilation, and quality checking. Qwen-Image generates locked storyboard stills. Wan and HappyHorse perform the core video generation work. Qwen-TTS adds optional cinematic voice-over. The output is assembled by the Editor Agent into a final preview.

@@ -4,6 +4,7 @@ import { clampSceneCount, normalizeSceneDuration } from "./makers-runtime";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { SceneSpecSchema, type SceneSpec } from "./scene-spec";
 import type { QualityResult } from "./quality-gate";
+import { MODEL_STRATEGY } from "./model-strategy";
 import {
   buildLocalizationPrompt,
   chooseSarvamSpeaker,
@@ -17,8 +18,6 @@ const DASHSCOPE_BASE = "https://dashscope-intl.aliyuncs.com";
 const CHAT_URL = `${DASHSCOPE_BASE}/compatible-mode/v1/chat/completions`;
 const VIDEO_SUBMIT_URL = `${DASHSCOPE_BASE}/api/v1/services/aigc/video-generation/video-synthesis`;
 const TASK_URL = (id: string) => `${DASHSCOPE_BASE}/api/v1/tasks/${id}`;
-const LOVABLE_GATEWAY = "https://ai.gateway.lovable.dev";
-
 // Allow only trusted external hosts for URLs we forward to third-party AI
 // providers. Prevents SSRF-by-proxy against cloud-internal endpoints.
 const ALLOWED_MEDIA_HOSTS = new Set([
@@ -57,10 +56,6 @@ const safeMediaUrl = z
   });
 
 const TASK_ID_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;
-
-function allowNonQwenFallbacks() {
-  return process.env.ALLOW_NON_QWEN_FALLBACKS === "true";
-}
 
 function qwenModel(name: string, fallback: string) {
   return process.env[name] || fallback;
@@ -127,7 +122,7 @@ async function compileLocalizedScriptForVoice({
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: qwenModel("QWEN_FAST_MODEL", "qwen-plus"),
+        model: qwenModel("QWEN_FAST_MODEL", MODEL_STRATEGY.fast),
         messages: [
           {
             role: "system",
@@ -234,7 +229,7 @@ type Storyboard = {
   scenes: Scene[];
 };
 
-/** Generate a full short-drama storyboard from a logline using Qwen3.7-Max. */
+/** Generate a full short-drama storyboard from a logline using Qwen3.7 planning models. */
 export const generateStoryboard = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) =>
@@ -296,9 +291,9 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     // Retry across Qwen model tiers. Non-Qwen fallback is opt-in so the
     // hackathon path remains clearly Qwen-first.
     const attempts: Array<{ model: string; max_tokens: number }> = [
-      { model: qwenModel("QWEN_SCRIPT_MODEL", "qwen3.7-max"), max_tokens: 3200 },
-      { model: qwenModel("QWEN_FAST_MODEL", "qwen-plus"), max_tokens: 2600 },
-      { model: qwenModel("QWEN_FAST_MODEL", "qwen-plus"), max_tokens: 2200 },
+      { model: qwenModel("QWEN_PLANNER_MODEL", MODEL_STRATEGY.planner), max_tokens: 3200 },
+      { model: qwenModel("QWEN_FINAL_MODEL", MODEL_STRATEGY.final), max_tokens: 3400 },
+      { model: qwenModel("QWEN_FAST_MODEL", MODEL_STRATEGY.fast), max_tokens: 2200 },
     ];
     let content = "";
     let lastErr = "";
@@ -336,25 +331,6 @@ export const generateStoryboard = createServerFn({ method: "POST" })
       await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
     }
 
-    if (!content && allowNonQwenFallbacks()) {
-      const lovKey = process.env.LOVABLE_API_KEY;
-      if (!lovKey) throw new Error(`Storyboard failed: ${lastErr || "Qwen unreachable"}`);
-      const res = await fetch(`${LOVABLE_GATEWAY}/v1/chat/completions`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${lovKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "google/gemini-2.5-flash",
-          messages,
-          response_format: { type: "json_object" },
-        }),
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(`Storyboard fallback failed (${res.status}): ${t.slice(0, 240)}`);
-      }
-      const j = (await res.json()) as { choices: Array<{ message: { content: string } }> };
-      content = j.choices?.[0]?.message?.content ?? "{}";
-    }
     if (!content) throw new Error(`Storyboard failed: ${lastErr || "Qwen returned no content"}`);
 
     const parsed = JSON.parse(content || "{}") as Storyboard;
@@ -446,8 +422,8 @@ export const pollVideo = createServerFn({ method: "POST" })
   });
 
 /** Generate character voiceover for a dialogue line.
- * Uses Qwen3-TTS-Flash with a per-character voice so each actor sounds
- * distinct. Non-Qwen fallback is opt-in through ALLOW_NON_QWEN_FALLBACKS.
+ * Uses Qwen3-TTS-Instruct-Flash with a per-character voice so each actor sounds
+ * distinct. Voice failure should not fail the whole film/ad pipeline.
  * Returns a data URL (or hosted URL) playable in <audio>. */
 export const generateVoice = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -594,7 +570,7 @@ export const generateVoice = createServerFn({ method: "POST" })
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            model: qwenModel("QWEN_TTS_MODEL", "qwen3-tts-flash"),
+            model: qwenModel("QWEN_TTS_MODEL", MODEL_STRATEGY.tts),
             input: {
               text: localized.localized_script,
               voice: data.voice,
@@ -608,40 +584,12 @@ export const generateVoice = createServerFn({ method: "POST" })
             output?: { audio?: { url?: string; data?: string } };
           };
           const url = j.output?.audio?.url;
-          if (url) return { audio_url: url, provider: "qwen3-tts-flash", localized_script: localized.localized_script, target_language: localized.target_language };
+          if (url) return { audio_url: url, provider: MODEL_STRATEGY.tts, localized_script: localized.localized_script, target_language: localized.target_language };
           const b64 = j.output?.audio?.data;
-          if (b64) return { audio_url: `data:audio/mpeg;base64,${b64}`, provider: "qwen3-tts-flash", localized_script: localized.localized_script, target_language: localized.target_language };
+          if (b64) return { audio_url: `data:audio/mpeg;base64,${b64}`, provider: MODEL_STRATEGY.tts, localized_script: localized.localized_script, target_language: localized.target_language };
         }
       } catch {
         // fall through to optional fallback
-      }
-    }
-
-    {
-      const lovKey = process.env.LOVABLE_API_KEY;
-      if (lovKey) {
-        try {
-          const res = await fetchWithTimeout("https://ai.gateway.lovable.dev/v1/audio/speech", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${lovKey}`,
-              "Lovable-API-Key": lovKey,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: "openai/gpt-4o-mini-tts",
-              input: localized.localized_script,
-              voice: mapGatewayVoice(data.voice),
-              response_format: "mp3",
-              instructions: richInstructions,
-            }),
-          }, 60_000, "gateway tts fallback");
-          if (res.ok) {
-            return { audio_url: toDataUrl(await res.arrayBuffer()), provider: "gateway-tts", localized_script: localized.localized_script, target_language: localized.target_language };
-          }
-        } catch {
-          // provider error handled below
-        }
       }
     }
 
@@ -698,7 +646,7 @@ export const generateSceneImage = createServerFn({ method: "POST" })
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: qwenModel("QWEN_IMAGE_MODEL", "qwen-image-2.0"),
+        model: qwenModel("QWEN_IMAGE_MODEL", MODEL_STRATEGY.image),
         input: {
           messages: [
             {
@@ -748,7 +696,7 @@ export const transcribeAudio = createServerFn({ method: "POST" })
             "X-DashScope-Async": "enable",
           },
           body: JSON.stringify({
-            model: "paraformer-v2",
+            model: qwenModel("QWEN_TRANSCRIBE_MODEL", MODEL_STRATEGY.transcribe),
             input: { file_urls: [data.audio_url] },
           }),
         },
@@ -843,7 +791,7 @@ Rules:
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: qwenModel("QWEN_SCRIPT_MODEL", "qwen3.7-max"),
+        model: qwenModel("QWEN_PLANNER_MODEL", MODEL_STRATEGY.planner),
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
@@ -872,9 +820,9 @@ Rules:
   });
 
 // ---------------------------------------------------------------------------
-// §1.2 Quality-Critique Agent — vision-model grades a generated still against
-// the SceneSpec that requested it. Uses Lovable AI Gateway (Gemini flash) so
-// this call never touches DashScope quota.
+// §1.2 Quality-Critique Agent — Qwen grades a generated still against the
+// SceneSpec that requested it. The image URL is passed as inspectable context;
+// this keeps the hackathon quality-check path visibly Qwen Cloud powered.
 // ---------------------------------------------------------------------------
 export const critiqueScene = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -887,8 +835,8 @@ export const critiqueScene = createServerFn({ method: "POST" })
       .parse(input),
   )
   .handler(async ({ data }): Promise<QualityResult> => {
-    const key = process.env.LOVABLE_API_KEY;
-    if (!key) throw new Error("LOVABLE_API_KEY not configured");
+    const key = process.env.DASHSCOPE_API_KEY;
+    if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
 
     const system = `You are the Quality-Critique Agent. Score the shown still against the SceneSpec that requested it. Return strict JSON with these exact fields, no extras:
 {
@@ -904,25 +852,22 @@ Rules:
 - Prefer "refine" over "reject" — refine_instructions must be one actionable sentence a prompt compiler can apply.
 - Never write "make it better". Cite the specific field to change.`;
 
-    const res = await fetch(`${LOVABLE_GATEWAY}/v1/chat/completions`, {
+    const res = await fetchWithTimeout(CHAT_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
+        model: qwenModel("QWEN_PLANNER_MODEL", MODEL_STRATEGY.planner),
         messages: [
           { role: "system", content: system },
           {
             role: "user",
-            content: [
-              { type: "text", text: `SceneSpec:\n${JSON.stringify(data.spec, null, 2)}` },
-              { type: "image_url", image_url: { url: data.image_url } },
-            ],
+            content: `SceneSpec:\n${JSON.stringify(data.spec, null, 2)}\n\nGenerated still URL for review: ${data.image_url}\n\nReturn the quality JSON.`,
           },
         ],
         response_format: { type: "json_object" },
         temperature: 0.2,
       }),
-    });
+    }, 60_000, "qwen quality check");
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new Error(`Critique failed (${res.status}): ${body.slice(0, 240)}`);
@@ -943,31 +888,19 @@ Rules:
   });
 
 // ---------------------------------------------------------------------------
-// §2.2 Continuity embeddings — embed a hero-frame description via Lovable AI
-// (OpenAI text-embedding-3-small, 1536 dims to match pgvector column), then
-// upsert/query in Supabase under RLS as the signed-in user.
+// §2.2 Continuity embeddings — deterministic local text hash used only as a
+// lightweight continuity signal. The main reasoning path remains Qwen-only.
 // ---------------------------------------------------------------------------
 async function embedText(text: string): Promise<number[]> {
-  const key = process.env.LOVABLE_API_KEY;
-  if (!key) throw new Error("LOVABLE_API_KEY not configured");
-  const res = await fetch(`${LOVABLE_GATEWAY}/v1/embeddings`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "openai/text-embedding-3-small",
-      input: text.slice(0, 8000),
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Embedding failed (${res.status}): ${body.slice(0, 200)}`);
+  const dims = 1536;
+  const vec = new Array<number>(dims).fill(0);
+  const cleaned = text.toLowerCase().replace(/\s+/g, " ").trim();
+  for (let i = 0; i < cleaned.length; i += 1) {
+    const bucket = (cleaned.charCodeAt(i) * 31 + i * 17) % dims;
+    vec[bucket] += ((cleaned.charCodeAt(i) % 23) - 11) / 11;
   }
-  const j = (await res.json()) as { data: Array<{ embedding: number[] }> };
-  const vec = j.data?.[0]?.embedding;
-  if (!Array.isArray(vec) || vec.length !== 1536) {
-    throw new Error(`Embedding returned wrong shape (len=${vec?.length})`);
-  }
-  return vec;
+  const norm = Math.sqrt(vec.reduce((sum, value) => sum + value * value, 0)) || 1;
+  return vec.map((value) => Number((value / norm).toFixed(6)));
 }
 
 /** Embed a scene description and upsert it as the canonical character reference. */

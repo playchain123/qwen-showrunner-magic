@@ -109,7 +109,7 @@ export const handleScript: Handler = async (request, context) => {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: qwenModel("QWEN_SCRIPT_MODEL", "qwen3.7-max"),
+        model: qwenModel("QWEN_PLANNER_MODEL", "qwen3.7-plus"),
         messages: [
           {
             role: "system",
@@ -130,7 +130,7 @@ export const handleScript: Handler = async (request, context) => {
   }
   const payload = await res.json();
   const content = (payload as { choices?: Array<{ message?: { content?: string } }> }).choices?.[0]?.message?.content || "{}";
-  return ok(context, "script_generation", "qwen-text", { screenplay: JSON.parse(content) });
+  return ok(context, "script_generation", qwenModel("QWEN_PLANNER_MODEL", "qwen3.7-plus"), { screenplay: JSON.parse(content) });
 };
 
 export const handleStoryboard: Handler = async (request, context) => {
@@ -143,7 +143,7 @@ export const handleStoryboard: Handler = async (request, context) => {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: qwenModel("QWEN_FAST_MODEL", "qwen-plus"),
+        model: qwenModel("QWEN_PLANNER_MODEL", "qwen3.7-plus"),
         messages: [
           {
             role: "system",
@@ -164,7 +164,7 @@ export const handleStoryboard: Handler = async (request, context) => {
   }
   const payload = await res.json();
   const content = (payload as { choices?: Array<{ message?: { content?: string } }> }).choices?.[0]?.message?.content || "{}";
-  return ok(context, "storyboard_generation", "qwen-text", { storyboard: JSON.parse(content) });
+  return ok(context, "storyboard_generation", qwenModel("QWEN_PLANNER_MODEL", "qwen3.7-plus"), { storyboard: JSON.parse(content) });
 };
 
 export const handleImage: Handler = async (request, context) => {
@@ -199,7 +199,7 @@ export const handleImage: Handler = async (request, context) => {
   };
   const image_url = json.output?.choices?.[0]?.message?.content?.find((item) => item.image)?.image;
   if (!image_url) return fail(context, 502, "image_generation", "qwen-image", "No image returned", true);
-  return ok(context, "image_generation", "qwen-image", { image_url });
+  return ok(context, "image_generation", qwenModel("QWEN_IMAGE_MODEL", "qwen-image-2.0"), { image_url });
 };
 
 export const handleVideoSubmit: Handler = async (request, context) => {
@@ -318,7 +318,7 @@ export const handleVoice: Handler = async (request, context) => {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: qwenModel("QWEN_TTS_MODEL", "qwen3-tts-flash"),
+        model: qwenModel("QWEN_TTS_MODEL", "qwen3-tts-instruct-flash"),
         input: { text: data.text, voice: data.voice, language_type: data.language },
         parameters: { stream: false },
       }),
@@ -332,7 +332,7 @@ export const handleVoice: Handler = async (request, context) => {
   const json = (await res.json()) as { output?: { audio?: { url?: string; data?: string } } };
   const audio_url = json.output?.audio?.url || (json.output?.audio?.data ? `data:audio/mpeg;base64,${json.output.audio.data}` : undefined);
   if (!audio_url) return fail(context, 502, "voice_generation", "qwen-tts", "No audio returned", true);
-  return ok(context, "voice_generation", "qwen-tts", { audio_url, provider: "qwen3-tts-flash" });
+  return ok(context, "voice_generation", qwenModel("QWEN_TTS_MODEL", "qwen3-tts-instruct-flash"), { audio_url, provider: qwenModel("QWEN_TTS_MODEL", "qwen3-tts-instruct-flash") });
 };
 
 export const handleRender: Handler = async (request, context) => {

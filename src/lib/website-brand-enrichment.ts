@@ -3,9 +3,9 @@ import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import type { WebsiteBrandKit, WebsiteVideoPlan } from "./website-video";
 import { isBoilerplateSentence, isWeakProductCopy } from "./website-site-resilience";
+import { MODEL_STRATEGY } from "./model-strategy";
 
 const CHAT_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions";
-const LOVABLE_GATEWAY = "https://ai.gateway.lovable.dev";
 
 export function needsBrandEnrichment(kit: WebsiteBrandKit) {
   return (
@@ -26,7 +26,7 @@ async function chatJson(prompt: string, system: string): Promise<Record<string, 
         method: "POST",
         headers: { Authorization: `Bearer ${dashKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: process.env.QWEN_FAST_MODEL || "qwen-plus",
+          model: process.env.QWEN_FAST_MODEL || MODEL_STRATEGY.fast,
           messages: [
             { role: "system", content: system },
             { role: "user", content: prompt },
@@ -46,29 +46,7 @@ async function chatJson(prompt: string, system: string): Promise<Record<string, 
     }
   }
 
-  const lovKey = process.env.LOVABLE_API_KEY;
-  if (!lovKey) return null;
-  try {
-    const res = await fetch(`${LOVABLE_GATEWAY}/v1/chat/completions`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${lovKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: prompt },
-        ],
-        response_format: { type: "json_object" },
-      }),
-    });
-    if (!res.ok) return null;
-    const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    const content = json.choices?.[0]?.message?.content;
-    if (!content) return null;
-    return JSON.parse(content) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 export async function enrichWebsiteBrandKit(kit: WebsiteBrandKit): Promise<WebsiteBrandKit> {

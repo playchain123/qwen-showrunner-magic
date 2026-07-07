@@ -12,7 +12,12 @@ const CHAT_URL = `${DASHSCOPE_BASE}/compatible-mode/v1/chat/completions`;
 const IMAGE_URL = `${DASHSCOPE_BASE}/api/v1/services/aigc/multimodal-generation/generation`;
 const VIDEO_SUBMIT_URL = `${DASHSCOPE_BASE}/api/v1/services/aigc/video-generation/video-synthesis`;
 const TASK_URL = (id: string) => `${DASHSCOPE_BASE}/api/v1/tasks/${id}`;
-const LOVABLE_GATEWAY = "https://ai.gateway.lovable.dev";
+const QWEN_PLANNER_MODEL = process.env.QWEN_PLANNER_MODEL || "qwen3.7-plus";
+const QWEN_IMAGE_MODEL = process.env.QWEN_IMAGE_MODEL || "qwen-image-2.0";
+const QWEN_VIDEO_PRIMARY_MODEL = process.env.QWEN_VIDEO_PRIMARY_MODEL || "happyhorse-1.1-i2v";
+const QWEN_VIDEO_T2V_MODEL = process.env.QWEN_VIDEO_T2V_MODEL || "happyhorse-1.1-t2v";
+const QWEN_VIDEO_FALLBACK_MODEL = process.env.QWEN_VIDEO_FALLBACK_MODEL || "wan2.2-t2v-plus";
+const QWEN_VIDEO_I2V_FALLBACK_MODEL = process.env.QWEN_VIDEO_I2V_FALLBACK_MODEL || "wan2.2-i2v-plus";
 
 const QWEN_VOICES = ["Cherry", "Ethan", "Serena", "Chelsie", "Dylan", "Jada", "Sunny"];
 
@@ -22,12 +27,8 @@ function dashKey() {
   return key;
 }
 
-function lovKey() {
-  return process.env.LOVABLE_API_KEY || "";
-}
-
 async function llmJson<T>(system: string, user: string, maxTokens = 3000): Promise<T> {
-  // Try Qwen first, fall back to Lovable AI gateway (Gemini) for JSON planning.
+  // Qwen is the sole planning/reasoning layer for the hackathon path.
   const key = process.env.DASHSCOPE_API_KEY;
   if (key) {
     try {
@@ -35,7 +36,7 @@ async function llmJson<T>(system: string, user: string, maxTokens = 3000): Promi
         method: "POST",
         headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: process.env.QWEN_SCRIPT_MODEL || "qwen-plus",
+          model: QWEN_PLANNER_MODEL,
           messages: [
             { role: "system", content: system },
             { role: "user", content: user },
@@ -51,28 +52,10 @@ async function llmJson<T>(system: string, user: string, maxTokens = 3000): Promi
         if (content) return JSON.parse(content) as T;
       }
     } catch (err) {
-      console.warn("[bible] qwen llm failed, trying gateway", err);
+      console.warn("[bible] qwen llm failed", err);
     }
   }
-  const lk = lovKey();
-  if (!lk) throw new Error("No LLM available (DASHSCOPE_API_KEY and LOVABLE_API_KEY both missing)");
-  const res = await fetch(`${LOVABLE_GATEWAY}/v1/chat/completions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${lk}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "google/gemini-3-flash-preview",
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      response_format: { type: "json_object" },
-    }),
-  });
-  if (!res.ok) throw new Error(`LLM gateway failed ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const j = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  const content = j.choices?.[0]?.message?.content;
-  if (!content) throw new Error("LLM returned no content");
-  return JSON.parse(content) as T;
+  throw new Error("Qwen planning unavailable (DASHSCOPE_API_KEY missing or Qwen call failed)");
 }
 
 function randomSeed() {
@@ -244,7 +227,7 @@ async function generateStill(prompt: string, negativePrompt: string): Promise<st
     method: "POST",
     headers: { Authorization: `Bearer ${dashKey()}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: process.env.QWEN_IMAGE_MODEL || "qwen-image-2.0",
+      model: QWEN_IMAGE_MODEL,
       input: { messages: [{ role: "user", content: [{ text: prompt }] }] },
       parameters: {
         negative_prompt: negativePrompt,
@@ -434,8 +417,8 @@ export async function renderOneShot(sb: SB, _userId: string, bibleId: string, sh
   await sb.from("bible_shots").update({ status: "rendering", attempt_count: shot.attempt_count + 1, updated_at: new Date().toISOString() }).eq("id", shotId);
 
   const motionPrompt = `${shot.visual_prompt} ${suffix}. Single continuous ${Math.round(Number(shot.duration_seconds))}-second cinematic shot.`;
-  const primaryModel = refImg ? "happyhorse-1.1-i2v" : "happyhorse-1.1-t2v";
-  const fallbackModel = refImg ? "wan2.2-i2v-plus" : "wan2.2-t2v-plus";
+  const primaryModel = refImg ? QWEN_VIDEO_PRIMARY_MODEL : QWEN_VIDEO_T2V_MODEL;
+  const fallbackModel = refImg ? QWEN_VIDEO_I2V_FALLBACK_MODEL : QWEN_VIDEO_FALLBACK_MODEL;
 
   let clipUrl: string;
   try {

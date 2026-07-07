@@ -26,14 +26,23 @@ resources:
         NODE_ENV: production
         DEMO_MODE: "true"
         MAX_SCENES: "3"
+        DEFAULT_SCENE_DURATION: "4"
         MAX_PARALLEL_VIDEO_JOBS: "3"
-        MAX_VIDEO_SECONDS_PER_PROJECT: "15"
+        MAX_TOTAL_VIDEO_SECONDS: "16"
+        MAX_VIDEO_SECONDS_PER_PROJECT: "16"
+        MAX_REGENS_PER_SCENE: "1"
         QWEN_REGION: ap-southeast-1
-        QWEN_SCRIPT_MODEL: qwen3.7-max
-        QWEN_FAST_MODEL: qwen-plus
+        QWEN_PLANNER_MODEL: qwen3.7-plus
+        QWEN_FINAL_MODEL: qwen3.7-max
+        QWEN_FAST_MODEL: qwen3.6-flash
         QWEN_IMAGE_MODEL: qwen-image-2.0
-        QWEN_VIDEO_MODEL: wan2.2-t2v-plus
-        QWEN_TTS_MODEL: qwen3-tts-flash
+        QWEN_IMAGE_PRO_MODEL: qwen-image-2.0-pro
+        QWEN_VIDEO_PRIMARY_MODEL: happyhorse-1.1-i2v
+        QWEN_VIDEO_T2V_MODEL: happyhorse-1.1-t2v
+        QWEN_VIDEO_FALLBACK_MODEL: wan2.2-t2v-plus
+        QWEN_VIDEO_I2V_FALLBACK_MODEL: wan2.2-i2v-plus
+        QWEN_TTS_MODEL: qwen3-tts-instruct-flash
+        QWEN_TRANSCRIBE_MODEL: paraformer-v2
         SARVAM_API_KEY: ""
         SARVAM_TTS_MODEL: bulbul:v3
         SARVAM_TTS_SPEAKER: meera

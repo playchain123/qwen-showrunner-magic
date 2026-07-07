@@ -6,6 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateSceneImage } from "@/lib/qwen.functions";
 import { pickBgm } from "@/lib/free-sounds";
 import { saveLibraryProject } from "@/lib/library";
+import { MODEL_STRATEGY, buildHackathonAgentTrace, HACKATHON_ARCHITECTURE_SUMMARY } from "@/lib/model-strategy";
 import {
   buildAdVisualBible,
   buildOptimizedScenePrompt,
@@ -261,6 +262,10 @@ function CinematicAds() {
             bgm: shot.bgm,
             durationSeconds: shot.durationSeconds,
             colorGrade: shot.colorGrade,
+            agentTrace: buildHackathonAgentTrace({
+              "Video Producer": shot.videoUrl ? MODEL_STRATEGY.videoPrimary : MODEL_STRATEGY.videoT2v,
+              "Voice Agent": shot.ttsProvider || MODEL_STRATEGY.tts,
+            }),
           })),
           timeline: finalShots.map((shot, index) => ({
             title: `Ad shot ${index + 1}`,
@@ -279,6 +284,12 @@ function CinematicAds() {
           })),
           metadata: {
             source: "ads",
+            architecture: HACKATHON_ARCHITECTURE_SUMMARY,
+            modelStrategy: MODEL_STRATEGY,
+            agentTrace: buildHackathonAgentTrace({
+              "Script Writer Agent": MODEL_STRATEGY.planner,
+              "Video Producer": MODEL_STRATEGY.videoPrimary,
+            }),
             tone,
             toneDescription: toneObj.desc,
             visualBible,
@@ -432,11 +443,11 @@ function buildAdVideoAttempts(storyboardStillUrl?: string): VideoAttempt[] {
   const attempts: VideoAttempt[] = [];
   if (storyboardStillUrl) {
     attempts.push(
-      { model: "happyhorse-1.1-i2v", imageUrl: storyboardStillUrl },
-      { model: "wan2.2-i2v-plus", imageUrl: storyboardStillUrl },
+      { model: MODEL_STRATEGY.videoPrimary as VideoModel, imageUrl: storyboardStillUrl },
+      { model: MODEL_STRATEGY.videoI2vFallback as VideoModel, imageUrl: storyboardStillUrl },
     );
   }
-  attempts.push({ model: "happyhorse-1.1-t2v" }, { model: "wan2.2-t2v-plus" });
+  attempts.push({ model: MODEL_STRATEGY.videoT2v as VideoModel }, { model: MODEL_STRATEGY.videoFallback as VideoModel });
   return attempts;
 }
 

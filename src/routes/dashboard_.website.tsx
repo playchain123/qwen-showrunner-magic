@@ -37,6 +37,7 @@ import {
   writeWebsiteSpeakerMemory,
   type WebsiteVoiceLanguage,
 } from "@/lib/website-voice-languages";
+import { MODEL_STRATEGY, buildHackathonAgentTrace, HACKATHON_ARCHITECTURE_SUMMARY } from "@/lib/model-strategy";
 
 export const Route = createFileRoute("/dashboard_/website")({
   ssr: false,
@@ -415,6 +416,12 @@ function WebsiteVideoPage() {
       durationSeconds: beat.duration_seconds,
       colorGrade: `${kit.brand.primary_color_hex}, ${kit.brand.secondary_color_hex}, ${kit.brand.accent_color_hex}`,
       editingNotes: beat.assetSource === "fallback" ? `Fallback: ${beat.renderAsset?.asset_error || "visual unavailable"}` : `Transition: ${beat.transition_out}`,
+      agentTrace: buildHackathonAgentTrace({
+        "Script Writer Agent": MODEL_STRATEGY.planner,
+        "Image Producer": MODEL_STRATEGY.image,
+        "Video Producer": beat.clipUrl ? MODEL_STRATEGY.videoPrimary : "MotionGraphicRenderer",
+        "Voice Agent": beat.ttsProvider || MODEL_STRATEGY.tts,
+      }),
     });
     try {
       saveLibraryProject(
@@ -433,6 +440,12 @@ function WebsiteVideoPage() {
           scenes: renderedBeats.map(scene),
           metadata: {
             source: "website",
+            architecture: HACKATHON_ARCHITECTURE_SUMMARY,
+            modelStrategy: MODEL_STRATEGY,
+            agentTrace: buildHackathonAgentTrace({
+              "Script Writer Agent": MODEL_STRATEGY.planner,
+              "Video Producer": MODEL_STRATEGY.videoPrimary,
+            }),
             confidenceFlags: kit.confidence_flags,
             beatCount: renderedBeats.length,
           },

@@ -8,6 +8,7 @@ import {
 } from "@/lib/website-site-resilience";
 import { captureBeatRemote } from "@/lib/website-screen-capture";
 import { getVideoPollDelayMs, runWithConcurrency } from "@/lib/makers-runtime";
+import { MODEL_STRATEGY } from "@/lib/model-strategy";
 
 const WEBSITE_VIDEO_SIZE = "1920*1080";
 const MAX_POLL_ATTEMPTS = 72;
@@ -99,11 +100,11 @@ function videoAttempts(stillUrl?: string): Array<{ model: VideoModel; imageUrl?:
   const attempts: Array<{ model: VideoModel; imageUrl?: string }> = [];
   const safeStill = stillUrl && isSafeExternalUrl(stillUrl) ? stillUrl : undefined;
   if (safeStill) {
-    attempts.push({ model: "happyhorse-1.1-i2v", imageUrl: safeStill });
-    attempts.push({ model: "wan2.2-i2v-plus", imageUrl: safeStill });
+    attempts.push({ model: MODEL_STRATEGY.videoPrimary as VideoModel, imageUrl: safeStill });
+    attempts.push({ model: MODEL_STRATEGY.videoI2vFallback as VideoModel, imageUrl: safeStill });
   }
-  attempts.push({ model: "happyhorse-1.1-t2v" });
-  attempts.push({ model: "wan2.2-t2v-plus" });
+  attempts.push({ model: MODEL_STRATEGY.videoT2v as VideoModel });
+  attempts.push({ model: MODEL_STRATEGY.videoFallback as VideoModel });
   return attempts;
 }
 
