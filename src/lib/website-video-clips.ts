@@ -1,12 +1,14 @@
 import { generateSceneImage, isSafeExternalUrl, pollVideo, submitVideo } from "@/lib/qwen.functions";
 import type { CompiledMotionSpec, WebsiteBeatRenderAsset } from "@/lib/website-render-pipeline";
-import { buildFallbackMotionCard, compileMotionGraphic } from "@/lib/website-render-pipeline";
+import { buildFallbackMotionCard, buildScreenshotMotionSpec, compileMotionGraphic } from "@/lib/website-render-pipeline";
 import type { WebsiteBrandKit, WebsiteVideoBeat } from "@/lib/website-video";
 import {
   compileBlockedFallbackMotion,
-  isLiveFetchBlocked,
+  isSiteCaptureBlocked,
 } from "@/lib/website-site-resilience";
 import { captureBeatRemote } from "@/lib/website-screen-capture";
+import { isCaptureApiConfigured } from "@/lib/website-browser-api";
+import { getScreenshotImageUrl } from "@/lib/website-screenshot-fallback";
 import { getVideoPollDelayMs, runWithConcurrency } from "@/lib/makers-runtime";
 
 const WEBSITE_VIDEO_SIZE = "1920*1080";
@@ -161,55 +163,61 @@ export async function generateWebsiteBeatClip({
     });
   }
 
-  if (isLiveFetchBlocked(brandKit) && beat.production_method === "screen_capture") {
-    const fallbackSpec = compileBlockedFallbackMotion(brandKit, beat, "site blocked");
-    onProgress?.(100);
-    return {
-      beat_id: beat.beat_id,
-      motion_spec: fallbackSpec,
-      asset_status: "ready",
-      asset_source: "fallback",
-      asset_error: "site_blocked",
-      motion_only: true,
-    };
-  }
-
   if (beat.production_method === "screen_capture") {
     onProgress?.(12);
     const choreography = renderAsset.captureChoreography;
-    if (!choreography) {
-      const fallbackSpec =
-        renderAsset.motionGraphicSpec ||
-        buildFallbackMotionCard(brandKit, beat, "No capture choreography compiled");
+    const pageUrl = choreography?.url || beat.screen_capture_spec?.source_page || brandKit.source_url;
+    const blocked = isSiteCaptureBlocked(brandKit);
+    let captureFailReason: string | null = null;
+
+    // Rung 1 — real screen recording through the Playwright FC worker.
+    if (choreography && !blocked && isCaptureApiConfigured()) {
+      const capture = await captureBeatRemote({
+        spec: choreography,
+        userId: userId || "anonymous",
+        projectId: projectId || `website-${Date.now()}`,
+        authToken,
+      });
+      if (capture.ok) {
+        onProgress?.(100);
+        return {
+          beat_id: beat.beat_id,
+          clip_url: capture.clip_url,
+          poster_url: brandKit.hero_screenshot_url || undefined,
+          asset_status: "ready",
+          asset_source: "captured",
+        };
+      }
+      captureFailReason = capture.blocked ? "site_blocked" : capture.reason;
+    }
+
+    // Rung 2 — keyless screenshot of the real page with Ken Burns motion.
+    onProgress?.(40);
+    const viewport = choreography?.viewport || { width: 1440, height: 900 };
+    const screenshotUrl = await getScreenshotImageUrl({
+      url: pageUrl,
+      width: viewport.width,
+      height: viewport.height,
+      userId: userId || "anonymous",
+      projectId: projectId || `website-${Date.now()}`,
+      beatId: beat.beat_id,
+    });
+    if (screenshotUrl) {
+      onProgress?.(100);
       return {
         beat_id: beat.beat_id,
-        motion_spec: fallbackSpec,
+        motion_spec: buildScreenshotMotionSpec(brandKit, beat, screenshotUrl, pageUrl),
+        poster_url: screenshotUrl,
         asset_status: "ready",
-        asset_source: "fallback",
-        asset_error: "missing_choreography",
+        asset_source: "screenshot",
         motion_only: true,
       };
     }
 
-    const capture = await captureBeatRemote({
-      spec: choreography,
-      userId: userId || "anonymous",
-      projectId: projectId || `website-${Date.now()}`,
-      authToken,
-    });
-
-    if (capture.ok) {
-      onProgress?.(100);
-      return {
-        beat_id: beat.beat_id,
-        clip_url: capture.clip_url,
-        poster_url: brandKit.hero_screenshot_url || brandKit.brand.logo_asset_path || undefined,
-        asset_status: "ready",
-        asset_source: "captured",
-      };
-    }
-
-    const reason = capture.blocked ? "site blocked" : capture.reason;
+    // Rung 3 — branded motion card.
+    const reason =
+      captureFailReason ||
+      (blocked ? "site_blocked" : !isCaptureApiConfigured() ? "capture_api_unavailable" : "screenshot_unavailable");
     const fallbackSpec = compileBlockedFallbackMotion(brandKit, beat, reason);
     onProgress?.(100);
     return {

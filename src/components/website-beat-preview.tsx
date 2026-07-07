@@ -16,7 +16,7 @@ export type WebsiteBeatPreviewProps = {
   progress?: number;
   colors?: WebsiteBeatPreviewColors;
   assetStatus?: "pending" | "generating" | "ready" | "failed";
-  assetSource?: "captured" | "generated" | "compiled" | "fallback";
+  assetSource?: "captured" | "screenshot" | "generated" | "compiled" | "fallback";
   clipUrl?: string;
   motionSpec?: CompiledMotionSpec;
   audioUrl?: string;

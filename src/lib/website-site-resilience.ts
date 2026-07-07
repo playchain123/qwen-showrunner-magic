@@ -1,6 +1,5 @@
 import type { WebsiteBrandKit, WebsiteVideoBeat, WebsiteVideoPlan } from "./website-video";
 import { buildFallbackMotionCard } from "./website-render-pipeline";
-import { isCaptureApiConfigured } from "./website-browser-api";
 
 export function isBoilerplateSentence(text: string) {
   const lower = text.toLowerCase();
@@ -69,6 +68,22 @@ export function isLiveFetchBlocked(brandKit: WebsiteBrandKit): boolean {
   );
 }
 
+/**
+ * Stricter check for capture routing: only hard blocks (403/429/fetch failed)
+ * should skip the recording worker. Low-quality copy extraction is not a
+ * reason to avoid capturing the site.
+ */
+export function isSiteCaptureBlocked(brandKit: WebsiteBrandKit): boolean {
+  return brandKit.confidence_flags.some(
+    (flag) =>
+      flag === "live_fetch_failed" ||
+      flag === "site_blocked" ||
+      flag.startsWith("blocked_http_") ||
+      flag.includes("HTTP 403") ||
+      flag.includes("HTTP 429"),
+  );
+}
+
 /** Flag kits where extracted copy is mostly legal boilerplate or disclaimers. */
 export function auditBrandKitQuality(brandKit: WebsiteBrandKit) {
   const features = brandKit.product.key_features.map((f) => f.benefit).filter(Boolean);
@@ -97,29 +112,14 @@ export function auditBrandKitQuality(brandKit: WebsiteBrandKit) {
   return brandKit;
 }
 
-/** When capture worker is not deployed, reroute screen_capture beats to motion_graphic. */
+/**
+ * Screen-capture beats are kept even without the FC recording worker: the clip
+ * generator falls back to real website screenshots (keyless providers) with
+ * Ken Burns motion, and only degrades to branded motion cards if screenshots
+ * also fail. Plan-level downgrading is no longer needed.
+ */
 export function repurposePlanForCaptureUnavailable(plan: WebsiteVideoPlan): WebsiteVideoPlan {
-  if (isCaptureApiConfigured()) return plan;
-  const beats = plan.beats.map((beat) => {
-    if (beat.production_method !== "screen_capture") return beat;
-    return {
-      ...beat,
-      production_method: "motion_graphic" as const,
-      screen_capture_spec: null,
-      motion_graphic_spec: beat.motion_graphic_spec || {
-        layout: "split headline plus feature-callout stack using brand colors only",
-        elements: [
-          { type: "headline", content: beat.beat_purpose, animation: "fade_rise" },
-          { type: "supporting_copy", content: beat.vo_line, animation: "mask_wipe" },
-        ],
-        easing_family: "ease-out-expo",
-        colors_used: [],
-        typefaces_used: [],
-      },
-      ai_broll_spec: null,
-    };
-  });
-  return { ...plan, beats };
+  return plan;
 }
 
 export function classifyFetchFailure(status: number): "blocked" | "http_error" | "ok" {
@@ -175,49 +175,22 @@ export function mergeMetaIntoBrandKit(brandKit: WebsiteBrandKit, meta: NonNullab
       brandKit.product.one_line_description = desc;
     }
   }
-  if (meta.ogImage) {
-    brandKit.brand.logo_asset_path = meta.ogImage;
+  if (meta.ogImage && !brandKit.hero_screenshot_url) {
+    // og:image is a social banner — use it as a hero background, never a logo.
+    brandKit.hero_screenshot_url = meta.ogImage;
   }
   brandKit.confidence_flags.push("basic_meta_fallback_applied");
   return brandKit;
 }
 
-/** When live capture is blocked, reroute screen_capture beats to motion_graphic. */
-export function repurposePlanForBlockedSite(brandKit: WebsiteBrandKit, plan: WebsiteVideoPlan): WebsiteVideoPlan {
-  if (!isLiveFetchBlocked(brandKit)) return plan;
-
-  const beats = plan.beats.map((beat) => {
-    if (beat.production_method !== "screen_capture") return beat;
-    const colors = [
-      brandKit.brand.primary_color_hex,
-      brandKit.brand.secondary_color_hex,
-      brandKit.brand.accent_color_hex,
-      brandKit.brand.neutral_color_hex,
-    ];
-    return {
-      ...beat,
-      production_method: "motion_graphic" as const,
-      screen_capture_spec: null,
-      motion_graphic_spec: {
-        layout: "full_frame_headline",
-        elements: [
-          { type: "headline", content: beat.beat_purpose, animation: "fade_rise" },
-          { type: "subhead", content: beat.vo_line, animation: "mask_wipe" },
-          { type: "cta_button", content: brandKit.brand.name, animation: "scale_overshoot" },
-        ],
-        easing_family: "ease-out-expo",
-        colors_used: colors,
-        typefaces_used: [brandKit.brand.heading_typeface, brandKit.brand.body_typeface],
-      },
-      ai_broll_spec: null,
-    };
-  });
-
-  if (!brandKit.confidence_flags.includes("screen_capture_rerouted_to_motion")) {
-    brandKit.confidence_flags.push("screen_capture_rerouted_to_motion");
-  }
-
-  return { ...plan, beats };
+/**
+ * Blocked sites keep their screen_capture beats: the screenshot providers
+ * render pages through their own real browsers and usually succeed where a
+ * plain server fetch got 403/429. The per-beat fallback ladder still degrades
+ * to branded motion cards when every provider fails.
+ */
+export function repurposePlanForBlockedSite(_brandKit: WebsiteBrandKit, plan: WebsiteVideoPlan): WebsiteVideoPlan {
+  return plan;
 }
 
 export function buildBlockedCaptureFallbackNote(beat: WebsiteVideoBeat, reason: string) {

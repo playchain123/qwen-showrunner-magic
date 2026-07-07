@@ -3,45 +3,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Plus, Play, Sparkles, Check, Film, Volume2, VolumeX, Download, ImagePlus, BookOpen, Copy, Pencil } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
-import {
-  generateStoryboard,
-  submitVideo,
-  pollVideo,
-  generateVoice,
-  generateSceneImage,
-  compileSceneSpec,
-  critiqueScene,
-  upsertCharacterEmbedding,
-  scoreSceneAgainstCharacter,
-} from "@/lib/qwen.functions";
-import type { SceneSpec } from "@/lib/scene-spec";
-import { routeSceneToVideoModel } from "@/lib/model-router";
-import { compileNegativePrompt } from "@/lib/negative-prompts";
-import { generateSceneWithQualityGate, type QualityResult } from "@/lib/quality-gate";
-import { gradeClip, concatClips } from "@/lib/ffmpeg-post";
+import type { QualityResult } from "@/lib/quality-gate";
+import { generateSceneImage } from "@/lib/qwen.functions";
 import { pickBgm } from "@/lib/free-sounds";
 import { saveLibraryProject } from "@/lib/library";
 import {
-  buildShortFilmVisualBible,
-  buildOptimizedScenePrompt,
-  compileReferenceImages,
-  findCharacterBible,
   formatCharacterLock,
-  formatOptimizedScenePrompt,
-  formatReferenceRouting,
-  formatSceneContinuity,
-  formatVisualBible,
-  validateAndRepairScenes,
   type VisualBible,
 } from "@/lib/continuity";
-import { CONTINUITY_NEGATIVE_PROMPT } from "@/lib/continuity";
 import {
-  MAKERS_DEMO_LIMITS,
-  clampSceneCount,
-  getVideoPollDelayMs,
-  normalizeSceneDuration,
-  runWithConcurrency,
-} from "@/lib/makers-runtime";
+  runLongformPipeline,
+  type LongformSceneRecord,
+} from "@/lib/longform-graph";
 
 export const Route = createFileRoute("/dashboard_/agent/$id")({
   ssr: false,
@@ -89,10 +62,8 @@ type StoryCard = {
   agentTrace?: QualityResult[];
   routingReason?: string;
   characterSimilarity?: number | null;
+  embeddedAudio?: boolean;
 };
-type VideoModel = "happyhorse-1.1-t2v" | "wan2.2-t2v-plus" | "happyhorse-1.1-i2v" | "wan2.2-i2v-plus";
-type VideoAttempt = { model: VideoModel; imageUrl?: string };
-const videoTaskCache = new Map<string, string>();
 
 function AgentWorkspace() {
   const { id } = Route.useParams();
@@ -215,405 +186,131 @@ function AgentWorkspace() {
     setLogline("");
     setVisualBible(null);
     setFinalFilmUrl(null);
+
+    const learningContext = readLearningContext();
+    let storyTitle = "";
+    let storyTone = "";
+    let storyLogline = "";
+    let bible: VisualBible | null = null;
+
     try {
-      const sceneCount = chooseSceneCount(prompt);
-      const learningContext = readLearningContext();
-      const referenceBrief = refs.map((r) => ({ name: r.name, description: r.description || "user uploaded character/style reference image" }));
-      const compiledReferences = compileReferenceImages(referenceBrief);
-      const referenceRouting = formatReferenceRouting(compiledReferences);
-      // 1. Storyboard via Qwen — prompt-aware scene count with persistent learning context
-      const story = await generateStoryboard({
-        data: {
-          prompt,
-          sceneCount,
-          learningContext: [learningContext, referenceRouting ? `Reference routing map: ${referenceRouting}` : ""].filter(Boolean).join("\n"),
-          referenceImages: referenceBrief,
+      const result = await runLongformPipeline({
+        prompt,
+        projectId: id,
+        referenceImages: refs,
+        referenceWeight: refWeight,
+        learningContext,
+        onProgress: (event) => {
+          if (event.type === "storyboard") {
+            storyTitle = event.title;
+            storyTone = event.tone;
+            storyLogline = event.logline;
+            setFilmTitle(event.title);
+            setLogline(event.logline);
+            setThinking(false);
+            writeLearningContext(prompt, event.title, event.tone, "English");
+          }
+          if (event.type === "scenesInit") {
+            setCards(event.scenes.map(longformSceneToCard));
+          }
+          if (event.type === "bible") {
+            bible = event.bible;
+            setVisualBible(event.bible);
+          }
+          if (event.type === "message") {
+            setMessages((m) => [
+              ...m,
+              {
+                role: "agent",
+                text: event.text,
+                skills: event.skills,
+                task: event.task,
+              },
+            ]);
+          }
+          if (event.type === "tasks") {
+            setTasks(event.tasks);
+          }
+          if (event.type === "scene") {
+            setCards((c) =>
+              c.map((card, i) => (i === event.index ? { ...card, ...longformPatchToCard(event.patch) } : card)),
+            );
+          }
+          if (event.type === "editor") {
+            setFinalFilmUrl(event.finalFilmUrl);
+          }
         },
       });
-      const initialBible = buildShortFilmVisualBible({
-        prompt,
-        title: story.title,
-        tone: story.tone,
-        scenes: story.scenes,
-        references: referenceBrief,
-      });
-      const repairedScenes = validateAndRepairScenes(story.scenes, initialBible, normalizeSceneDuration(undefined));
-      story.scenes = repairedScenes;
-      const bible = buildShortFilmVisualBible({
-        prompt,
-        title: story.title,
-        tone: story.tone,
-        scenes: repairedScenes,
-        references: referenceBrief,
-      });
-      setVisualBible(bible);
-      setThinking(false);
-      setFilmTitle(story.title);
-      setLogline(story.logline);
+
+      const finalScenes = result.scenes ?? [];
+      const masterFilmUrl = result.finalFilmUrl ?? finalScenes.find((s) => s.videoUrl)?.videoUrl;
+      if (masterFilmUrl) setFinalFilmUrl(masterFilmUrl);
+
+      const totalSeconds = result.totalSeconds || finalScenes.reduce((sum, s) => sum + (s.durationSeconds || 0), 0);
       setMessages((m) => [
         ...m,
         {
           role: "agent",
-          text: `🎬 "${story.title}"\n${story.logline}\n\nTone: ${story.tone}\n\nRendering all ${story.scenes.length} cinematic shots together — playback stays locked until every scene video, dialogue, Foley, score, color grade, VFX cue and continuity note is complete.`,
-          skills: ["Script Agent", "Shot-list Agent", "Casting & Voice Agent", "Cinematography Agent", "Premiere Pro Edit Agent", "After Effects VFX Agent", "DaVinci Color Agent", "SFX / Foley Agent", "Learning Memory Agent"],
-          task: `Cut ${story.scenes.length} shots into a short film`,
+          text: `Final cut is locked — ~${totalSeconds}s lip-synced film with consistent character identity across every shot. Press ▶ Play Film.`,
         },
       ]);
-      setTasks([
-        { text: `Render ${story.scenes.length} cinematic shots`, done: false },
-        { text: `Cast clean human dialogue voices`, done: false },
-        { text: `Lock visual bible: characters, world, palette, wardrobe`, done: true },
-        { text: `Build context: storyline, shots, locations, dialogue, edit notes`, done: false },
-      ]);
-
-      // 2. Add cards + submit videos in parallel
-      const scenes = story.scenes;
-      setCards(
-        scenes.map((s, i) => ({
-          title: `#${i + 1} ${s.title}`,
-          visual: s.visual,
-          location: (s as { location?: string }).location,
-          caption: s.caption || s.spoken_line || s.dialogue,
-          spokenLine: s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, ""),
-          character: s.character || "",
-          shotType: (s as { shot_type?: string }).shot_type,
-          language: s.language,
-          voiceTone: s.voice_tone,
-          pitch: s.pitch,
-          bgm: s.bgm,
-          sfx: s.sfx,
-          durationSeconds: normalizeSceneDuration(s.duration_seconds),
-          colorGrade: s.color_grade,
-          editingNotes: s.editing_notes,
-          referenceImageDirection: s.reference_image_direction,
-          continuityPrompt: formatSceneContinuity({
-            bible,
-            sceneCharacter: s.character,
-            previousVisual: scenes[i - 1]?.visual || scenes[i - 1]?.video_prompt,
-            nextVisual: scenes[i + 1]?.visual || scenes[i + 1]?.video_prompt,
-          }),
-          progress: 5,
-          done: false,
-        })),
-      );
-
-      writeLearningContext(prompt, story.title, story.tone, story.scenes.map((s) => s.language).filter(Boolean).join(", "));
-
-      // §2.2 — Upsert one canonical character embedding per unique character
-      // in the visual bible. Fire-and-forget; failures don't block generation.
-      const characterTokenMap = new Map<string, string>();
-      for (const bibleChar of bible.characters) {
-        const token = `${id}::${bibleChar.name.toLowerCase().replace(/\s+/g, "-")}`;
-        characterTokenMap.set(bibleChar.name.toLowerCase(), token);
-        const description = [
-          `Character ${bibleChar.name}, ${bibleChar.ageRange}, ${bibleChar.genderPresentation}.`,
-          `Face: ${bibleChar.faceDescription}. Hair: ${bibleChar.hairstyle}. Body: ${bibleChar.bodyType}.`,
-          `Wardrobe: ${bibleChar.wardrobe}. Accessories: ${bibleChar.keyAccessories}.`,
-          `Emotional baseline: ${bibleChar.emotionalBaseline}.`,
-        ].join(" ");
-        void upsertCharacterEmbedding({
-          data: {
-            project_id: id,
-            character_token: token,
-            description,
-            metadata: { name: bibleChar.name, wardrobe: bibleChar.wardrobe },
-          },
-        }).catch(() => {});
-      }
-      const resolveCharacterToken = (name?: string) => {
-        const key = (name ?? "").toLowerCase();
-        return characterTokenMap.get(key) ?? `${id}::hero`;
-      };
-
-      await runWithConcurrency(
-        scenes,
-        MAKERS_DEMO_LIMITS.maxParallelVideoJobs,
-        async (s, idx) => {
-          try {
-            // Assign a distinct Qwen3-TTS voice per character so actors sound different
-            const voicePool = ["Cherry", "Ethan", "Serena", "Dylan", "Chelsie", "Jada", "Sunny"];
-            const charKey = (s.character || `char-${idx}`).toLowerCase();
-            let hash = 0;
-            for (let i = 0; i < charKey.length; i++) hash = (hash * 31 + charKey.charCodeAt(i)) >>> 0;
-            const chosenVoice = voicePool[hash % voicePool.length];
-            const previousScene = scenes[idx - 1];
-            const nextScene = scenes[idx + 1];
-            const characterRoster = buildCharacterRoster(scenes);
-            const characterLock = findCharacterBible(bible, s.character);
-            const continuityPrompt = formatSceneContinuity({
-              bible,
-              sceneCharacter: s.character,
-              previousVisual: previousScene?.visual || previousScene?.video_prompt,
-              nextVisual: nextScene?.visual || nextScene?.video_prompt,
-            });
-            const optimizedPrompt = buildOptimizedScenePrompt({
-              scene: s,
-              bible,
-              sceneIndex: idx,
-              sceneCount: scenes.length,
-              previousVisual: previousScene?.visual || previousScene?.video_prompt,
-              nextVisual: nextScene?.visual || nextScene?.video_prompt,
-              referenceWeight: refWeight,
-              references: compiledReferences,
-              userStyleProfile: learningContext,
-            });
-            const spokenLine = s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, "");
-
-            // §1.1 Cinematographer v2 — compile a structured SceneSpec. Falls
-            // back to null so legacy prompt-building still runs on failure.
-            const characterToken = resolveCharacterToken(s.character);
-            const wardrobeToken = characterLock?.wardrobe || "wardrobe-default";
-            const sceneId = `${id}::scene-${idx + 1}`;
-            let spec: SceneSpec | null = null;
-            try {
-              spec = await compileSceneSpec({
-                data: {
-                  scene_id: sceneId,
-                  director_beat: [s.visual, s.video_prompt, spokenLine ? `Dialogue: "${spokenLine}"` : ""].filter(Boolean).join("\n"),
-                  prior_scene_ref: previousScene ? `${id}::scene-${idx}` : null,
-                  prior_scene_visual: previousScene?.visual || previousScene?.video_prompt || "",
-                  character_token: characterToken,
-                  wardrobe_token: wardrobeToken,
-                },
-              });
-            } catch {
-              spec = null;
-            }
-            const routing = spec ? routeSceneToVideoModel(spec) : null;
-            const compiledNegatives = spec ? compileNegativePrompt(spec, routing?.reason ?? "") : CONTINUITY_NEGATIVE_PROMPT;
-
-            // Generate the storyboard still first. I2V animation of this Qwen-Image
-            // still is the continuity-first path; T2V remains the safety fallback.
-            const imgPrompt = [
-              formatOptimizedScenePrompt(optimizedPrompt, "image"),
-              continuityPrompt,
-              referenceRouting ? `Reference compiler routing: ${referenceRouting}` : "",
-              s.visual || s.video_prompt,
-              spec ? `Cinematographer spec: ${spec.positive_prompt}` : "",
-              spec ? `Camera: ${spec.camera.shot_type}, ${spec.camera.lens_mm}mm, ${spec.camera.movement}. Lighting: ${spec.lighting.key_source} (${spec.lighting.quality}, ${spec.lighting.color_temp_k}K, ${spec.lighting.mood}).` : "",
-              previousScene ? `Previous scene visual continuity: ${previousScene.visual || previousScene.video_prompt}` : "",
-              nextScene ? `Next scene visual setup: ${nextScene.visual || nextScene.video_prompt}` : "",
-              characterRoster ? `Recurring named characters, same identity every scene: ${characterRoster}` : "",
-              characterLock ? `Exact active character identity: ${formatCharacterLock(characterLock)}` : "",
-              s.reference_image_direction ? `Reference note: ${s.reference_image_direction}` : "",
-              s.color_grade ? `Color grade: ${s.color_grade}` : "",
-              s.character ? `Featured character: ${s.character}` : "",
-              `Storyboard still for scene ${idx + 1} of ${scenes.length}; match wardrobe, lighting, geography, and emotional continuity.`,
-              `Negative prompt: ${compiledNegatives ?? optimizedPrompt.negative_prompt}`,
-            ].filter(Boolean).join("\n");
-            let storyboardStillUrl: string | undefined;
-            let agentTrace: QualityResult[] = [];
-            try {
-              if (spec) {
-                // §2.6 Quality-Critique gate: draft → critique → conditional refine.
-                const gateSpec: SceneSpec = {
-                  ...spec,
-                  negative_prompt: compiledNegatives ?? spec.negative_prompt,
-                  reference_image_weight: Math.max(spec.reference_image_weight, routing?.referenceWeightFloor ?? spec.reference_image_weight),
-                };
-                const { frame, trace } = await generateSceneWithQualityGate({
-                  spec: gateSpec,
-                  generate: async (curSpec) => {
-                    const built = [imgPrompt, `SPEC POSITIVE: ${curSpec.positive_prompt}`, `SPEC NEGATIVE: ${curSpec.negative_prompt}`].join("\n");
-                    const out = await generateSceneImage({
-                      data: {
-                        prompt: built,
-                        referenceImages: refs.map((r) => r.dataUrl),
-                        referenceWeight: Math.max(refWeight, curSpec.reference_image_weight),
-                      },
-                    });
-                    return { imageUrl: out.image_url };
-                  },
-                  critique: async (curSpec, framed) => {
-                    try {
-                      return await critiqueScene({ data: { spec: curSpec, image_url: framed.imageUrl } });
-                    } catch {
-                      return {
-                        prompt_fidelity_score: 0.85,
-                        continuity_score: 0.85,
-                        realism_score: 0.85,
-                        artifact_flags: [],
-                        verdict: "accept" as const,
-                        refine_instructions: null,
-                      };
-                    }
-                  },
-                });
-                storyboardStillUrl = frame.imageUrl;
-                agentTrace = trace;
-              } else {
-                const img = await generateSceneImage({
-                  data: {
-                    prompt: imgPrompt,
-                    referenceImages: refs.map((r) => r.dataUrl),
-                    referenceWeight: optimizedPrompt.continuity.reference_image_weight ?? refWeight,
-                    negativePrompt: compiledNegatives ?? optimizedPrompt.negative_prompt,
-                  },
-                });
-                storyboardStillUrl = img.image_url;
-              }
-              setCards((c) => c.map((card, i) => (i === idx ? { ...card, posterUrl: storyboardStillUrl, progress: 10, agentTrace, routingReason: routing?.reason } : card)));
-              // §2.2 store scene embedding + character similarity (fire-and-forget)
-              if (storyboardStillUrl) {
-                void scoreSceneAgainstCharacter({
-                  data: {
-                    project_id: id,
-                    scene_id: sceneId,
-                    character_token: characterToken,
-                    description: [s.character || "hero", s.visual || s.video_prompt, spec?.positive_prompt || ""].filter(Boolean).join(" "),
-                  },
-                })
-                  .then((r) => {
-                    setCards((c) => c.map((card, i) => (i === idx ? { ...card, characterSimilarity: r.similarity } : card)));
-                  })
-                  .catch(() => {});
-              }
-            } catch {
-              // Poster generation improves continuity but should not block T2V fallback.
-            }
-            const voiceP = generateVoice({
-              data: {
-                text: spokenLine,
-                voice: chosenVoice,
-                language: s.language || "English",
-                tone: characterLock?.voiceStyle || s.voice_tone || "natural film dialogue",
-                pitch: s.pitch || "medium",
-                beatId: `scene-${idx + 1}`,
-                clientStyleProfile: learningContext,
-              },
-            })
-              .then((v) => {
-                setCards((c) => c.map((card, i) => (i === idx ? { ...card, audioUrl: v.audio_url, localizedScript: v.localized_script, targetLanguage: v.target_language, ttsProvider: v.provider, ttsSpeaker: v.tts_speaker, regionalCritique: v.critique } : card)));
-              })
-              .catch(() => {});
-            const fullPrompt = [
-              formatOptimizedScenePrompt(optimizedPrompt, "video"),
-              continuityPrompt,
-              referenceRouting ? `Reference compiler routing: ${referenceRouting}` : "",
-              s.video_prompt,
-              spec ? `Cinematographer positive: ${spec.positive_prompt}` : "",
-              `Project visual bible summary: ${formatVisualBible(bible)}`,
-              previousScene ? `Previous scene visual: ${previousScene.visual || previousScene.video_prompt}` : "",
-              nextScene ? `Next scene visual: ${nextScene.visual || nextScene.video_prompt}` : "",
-              characterRoster ? `Same 2-3 named characters repeated in every scene: ${characterRoster}. Keep face, wardrobe, body language and relationship continuity exact.` : "",
-              characterLock ? `Active character must remain identical: ${formatCharacterLock(characterLock)}` : "",
-              (s as { location?: string }).location ? `Exact location continuity: ${(s as { location?: string }).location}` : "",
-              s.reference_image_direction ? `Character/style reference: ${s.reference_image_direction}` : "",
-              s.editing_notes ? `Professional edit intent: ${s.editing_notes}` : "",
-              s.color_grade ? `Color grade: ${s.color_grade}` : "",
-              s.sfx ? `On-screen action must support these clean SFX cues: ${s.sfx}` : "",
-              spokenLine ? `Lip-sync exactly to this spoken line, matching mouth movement and emotional delivery: "${spokenLine}"` : "",
-              `Scene ${idx + 1} of ${scenes.length}. Match wardrobe, lighting mood, geography, eyeline and motion continuity from the previous shot; stage the last movement so it leads naturally into the next cut. No black frames, no fade-to-black, no title cards, no watermarks, seamless edit-ready plate.`,
-              `Negative prompt: ${compiledNegatives ?? optimizedPrompt.negative_prompt}`,
-              `Render as one continuous ${normalizeSceneDuration(s.duration_seconds)}-second cinematic shot.`,
-            ].filter(Boolean).join("\n");
-            const attempts = routing
-              ? buildRoutedVideoAttempts(routing, storyboardStillUrl)
-              : buildVideoAttempts(storyboardStillUrl);
-            const videoUrl = await submitAndPollVideo(fullPrompt, attempts, (progress) => {
-              setCards((c) => c.map((card, i) => (i === idx ? { ...card, progress } : card)));
-            });
-            await voiceP;
-            setCards((c) =>
-              c.map((card, i) => (i === idx ? { ...card, progress: 100, done: true, videoUrl } : card)),
-            );
-          } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            setCards((c) => c.map((card, i) => (i === idx ? { ...card, caption: `${card.caption}\n⚠ ${msg}` } : card)));
-            throw new Error(`Scene ${idx + 1} failed: ${msg}`);
-          }
-        },
-      );
-
-      setTasks((t) => t.map((task) => ({ ...task, done: true })));
-
-      let masterFilmUrl: string | undefined;
-      try {
-        const clipUrls = (
-          await new Promise<StoryCard[]>((resolve) => setCards((c) => { resolve(c); return c; }))
-        )
-          .map((c) => c.videoUrl)
-          .filter((u): u is string => Boolean(u));
-        if (clipUrls.length > 1) {
-          const graded: string[] = [];
-          for (const url of clipUrls) {
-            try { graded.push(await gradeClip(url)); } catch { graded.push(url); }
-          }
-          masterFilmUrl = await concatClips(graded);
-          setFinalFilmUrl(masterFilmUrl);
-          setMessages((m) => [...m, { role: "agent", text: `🎞 Post-processing complete — graded master film stitched from ${clipUrls.length} clips. Press ▶ Play Film or download from the first scene card.` }]);
-        } else if (clipUrls.length === 1) {
-          masterFilmUrl = clipUrls[0];
-          setFinalFilmUrl(masterFilmUrl);
-        }
-      } catch {
-        // ffmpeg.wasm can OOM on very long films — per-scene playback still works.
-      }
-
-      const totalSeconds = story.scenes.reduce(
-        (sum, scene) => sum + normalizeSceneDuration(scene.duration_seconds),
-        0,
-      );
-      setMessages((m) => [
-        ...m,
-        { role: "agent", text: `Final cut is locked — ~${totalSeconds}s full film with every video scene rendered, dialogue mixed, ambient sound and score ready. Press ▶ Play Film.` },
-      ]);
-      // Auto-play once ready
       setTimeout(() => setPlayingFilm(true), 400);
-      // Save to library
+
       try {
-        const finalCards = await new Promise<StoryCard[]>((resolve) => {
-          setCards((c) => { resolve(c); return c; });
-        });
-        const scenesForLibrary = finalCards.map((c) => ({
-          title: c.title,
-          videoUrl: c.videoUrl,
-          audioUrl: c.audioUrl,
-          posterUrl: c.posterUrl,
-          visual: c.visual,
-          location: c.location,
-          caption: c.caption,
-          spokenLine: c.spokenLine,
-          localizedScript: c.localizedScript,
-          character: c.character,
-          shotType: c.shotType,
-          language: c.language,
-          targetLanguage: c.targetLanguage,
-          voiceTone: c.voiceTone,
-          ttsProvider: c.ttsProvider,
-          ttsSpeaker: c.ttsSpeaker,
-          regionalCritique: typeof c.regionalCritique === "object" && c.regionalCritique ? c.regionalCritique as Record<string, unknown> : undefined,
-          pitch: c.pitch,
-          bgm: c.bgm,
-          sfx: c.sfx,
-          durationSeconds: c.durationSeconds,
-          colorGrade: c.colorGrade,
-          editingNotes: c.editingNotes,
-          referenceImageDirection: c.referenceImageDirection,
-          continuityPrompt: c.continuityPrompt,
-        }));
+        const finalCards = finalScenes.map(longformSceneToCard);
         saveLibraryProject({
           id,
           type: "short_film",
-          title: story.title,
-          tone: story.tone,
-          logline: story.logline,
+          title: storyTitle || result.storyTitle,
+          tone: storyTone || result.tone,
+          logline: storyLogline || result.logline,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           posterUrl: finalCards.find((c) => c.posterUrl)?.posterUrl,
-          finalVideoUrl: masterFilmUrl ?? finalCards.find((c) => c.videoUrl)?.videoUrl,
+          finalVideoUrl: masterFilmUrl ?? undefined,
           sceneVideos: finalCards.map((c) => c.videoUrl).filter((url): url is string => Boolean(url)),
-          durationSeconds: finalCards.reduce((sum, c) => sum + (c.durationSeconds || 0), 0),
-          scenes: scenesForLibrary,
+          durationSeconds: totalSeconds,
+          scenes: finalCards.map((c) => ({
+            title: c.title,
+            videoUrl: c.videoUrl,
+            audioUrl: c.audioUrl,
+            posterUrl: c.posterUrl,
+            visual: c.visual,
+            location: c.location,
+            caption: c.caption,
+            spokenLine: c.spokenLine,
+            localizedScript: c.localizedScript,
+            character: c.character,
+            shotType: c.shotType,
+            language: c.language,
+            targetLanguage: c.targetLanguage,
+            voiceTone: c.voiceTone,
+            ttsProvider: c.ttsProvider,
+            ttsSpeaker: c.ttsSpeaker,
+            regionalCritique:
+              typeof c.regionalCritique === "object" && c.regionalCritique
+                ? (c.regionalCritique as Record<string, unknown>)
+                : undefined,
+            pitch: c.pitch,
+            bgm: c.bgm,
+            sfx: c.sfx,
+            durationSeconds: c.durationSeconds,
+            colorGrade: c.colorGrade,
+            editingNotes: c.editingNotes,
+            referenceImageDirection: c.referenceImageDirection,
+            continuityPrompt: c.continuityPrompt,
+          })),
           metadata: {
             source: "agent",
             prompt,
-            visualBible: bible,
-            compiledReferences,
+            pipeline: "longform-langgraph",
+            visualBible: bible ?? result.visualBible,
             referenceImages: refs.map((r) => ({ name: r.name, description: r.description })),
           },
         });
-      } catch { /* ignore */ }
+      } catch {
+        // library save is best-effort
+      }
     } catch (err: unknown) {
       setThinking(false);
       const msg = err instanceof Error ? err.message : String(err);
@@ -1318,91 +1015,73 @@ function getRenderedCards(cards: StoryCard[]) {
   return cards.filter((card) => Boolean(card.videoUrl) || Boolean(card.posterUrl));
 }
 
-function buildCharacterRoster(scenes: Array<{ character?: string }>) {
-  const names = scenes
-    .map((scene) => scene.character?.trim())
-    .filter((name): name is string => Boolean(name));
-  return Array.from(new Set(names)).slice(0, 3).join(", ");
-}
-
-function buildVideoAttempts(storyboardStillUrl?: string): VideoAttempt[] {
-  const attempts: VideoAttempt[] = [];
-  if (storyboardStillUrl) {
-    attempts.push(
-      { model: "happyhorse-1.1-i2v", imageUrl: storyboardStillUrl },
-      { model: "wan2.2-i2v-plus", imageUrl: storyboardStillUrl },
-    );
-  }
-  attempts.push({ model: "happyhorse-1.1-t2v" }, { model: "wan2.2-t2v-plus" });
-  return attempts;
-}
-
-function buildRoutedVideoAttempts(
-  routing: { primary: VideoModel; fallback: VideoModel | null; requiresStartingImage: boolean },
-  storyboardStillUrl?: string,
-): VideoAttempt[] {
-  const attempts: VideoAttempt[] = [];
-  const needsImage = (m: VideoModel) => m.endsWith("i2v") || m.endsWith("i2v-plus");
-  const push = (m: VideoModel) => {
-    if (needsImage(m)) {
-      if (storyboardStillUrl) attempts.push({ model: m, imageUrl: storyboardStillUrl });
-    } else {
-      attempts.push({ model: m });
-    }
+function longformSceneToCard(scene: LongformSceneRecord): StoryCard {
+  return {
+    title: `#${scene.index + 1} ${scene.title}`,
+    visual: scene.visual,
+    location: scene.location,
+    caption: scene.caption,
+    spokenLine: scene.spokenLine,
+    character: scene.character,
+    shotType: scene.shotType,
+    language: scene.language,
+    voiceTone: scene.voiceTone,
+    pitch: scene.pitch,
+    bgm: scene.bgm,
+    sfx: scene.sfx,
+    durationSeconds: scene.durationSeconds,
+    colorGrade: scene.colorGrade,
+    editingNotes: scene.editingNotes,
+    referenceImageDirection: scene.referenceImageDirection,
+    continuityPrompt: scene.continuityPrompt,
+    progress: scene.progress,
+    done: scene.done,
+    videoUrl: scene.videoUrl,
+    audioUrl: scene.audioUrl,
+    posterUrl: scene.posterUrl,
+    embeddedAudio: scene.embeddedAudio,
+    localizedScript: scene.localizedScript,
+    targetLanguage: scene.targetLanguage,
+    ttsProvider: scene.ttsProvider,
+    ttsSpeaker: scene.ttsSpeaker,
+    regionalCritique: scene.regionalCritique,
+    characterSimilarity: scene.characterSimilarity,
+    agentTrace: scene.agentTrace,
   };
-  push(routing.primary);
-  if (routing.fallback) push(routing.fallback);
-  // Safety net: also try the opposite-mode engine so a still-image failure
-  // never leaves the scene un-rendered.
-  if (!attempts.some((a) => a.model === "happyhorse-1.1-t2v")) attempts.push({ model: "happyhorse-1.1-t2v" });
-  if (!attempts.some((a) => a.model === "wan2.2-t2v-plus")) attempts.push({ model: "wan2.2-t2v-plus" });
-  return attempts;
 }
 
-async function submitAndPollVideo(
-  prompt: string,
-  attempts: VideoAttempt[],
-  onProgress: (progress: number) => void,
-) {
-  const failures: string[] = [];
-  for (const attempt of attempts) {
-    try {
-      const cacheKey = JSON.stringify({
-        model: attempt.model,
-        imageUrl: attempt.imageUrl || "",
-        size: "832*480",
-        prompt,
-      });
-      let task_id = videoTaskCache.get(cacheKey);
-      if (!task_id) {
-        const submitted = await submitVideo({
-          data: {
-            prompt,
-            size: "832*480",
-            model: attempt.model,
-            imageUrl: attempt.imageUrl,
-          },
-        });
-        task_id = submitted.task_id;
-        videoTaskCache.set(cacheKey, task_id);
-      }
-      for (let pollAttempt = 0; pollAttempt < MAKERS_DEMO_LIMITS.maxVideoPollAttempts; pollAttempt++) {
-        await new Promise((r) => setTimeout(r, getVideoPollDelayMs(pollAttempt)));
-        onProgress(Math.min(10 + pollAttempt * 3, 92));
-        const status = await pollVideo({ data: { task_id } });
-        if (status.status === "SUCCEEDED" && status.video_url) return status.video_url;
-        if (status.status === "FAILED") {
-          videoTaskCache.delete(cacheKey);
-          throw new Error(status.error || "Task failed");
-        }
-      }
-      throw new Error("Timed out waiting for video");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      failures.push(`${attempt.model}: ${message}`);
-    }
-  }
-  throw new Error(`All video engines failed. ${failures.join(" | ")}`);
+function longformPatchToCard(patch: Partial<LongformSceneRecord>): Partial<StoryCard> {
+  return {
+    visual: patch.visual,
+    location: patch.location,
+    caption: patch.caption,
+    spokenLine: patch.spokenLine,
+    character: patch.character,
+    shotType: patch.shotType,
+    language: patch.language,
+    voiceTone: patch.voiceTone,
+    pitch: patch.pitch,
+    bgm: patch.bgm,
+    sfx: patch.sfx,
+    durationSeconds: patch.durationSeconds,
+    colorGrade: patch.colorGrade,
+    editingNotes: patch.editingNotes,
+    referenceImageDirection: patch.referenceImageDirection,
+    continuityPrompt: patch.continuityPrompt,
+    progress: patch.progress,
+    done: patch.done,
+    videoUrl: patch.videoUrl,
+    audioUrl: patch.audioUrl,
+    posterUrl: patch.posterUrl,
+    embeddedAudio: patch.embeddedAudio,
+    localizedScript: patch.localizedScript,
+    targetLanguage: patch.targetLanguage,
+    ttsProvider: patch.ttsProvider,
+    ttsSpeaker: patch.ttsSpeaker,
+    regionalCritique: patch.regionalCritique,
+    characterSimilarity: patch.characterSimilarity,
+    agentTrace: patch.agentTrace,
+  };
 }
 
 /**
@@ -1522,10 +1201,13 @@ function FilmPlayer({
       }
     }
     const d = dialogueRef.current;
-    if (d && current?.audioUrl) {
+    if (d && current?.audioUrl && !current?.embeddedAudio) {
       d.src = current.audioUrl;
       d.currentTime = 0;
       d.play().catch(() => {});
+    } else if (d) {
+      d.pause();
+      d.removeAttribute("src");
     }
     if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
     const duration = Math.max(6, current?.durationSeconds || 8) * 1000;
@@ -1553,7 +1235,7 @@ function FilmPlayer({
       if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idx, current?.videoUrl, current?.posterUrl]);
+  }, [idx, current?.videoUrl, current?.posterUrl, current?.embeddedAudio, current?.audioUrl]);
 
   // Keep the video element's mute state in sync with the toggle
   useEffect(() => {
@@ -1721,13 +1403,6 @@ function FilmPlayer({
       `}</style>
     </div>
   );
-}
-
-function chooseSceneCount(prompt: string) {
-  const text = prompt.toLowerCase();
-  const explicit = text.match(/(\d+)\s*(scene|scenes|slide|slides|shot|shots)/);
-  if (explicit) return clampSceneCount(Number(explicit[1]));
-  return MAKERS_DEMO_LIMITS.maxScenes;
 }
 
 function readLearningContext() {

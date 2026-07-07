@@ -15,16 +15,30 @@ export type MotionGraphicColors = {
 
 const FPS = 30;
 
+function hexLightness(hex: string | undefined): number {
+  if (!hex || !/^#[0-9a-f]{6}$/i.test(hex)) return 0.5;
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  return (Math.max(r, g, b) + Math.min(r, g, b)) / 2;
+}
+
+/** Compositions render on dark backgrounds — dark token colors would vanish. */
+function readableOnDark(color: string | undefined, fallback: string): string {
+  if (!color) return fallback;
+  return hexLightness(color) < 0.38 ? fallback : color;
+}
+
 function colorForToken(token: CompiledMotionElement["color_token"], colors: MotionGraphicColors) {
   switch (token) {
     case "primary":
-      return colors.primary || "#ffffff";
+      return readableOnDark(colors.primary, "#ffffff");
     case "secondary":
-      return colors.secondary || "#2a2a2a";
+      return readableOnDark(colors.secondary, "rgba(255,255,255,0.82)");
     case "accent":
-      return colors.accent || "#3b82f6";
+      return readableOnDark(colors.accent, "#ffffff");
     default:
-      return colors.neutral || "#a3a3a3";
+      return readableOnDark(colors.neutral, "rgba(255,255,255,0.78)");
   }
 }
 
@@ -65,6 +79,143 @@ function elementTransform(el: CompiledMotionElement, frame: number, easing: (t: 
   }
 }
 
+/** Build a valid CSS background from the spec's descriptive treatment string. */
+function buildBackground(treatment: string, colors: { primary: string; secondary: string; accent: string; neutral: string }) {
+  const hexes = treatment.match(/#[0-9a-fA-F]{6}\b/g) || [];
+  const base = hexes[0] || colors.neutral;
+  const glow = hexes[1] || colors.primary;
+  return `radial-gradient(circle at 24% 18%, ${glow}26, transparent 46%), radial-gradient(circle at 82% 88%, ${colors.accent}1f, transparent 42%), linear-gradient(160deg, ${base}, ${darken(base, 0.35)})`;
+}
+
+function darken(hex: string, amount: number) {
+  if (!/^#[0-9a-f]{6}$/i.test(hex)) return hex;
+  const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+  const r = clamp(parseInt(hex.slice(1, 3), 16) * (1 - amount));
+  const g = clamp(parseInt(hex.slice(3, 5), 16) * (1 - amount));
+  const b = clamp(parseInt(hex.slice(5, 7), 16) * (1 - amount));
+  return `#${[r, g, b].map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function BrandLogo({ src, brandName, className }: { src: string; brandName: string; className?: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return <span className="text-2xl md:text-4xl font-bold tracking-tight">{brandName}</span>;
+  }
+  return (
+    <img
+      src={src}
+      alt={brandName}
+      crossOrigin="anonymous"
+      className={className || "h-14 md:h-20 w-auto object-contain"}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+/**
+ * Real website screenshot inside a browser frame with slow Ken Burns motion,
+ * plus a compact lower-third so the site itself stays the hero.
+ */
+function ScreenshotPresentation({
+  spec,
+  brandName,
+  colors,
+  frame,
+  easing,
+  logoSrc,
+}: {
+  spec: CompiledMotionSpec;
+  brandName: string;
+  colors: MotionGraphicColors;
+  frame: number;
+  easing: (t: number) => number;
+  logoSrc?: string | null;
+}) {
+  const accent = readableOnDark(colors.accent, "#7dd3fc");
+  const neutral = colors.neutral && hexLightness(colors.neutral) < 0.5 ? colors.neutral : "#0a0a0a";
+  const enter = easing(Math.min(1, frame / 24));
+  const kb = Math.min(1, frame / 450);
+  const drift = Math.sin(frame / 130) * 0.35;
+  const scale = 1.05 + kb * 0.11;
+  const translateY = -(kb * 5 + drift);
+  const headline = spec.elements.find((el) => el.type === "headline")?.content;
+  const subhead = spec.elements.find((el) => el.type === "subhead")?.content;
+  const pageLabel = (() => {
+    try {
+      const parsed = new URL(spec.screenshot_page_url || "");
+      return `${parsed.hostname.replace(/^www\./, "")}${parsed.pathname === "/" ? "" : parsed.pathname}`;
+    } catch {
+      return brandName;
+    }
+  })();
+
+  return (
+    <div
+      className="relative h-full w-full overflow-hidden"
+      style={{ background: `radial-gradient(circle at 30% 12%, ${accent}22, transparent 46%), linear-gradient(165deg, ${neutral}, ${darken(neutral, 0.4)})` }}
+    >
+      <div
+        className="absolute inset-x-[6%] top-[7%] bottom-[20%] rounded-xl border border-white/15 shadow-2xl shadow-black/60 overflow-hidden"
+        style={{
+          opacity: enter,
+          transform: `translateY(${(1 - enter) * 40}px) scale(${0.97 + enter * 0.03})`,
+          background: "#101014",
+        }}
+      >
+        <div className="flex h-8 items-center gap-2 border-b border-white/10 bg-black/60 px-3">
+          <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
+          <span className="h-2.5 w-2.5 rounded-full bg-[#febc2e]" />
+          <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
+          <span className="ml-3 flex-1 truncate rounded-md bg-white/10 px-3 py-0.5 text-[10px] text-white/60">
+            {pageLabel}
+          </span>
+        </div>
+        <div className="relative h-[calc(100%-2rem)] overflow-hidden">
+          <img
+            src={spec.screenshot_url || ""}
+            alt={pageLabel}
+            crossOrigin="anonymous"
+            className="absolute inset-0 h-full w-full object-cover object-top"
+            style={{ transform: `scale(${scale}) translateY(${translateY}%)`, transformOrigin: "center top" }}
+          />
+        </div>
+      </div>
+
+      <div className="absolute inset-x-0 bottom-0 h-[26%] bg-gradient-to-t from-black/85 via-black/40 to-transparent" />
+      <div
+        className="absolute left-[6%] bottom-[5%] right-[6%] flex items-end justify-between gap-6"
+        style={{ opacity: easing(Math.min(1, Math.max(0, frame - 14) / 20)) }}
+      >
+        <div className="min-w-0">
+          <div className="flex items-center gap-3">
+            {logoSrc ? <BrandLogo src={logoSrc} brandName={brandName} className="h-7 md:h-9 w-auto object-contain" /> : null}
+            <span className="text-[10px] uppercase tracking-[0.3em] text-white/55">{brandName}</span>
+          </div>
+          {headline ? (
+            <div
+              className="mt-2 truncate text-xl md:text-3xl font-semibold text-white"
+              style={{ fontFamily: colors.headingFont }}
+            >
+              {headline}
+            </div>
+          ) : null}
+          {subhead ? (
+            <div className="mt-1 max-w-2xl text-xs md:text-sm leading-relaxed text-white/70 line-clamp-2" style={{ fontFamily: colors.bodyFont }}>
+              {subhead}
+            </div>
+          ) : null}
+        </div>
+        <span
+          className="hidden md:inline-flex shrink-0 items-center rounded-full px-3 py-1 text-[10px] font-medium uppercase tracking-wider"
+          style={{ background: `${accent}26`, color: accent, border: `1px solid ${accent}55` }}
+        >
+          Live site
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function MotionGraphicRenderer({
   spec,
   brandName,
@@ -85,10 +236,9 @@ export function MotionGraphicRenderer({
   logoUrl?: string | null;
 }) {
   const [frame, setFrame] = useState(frameOverride ?? 0);
-  const durationFrames = Math.max(
-    90,
-    ...spec.elements.map((el) => (el.exit_frame ?? el.enter_frame + 45)),
-  );
+  const durationFrames = spec.screenshot_url
+    ? 450
+    : Math.max(90, ...spec.elements.map((el) => (el.exit_frame ?? el.enter_frame + 45)));
 
   useEffect(() => {
     if (typeof frameOverride === "number") {
@@ -96,7 +246,7 @@ export function MotionGraphicRenderer({
       return;
     }
     if (!animate) return;
-    if (typeof progress === "number") {
+    if (typeof progress === "number" && !spec.screenshot_url) {
       setFrame(Math.round(progress * durationFrames));
       return;
     }
@@ -109,27 +259,43 @@ export function MotionGraphicRenderer({
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [animate, progress, durationFrames, frameOverride]);
+  }, [animate, progress, durationFrames, frameOverride, spec.screenshot_url]);
 
   const easing = spec.easing_family === "ease_in_out_cubic" ? easeInOutCubic : easeOutExpo;
   const primary = colors.primary || "#141414";
   const secondary = colors.secondary || "#2a2a2a";
   const accent = colors.accent || "#3b82f6";
   const neutral = colors.neutral || "#0a0a0a";
-  const bg = spec.background_treatment.includes("#")
-    ? spec.background_treatment
-    : `radial-gradient(circle at 22% 18%, ${accent}22, transparent 42%), linear-gradient(135deg, ${primary}, ${neutral} 58%, ${secondary})`;
-
   const headingFont = colors.headingFont || "Georgia, serif";
   const bodyFont = colors.bodyFont || "system-ui, sans-serif";
   const logoSrc = logoUrl || colors.logoUrl;
+
+  if (spec.screenshot_url) {
+    return (
+      <>
+        {colors.fontUrls?.map((href) => (
+          <link key={href} rel="stylesheet" href={href} />
+        ))}
+        <ScreenshotPresentation
+          spec={spec}
+          brandName={brandName}
+          colors={colors}
+          frame={frame}
+          easing={easing}
+          logoSrc={logoSrc}
+        />
+      </>
+    );
+  }
+
+  const bg = buildBackground(spec.background_treatment, { primary, secondary, accent, neutral });
   const heroBg = colors.heroBackgroundUrl;
 
   return (
     <div className="relative h-full w-full overflow-hidden" style={{ background: bg }}>
       {heroBg ? (
         <>
-          <img src={heroBg} alt="" className="absolute inset-0 h-full w-full object-cover scale-105" />
+          <img src={heroBg} alt="" crossOrigin="anonymous" className="absolute inset-0 h-full w-full object-cover object-top scale-105 opacity-90" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
           <div className="absolute inset-0 bg-black/72" />
         </>
       ) : null}
@@ -145,8 +311,9 @@ export function MotionGraphicRenderer({
         </div>
       )}
 
-      <div className="absolute left-8 top-8 text-[10px] uppercase tracking-[0.28em] text-white/45">
-        {brandName}
+      <div className="absolute left-8 top-8 flex items-center gap-3">
+        {logoSrc ? <BrandLogo src={logoSrc} brandName={brandName} className="h-6 w-auto object-contain" /> : null}
+        <span className="text-[10px] uppercase tracking-[0.28em] text-white/45">{brandName}</span>
       </div>
 
       <div
@@ -170,11 +337,11 @@ export function MotionGraphicRenderer({
                 style={{ opacity, transform, color: isCta ? "#000" : color }}
               >
                 {isLogo && logoSrc ? (
-                  <img src={logoSrc} alt={brandName} className="h-14 md:h-20 w-auto object-contain" />
+                  <BrandLogo src={logoSrc} brandName={brandName} />
                 ) : isCta ? (
                   <span
                     className="inline-flex rounded-full px-5 py-2.5 text-sm font-semibold"
-                    style={{ background: accent, color: "#000" }}
+                    style={{ background: readableOnDark(accent, "#ffffff"), color: "#000" }}
                   >
                     {el.content}
                   </span>

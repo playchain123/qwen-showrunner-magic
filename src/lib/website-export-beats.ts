@@ -27,7 +27,7 @@ export function buildExportBeats(beats: BeatPreviewForExport[]): WebsiteExportBe
           beat_id: beat.beat_id,
           production_method: beat.production_method,
           asset_status: "ready",
-          asset_source: (beat.assetSource || "compiled") as "captured" | "compiled" | "fallback" | "generated",
+          asset_source: (beat.assetSource || "compiled") as "captured" | "screenshot" | "compiled" | "fallback" | "generated",
           clip_url: beat.clipUrl,
           motionGraphicSpec: motionSpec,
         },

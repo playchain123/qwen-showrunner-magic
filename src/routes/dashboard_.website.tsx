@@ -130,9 +130,11 @@ function WebsiteVideoPage() {
       setBrandKit(kit);
       setStatus(kit.confidence_flags.includes("fallback_brand_kit_used")
         ? "Website fetch was blocked/unavailable. Building a fallback plan from the domain..."
-        : kit.confidence_flags.includes("llm_brand_enrichment_applied")
-          ? "Brand kit enriched with AI copy. Building production plan..."
-          : "Building website-to-video production plan...");
+        : kit.confidence_flags.some((flag) => flag === "site_colors_extracted" || flag === "logo_colors_extracted")
+          ? "Real brand colors, logo, and fonts extracted from the site. Building production plan..."
+          : kit.confidence_flags.includes("llm_brand_enrichment_applied")
+            ? "Brand kit enriched with AI copy. Building production plan..."
+            : "Building website-to-video production plan...");
       const aiBrollAvailable = !kit.confidence_flags.includes("ai_broll_unavailable");
       let draftPlan = buildWebsiteVideoPlan({
         brandKit: kit,
@@ -481,8 +483,9 @@ function WebsiteVideoPage() {
             </div>
 
             {!isCaptureApiConfigured() && (
-              <div className="rounded-md border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-[11px] text-amber-200">
-                Screen capture worker not configured — set <code className="text-amber-100">VITE_API_BASE_URL</code> to your deployed FC worker URL for real site recordings.
+              <div className="rounded-md border border-sky-400/25 bg-sky-400/10 px-3 py-2 text-[11px] text-sky-200">
+                Screenshot capture mode: capture beats use real screenshots of the site with cinematic motion.
+                Deploy the recording worker and set <code className="text-sky-100">VITE_API_BASE_URL</code> for full scrolling screen recordings.
               </div>
             )}
 
@@ -544,24 +547,44 @@ function WebsiteVideoPage() {
 
             {brandKit && (
               <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="font-medium text-sm">{brandKit.brand.name}</div>
-                  <a href={brandKit.source_url} target="_blank" rel="noreferrer" className="text-white/50 hover:text-white">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    {brandKit.brand.logo_asset_path && (
+                      <img
+                        src={brandKit.brand.logo_asset_path}
+                        alt={`${brandKit.brand.name} logo`}
+                        className="h-8 w-8 shrink-0 rounded-md border border-white/10 bg-white/5 object-contain p-1"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = "none";
+                        }}
+                      />
+                    )}
+                    <div className="truncate font-medium text-sm">{brandKit.brand.name}</div>
+                  </div>
+                  <a href={brandKit.source_url} target="_blank" rel="noreferrer" className="shrink-0 text-white/50 hover:text-white">
                     <ExternalLink className="h-4 w-4" />
                   </a>
                 </div>
+                {brandKit.hero_screenshot_url && (
+                  <img
+                    src={brandKit.hero_screenshot_url}
+                    alt={`${brandKit.brand.name} homepage`}
+                    className="h-24 w-full rounded-md border border-white/10 object-cover object-top"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = "none";
+                    }}
+                  />
+                )}
                 <div className="text-xs text-white/60">{brandKit.product.one_line_description}</div>
                 <div className="flex gap-2">
-                  {[brandKit.brand.primary_color_hex, brandKit.brand.secondary_color_hex, brandKit.brand.accent_color_hex, brandKit.brand.neutral_color_hex].map((color) => (
-                    <span key={color} className="h-6 w-10 rounded border border-white/10" style={{ background: color }} title={color} />
+                  {[brandKit.brand.primary_color_hex, brandKit.brand.secondary_color_hex, brandKit.brand.accent_color_hex, brandKit.brand.neutral_color_hex].map((color, colorIndex) => (
+                    <span key={`${color}-${colorIndex}`} className="h-6 w-10 rounded border border-white/10" style={{ background: color }} title={color} />
                   ))}
                 </div>
                 <div className="text-[11px] text-white/40">
                   {brandKit.brand.heading_typeface} / {brandKit.brand.body_typeface}
                 </div>
-                {brandKit.confidence_flags.length > 0 && (
-                  <div className="text-[11px] text-amber-300">Flags: {brandKit.confidence_flags.join(", ")}</div>
-                )}
+                <BrandKitFlagList flags={brandKit.confidence_flags} />
               </div>
             )}
           </div>
@@ -725,7 +748,8 @@ function WebsiteVideoPage() {
                         </div>
                         {beat.screen_capture_spec && <div>Capture: {beat.screen_capture_spec.source_page}</div>}
                         {beat.motion_graphic_spec && <div>Motion: {beat.motion_graphic_spec.layout}</div>}
-                        {beat.clipUrl && <div className="text-emerald-300">Qwen video clip ready</div>}
+                        {beat.clipUrl && <div className="text-emerald-300">{beat.assetSource === "captured" ? "Live screen recording ready" : "Qwen video clip ready"}</div>}
+                        {beat.assetSource === "screenshot" && <div className="text-emerald-300">Real site screenshot with motion</div>}
                         {beat.assetSource === "fallback" && (
                           <div className="text-amber-300">
                             {formatBeatAssetError(beat.renderAsset?.asset_error)}
@@ -770,6 +794,68 @@ function WebsiteVideoPage() {
           downloading={downloading}
         />
       )}
+    </div>
+  );
+}
+
+const FLAG_LABELS: Record<string, { label: string; good?: boolean }> = {
+  site_colors_extracted: { label: "Site colors extracted", good: true },
+  logo_colors_extracted: { label: "Brand colors from logo", good: true },
+  site_fonts_extracted: { label: "Site fonts extracted", good: true },
+  hero_screenshot_captured: { label: "Homepage screenshot captured", good: true },
+  browser_extract_used: { label: "Live browser extraction", good: true },
+  basic_meta_fallback_applied: { label: "Meta tags recovered", good: true },
+  llm_brand_enrichment_applied: { label: "Copy enriched with AI", good: true },
+  capture_api_unconfigured: { label: "Screenshot capture mode (no recording worker)" },
+  ai_broll_unavailable: { label: "AI b-roll disabled (no API key)" },
+  site_blocked: { label: "Site blocks automated access" },
+  blocked_http_403_or_429: { label: "Fetch blocked (403/429)" },
+  browser_extract_blocked: { label: "Browser extraction blocked" },
+  live_fetch_failed: { label: "Live fetch failed" },
+  fallback_brand_kit_used: { label: "Fallback brand kit" },
+  verify_claims_before_render: { label: "Verify claims before final render" },
+  no_logo_detected: { label: "No logo found" },
+  no_clear_tagline_found: { label: "No tagline found" },
+  color_extraction_low_confidence: { label: "Colors uncertain" },
+  low_quality_extraction: { label: "Copy extraction low quality" },
+  weak_product_copy: { label: "Weak product copy" },
+  theme_color_only: { label: "Only theme color found" },
+  deep_extraction_failed: { label: "Deep style extraction failed" },
+  content_type_not_html: { label: "Non-HTML content" },
+};
+
+function describeFlag(flag: string): { label: string; good: boolean } | null {
+  if (flag.startsWith("fetch_attempt:")) return null;
+  if (flag.startsWith("logo_")) {
+    const source = flag.slice(5);
+    if (source === "favicon_service") return { label: "Logo from favicon service", good: true };
+    return { label: "Site logo detected", good: true };
+  }
+  const known = FLAG_LABELS[flag];
+  if (known) return { label: known.label, good: Boolean(known.good) };
+  return { label: flag.replaceAll("_", " "), good: false };
+}
+
+function BrandKitFlagList({ flags }: { flags: string[] }) {
+  const items = flags
+    .map(describeFlag)
+    .filter((item): item is { label: string; good: boolean } => item !== null)
+    .filter((item, index, all) => all.findIndex((other) => other.label === item.label) === index);
+  if (items.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {items.map((item) => (
+        <span
+          key={item.label}
+          className={`rounded-full border px-2 py-0.5 text-[10px] ${
+            item.good
+              ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-200"
+              : "border-amber-400/25 bg-amber-400/10 text-amber-200"
+          }`}
+        >
+          {item.label}
+        </span>
+      ))}
     </div>
   );
 }
@@ -893,8 +979,10 @@ function WebsiteVideoPlayer({
 function formatBeatAssetError(error?: string) {
   if (!error) return "Using branded motion fallback";
   if (error === "ai_video_unavailable") return "AI video unavailable (billing or API) — using branded motion";
-  if (error === "capture_api_unavailable") return "Screen capture worker not configured — using branded motion";
-  if (error === "site_blocked") return "Site blocked live capture — using branded motion";
+  if (error === "capture_api_unavailable") return "Live recording and screenshots unavailable — using branded motion";
+  if (error === "screenshot_unavailable") return "Site screenshot unavailable — using branded motion";
+  if (error === "site_blocked") return "Site blocked capture and screenshots — using branded motion";
+  if (error === "missing_choreography") return "No capture choreography — using branded motion";
   if (error.length > 120) return `Clip unavailable — using branded motion`;
   return `Clip failed — ${error}`;
 }
@@ -991,7 +1079,9 @@ function brandColors(brandKit: WebsiteBrandKit) {
     bodyFont: `${brandKit.brand.body_typeface}, system-ui, sans-serif`,
     logoUrl: brandKit.brand.logo_asset_path,
     fontUrls: brandKit.font_urls,
-    heroBackgroundUrl: brandKit.hero_screenshot_url || brandKit.brand.logo_asset_path,
+    // A stretched logo makes a poor full-bleed background; only real
+    // screenshots/banners qualify as hero imagery.
+    heroBackgroundUrl: brandKit.hero_screenshot_url || null,
   };
 }
 

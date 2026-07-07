@@ -7,7 +7,7 @@ export type LibraryScene = {
   audioUrl?: string;
   posterUrl?: string;
   assetStatus?: "pending" | "generating" | "ready" | "failed";
-  assetSource?: "captured" | "generated" | "compiled" | "fallback";
+  assetSource?: "captured" | "screenshot" | "generated" | "compiled" | "fallback";
   motionSpec?: Record<string, unknown>;
   visual?: string;
   location?: string;
@@ -390,7 +390,9 @@ function normalizeAssetStatus(value: unknown): LibraryScene["assetStatus"] {
 }
 
 function normalizeAssetSource(value: unknown): LibraryScene["assetSource"] {
-  return value === "captured" || value === "generated" || value === "compiled" || value === "fallback" ? value : undefined;
+  return value === "captured" || value === "screenshot" || value === "generated" || value === "compiled" || value === "fallback"
+    ? value
+    : undefined;
 }
 
 function appendGenerationLog(project: LibraryProject) {

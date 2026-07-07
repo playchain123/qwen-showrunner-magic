@@ -3,7 +3,7 @@ import type { WebsiteVideoBeat } from "./website-video";
 export type WebsiteBeatAssetJob = {
   beat_id: string;
   asset_status: "pending" | "generating" | "ready" | "failed";
-  asset_source?: "captured" | "generated" | "compiled" | "fallback";
+  asset_source?: "captured" | "screenshot" | "generated" | "compiled" | "fallback";
   clip_url?: string;
   progress?: number;
   error?: string;

@@ -1,3 +1,5 @@
+import { fetchWithTimeout } from "./website-url-safety";
+
 const BUCKET = "website-assets";
 
 function extensionFor(contentType: string) {
@@ -5,6 +7,10 @@ function extensionFor(contentType: string) {
   if (contentType.includes("jpeg") || contentType.includes("jpg")) return "jpg";
   if (contentType.includes("png")) return "png";
   if (contentType.includes("mp4")) return "mp4";
+  if (contentType.includes("svg")) return "svg";
+  if (contentType.includes("webp")) return "webp";
+  if (contentType.includes("gif")) return "gif";
+  if (contentType.includes("icon") || contentType.includes("ico")) return "ico";
   return "bin";
 }
 
@@ -21,7 +27,7 @@ export async function uploadWebsiteAsset({
   beatId: string;
   buffer: Uint8Array;
   contentType: string;
-  kind: "capture" | "screenshot" | "export";
+  kind: "capture" | "screenshot" | "export" | "logo";
 }): Promise<string | null> {
   try {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -71,6 +77,39 @@ export async function persistCaptureClip({
   });
   if (uploaded) return uploaded;
   return dataUrlFromBase64(videoBase64, contentType);
+}
+
+const MAX_REMOTE_IMAGE_BYTES = 2_000_000;
+
+/**
+ * Download an external brand image (logo, og:image hero) and re-host it on
+ * Supabase Storage so previews and the Remotion WebCodecs export are not
+ * broken by missing CORS headers on the source site.
+ */
+export async function persistRemoteImage({
+  url,
+  userId,
+  projectId,
+  beatId,
+  kind,
+}: {
+  url: string;
+  userId: string;
+  projectId: string;
+  beatId: string;
+  kind: "screenshot" | "logo";
+}): Promise<string | null> {
+  try {
+    const res = await fetchWithTimeout(url, { timeoutMs: 8000 });
+    if (!res?.ok) return null;
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.startsWith("image/")) return null;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.byteLength === 0 || bytes.byteLength > MAX_REMOTE_IMAGE_BYTES) return null;
+    return uploadWebsiteAsset({ userId, projectId, beatId, buffer: bytes, contentType, kind });
+  } catch {
+    return null;
+  }
 }
 
 export async function persistHeroScreenshot({

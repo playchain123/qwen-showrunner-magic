@@ -22,6 +22,10 @@ export type CompiledMotionSpec = {
   elements: CompiledMotionElement[];
   easing_family: "ease_out_expo" | "ease_in_out_cubic";
   background_treatment: string;
+  /** Real website screenshot rendered with Ken Burns motion inside a browser frame. */
+  screenshot_url?: string | null;
+  /** Page the screenshot was taken from (shown in the browser chrome). */
+  screenshot_page_url?: string | null;
 };
 
 export type CaptureChoreography = {
@@ -40,11 +44,13 @@ export type BrollPromptSpec = {
   duration_seconds: number;
 };
 
+export type WebsiteAssetSource = "captured" | "screenshot" | "generated" | "compiled" | "fallback";
+
 export type WebsiteBeatRenderAsset = {
   beat_id: string;
   production_method: ProductionMethod;
   asset_status: "pending" | "generating" | "ready" | "failed";
-  asset_source: "captured" | "generated" | "compiled" | "fallback";
+  asset_source: WebsiteAssetSource;
   clip_url?: string;
   motionGraphicSpec?: CompiledMotionSpec;
   captureChoreography?: CaptureChoreography;
@@ -294,6 +300,47 @@ export function compileBrollPrompt(brandKit: WebsiteBrandKit, beat: WebsiteVideo
     ].join(" "),
     negative_prompt: SHARED_BROLL_NEGATIVE_PROMPT,
     duration_seconds: beat.duration_seconds,
+  };
+}
+
+/**
+ * Motion spec backed by a real screenshot of the target page. The renderer
+ * shows the screenshot in a browser frame with Ken Burns motion and keeps the
+ * text overlay to a compact lower-third so the site stays the hero.
+ */
+export function buildScreenshotMotionSpec(
+  brandKit: WebsiteBrandKit,
+  beat: WebsiteVideoBeat,
+  screenshotUrl: string,
+  pageUrl: string,
+): CompiledMotionSpec {
+  return {
+    beat_id: beat.beat_id,
+    layout: "split_headline_and_visual",
+    screenshot_url: screenshotUrl,
+    screenshot_page_url: pageUrl,
+    elements: [
+      {
+        type: "headline",
+        content: beat.beat_purpose,
+        enter_animation: "fade_rise",
+        enter_frame: 6,
+        exit_frame: null,
+        color_token: "accent",
+        typeface_token: "heading",
+      },
+      {
+        type: "subhead",
+        content: fitCopy(beat.vo_line, 120),
+        enter_animation: "mask_wipe",
+        enter_frame: 20,
+        exit_frame: null,
+        color_token: "neutral",
+        typeface_token: "body",
+      },
+    ],
+    easing_family: "ease_out_expo",
+    background_treatment: `solid ${brandKit.brand.neutral_color_hex}; live site screenshot with slow push-in`,
   };
 }
 

@@ -13,7 +13,11 @@ import {
 } from "./website-site-resilience";
 import { enrichWebsiteBrandKit } from "./website-brand-enrichment";
 import { requestBrowserExtract, isCaptureApiConfigured } from "./website-browser-api";
-import { persistHeroScreenshot } from "./website-storage";
+import { persistHeroScreenshot, persistRemoteImage } from "./website-storage";
+import { isSafePublicHttpUrl } from "./website-url-safety";
+import { extractDeepBrandSignals, faviconServiceUrl, type DeepBrandSignals } from "./website-brand-extract-deep";
+import { extractDominantLogoColors, kitHasChromaticColor } from "./website-logo-color";
+import { getScreenshotImageUrl, warmScreenshot } from "./website-screenshot-fallback";
 
 export type WebsiteVideoType = "saas_launch" | "website_promo" | "user_demo" | "user_manual";
 export type ProductionMethod = "screen_capture" | "motion_graphic" | "ai_broll";
@@ -105,48 +109,7 @@ type LintResult = {
   verdict: "ship" | "revise" | "redesign";
 };
 
-function isSafePublicHttpUrl(raw: string): boolean {
-  let u: URL;
-  try {
-    u = new URL(raw);
-  } catch {
-    return false;
-  }
-  if (u.protocol !== "https:" && u.protocol !== "http:") return false;
-  if (u.username || u.password) return false;
-  const hostname = u.hostname.toLowerCase();
-  if (!hostname) return false;
-  // Block hostnames that resolve/refer to loopback, link-local, private, or metadata endpoints
-  if (
-    hostname === "localhost" ||
-    hostname.endsWith(".localhost") ||
-    hostname.endsWith(".local") ||
-    hostname.endsWith(".internal")
-  ) {
-    return false;
-  }
-  // IPv6 loopback / unspecified / link-local / unique-local
-  if (hostname.startsWith("[")) {
-    const v6 = hostname.slice(1, -1);
-    if (v6 === "::1" || v6 === "::" || /^fe80:/i.test(v6) || /^fc/i.test(v6) || /^fd/i.test(v6)) {
-      return false;
-    }
-  }
-  // IPv4 literal deny-list (loopback, private, link-local, CGNAT, metadata, broadcast, unspecified)
-  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname);
-  if (v4) {
-    const [a, b] = [Number(v4[1]), Number(v4[2])];
-    if (a === 10) return false;
-    if (a === 127) return false;
-    if (a === 0) return false;
-    if (a === 169 && b === 254) return false; // link-local + AWS/GCP/Azure metadata
-    if (a === 172 && b >= 16 && b <= 31) return false;
-    if (a === 192 && b === 168) return false;
-    if (a === 100 && b >= 64 && b <= 127) return false; // CGNAT
-    if (a >= 224) return false; // multicast + reserved + broadcast
-  }
-  return true;
-}
+export { isSafePublicHttpUrl };
 
 export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -169,6 +132,10 @@ export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
     const request = getRequest();
     const authToken = request?.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || undefined;
 
+    // Queue a real screenshot render early so it is ready by the time we need
+    // a hero background or per-beat capture visuals.
+    warmScreenshot(normalizedUrl);
+
     // 1) Playwright browser extract via capture API (FC worker)
     const browserExtract = await requestBrowserExtract(normalizedUrl, authToken);
     if (browserExtract?.success) {
@@ -179,6 +146,8 @@ export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
       fallback.confidence_flags.push("site_blocked", "blocked_http_403_or_429", "browser_extract_blocked");
       const meta = await fetchBasicMetaFallback(normalizedUrl);
       const merged = meta ? mergeMetaIntoBrandKit(fallback, meta) : fallback;
+      await enrichColorsFromLogo(merged);
+      await Promise.all([attachHeroScreenshot(merged, userId, 14000), persistBrandLogo(merged, userId)]);
       if (!process.env.DASHSCOPE_API_KEY) merged.confidence_flags.push("ai_broll_unavailable");
       return enrichWebsiteBrandKit(merged);
     }
@@ -214,10 +183,22 @@ export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
         }
         const kit = extractBrandKitFromHtml(candidate, html);
         kit.extraction_method = "fetch";
+        // Deep pass: external CSS, CSS variables, theme-color, manifest,
+        // Google Fonts, and the logo ladder. This is what makes the video
+        // actually use the site's own colors and logo without a browser worker.
+        try {
+          const deep = await extractDeepBrandSignals(candidate, html);
+          applyDeepBrandSignals(kit, deep);
+        } catch {
+          kit.confidence_flags.push("deep_extraction_failed");
+        }
+        await enrichColorsFromLogo(kit);
+        await Promise.all([attachHeroScreenshot(kit, userId, 14000), persistBrandLogo(kit, userId)]);
         auditBrandKitQuality(kit);
         if (!isCaptureApiConfigured()) kit.confidence_flags.push("capture_api_unconfigured");
         if (!/html|text|xml/i.test(contentType)) kit.confidence_flags.push("content_type_not_html");
         if (!process.env.DASHSCOPE_API_KEY) kit.confidence_flags.push("ai_broll_unavailable");
+        warmCapturePages(kit);
         return enrichWebsiteBrandKit(kit);
       } catch (err) {
         failures.push(`${candidate} ${err instanceof Error ? err.message : String(err)}`);
@@ -228,6 +209,8 @@ export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
       const kit = buildFallbackBrandKit(normalizedUrl, failures);
       if (sawBlocked) kit.confidence_flags.push("site_blocked", "blocked_http_403_or_429");
       const merged = mergeMetaIntoBrandKit(kit, meta);
+      await enrichColorsFromLogo(merged);
+      await Promise.all([attachHeroScreenshot(merged, userId, 14000), persistBrandLogo(merged, userId)]);
       if (!process.env.DASHSCOPE_API_KEY) merged.confidence_flags.push("ai_broll_unavailable");
       return enrichWebsiteBrandKit(merged);
     }
@@ -236,9 +219,123 @@ export const extractWebsiteBrandKit = createServerFn({ method: "POST" })
     if (sawBlocked) fallback.confidence_flags.push("site_blocked", "blocked_http_403_or_429");
     if (!isCaptureApiConfigured()) fallback.confidence_flags.push("capture_api_unconfigured");
     if (!process.env.DASHSCOPE_API_KEY) fallback.confidence_flags.push("ai_broll_unavailable");
+    await enrichColorsFromLogo(fallback);
+    await Promise.all([attachHeroScreenshot(fallback, userId, 14000), persistBrandLogo(fallback, userId)]);
     auditBrandKitQuality(fallback);
     return enrichWebsiteBrandKit(fallback);
   });
+
+/**
+ * Merge deep-extracted signals into the kit, preferring real signals over the
+ * weak raw-HTML regex results.
+ */
+function applyDeepBrandSignals(kit: WebsiteBrandKit, deep: DeepBrandSignals) {
+  if (deep.colors.length >= 2) {
+    kit.brand.primary_color_hex = deep.colors[0] || kit.brand.primary_color_hex;
+    kit.brand.secondary_color_hex = deep.colors[1] || kit.brand.secondary_color_hex;
+    kit.brand.accent_color_hex = deep.colors[2] || deep.colors[0] || kit.brand.accent_color_hex;
+    kit.brand.neutral_color_hex = deep.colors[3] || kit.brand.neutral_color_hex;
+    kit.confidence_flags = kit.confidence_flags.filter((flag) => flag !== "color_extraction_low_confidence");
+    kit.confidence_flags.push("site_colors_extracted");
+  } else if (deep.themeColor) {
+    kit.brand.primary_color_hex = deep.themeColor;
+    kit.confidence_flags.push("theme_color_only");
+  }
+  if (deep.fonts.length > 0) {
+    kit.brand.heading_typeface = deep.fonts[0];
+    kit.brand.body_typeface = deep.fonts[1] || deep.fonts[0];
+    kit.confidence_flags.push("site_fonts_extracted");
+  }
+  if (deep.fontUrls.length > 0) {
+    kit.font_urls = deep.fontUrls;
+  }
+  if (deep.logoUrl) {
+    // Deep ladder logos (header <img>, JSON-LD, apple-touch-icon) beat the
+    // og:image guess from raw HTML parsing.
+    const deepLogoIsStrong = deep.logoSource !== "favicon_service";
+    if (deepLogoIsStrong || !kit.brand.logo_asset_path) {
+      kit.brand.logo_asset_path = deep.logoUrl;
+    }
+    kit.confidence_flags = kit.confidence_flags.filter((flag) => flag !== "no_logo_detected");
+    kit.confidence_flags.push(`logo_${deep.logoSource || "detected"}`);
+  }
+  if (!kit.hero_screenshot_url && deep.ogImage && !/logo|icon/i.test(deep.ogImage)) {
+    kit.hero_screenshot_url = deep.ogImage;
+  }
+  return kit;
+}
+
+/**
+ * When neither the page nor its CSS exposed a real (chromatic) brand color —
+ * common with CSS-in-JS apps — pull the dominant colors out of the logo
+ * image itself. The logo always carries the brand color.
+ */
+async function enrichColorsFromLogo(kit: WebsiteBrandKit) {
+  const current = [kit.brand.primary_color_hex, kit.brand.secondary_color_hex, kit.brand.accent_color_hex];
+  if (kitHasChromaticColor(current)) return;
+  const logo = kit.brand.logo_asset_path;
+  if (!logo || logo.startsWith("data:")) return;
+  try {
+    const dominant = await extractDominantLogoColors(logo);
+    if (dominant.length === 0) return;
+    kit.brand.primary_color_hex = dominant[0];
+    kit.brand.accent_color_hex = dominant[1] || dominant[0];
+    kit.confidence_flags = kit.confidence_flags.filter((flag) => flag !== "color_extraction_low_confidence");
+    kit.confidence_flags.push("logo_colors_extracted");
+  } catch {
+    // logo color extraction is best-effort
+  }
+}
+
+/**
+ * Re-host the logo on Supabase Storage so the Remotion export (which needs
+ * CORS-clean images) and previews render it reliably.
+ */
+async function persistBrandLogo(kit: WebsiteBrandKit, userId: string) {
+  const logo = kit.brand.logo_asset_path;
+  if (!logo || logo.startsWith("data:")) return;
+  const hosted = await persistRemoteImage({
+    url: logo,
+    userId,
+    projectId: `brand-${Date.now()}`,
+    beatId: "logo",
+    kind: "logo",
+  });
+  if (hosted) kit.brand.logo_asset_path = hosted;
+}
+
+/**
+ * Queue screenshot renders for the capture-worthy pages so the per-beat
+ * screenshot fallback is usually ready by the time clip generation runs.
+ */
+function warmCapturePages(kit: WebsiteBrandKit) {
+  const pages = kit.site_map.filter((page) => page.capture_worthy).slice(0, 4);
+  for (const page of pages) {
+    warmScreenshot(page.page);
+  }
+}
+
+/**
+ * Attach a real homepage screenshot as the hero background. warmScreenshot()
+ * has already queued the render, so this usually resolves within the budget.
+ */
+async function attachHeroScreenshot(kit: WebsiteBrandKit, userId: string, budgetMs: number) {
+  try {
+    const heroUrl = await getScreenshotImageUrl({
+      url: kit.source_url,
+      userId,
+      projectId: `brand-${Date.now()}`,
+      beatId: "hero",
+      budgetMs,
+    });
+    if (heroUrl) {
+      kit.hero_screenshot_url = heroUrl;
+      kit.confidence_flags.push("hero_screenshot_captured");
+    }
+  } catch {
+    // hero background is optional
+  }
+}
 
 export function buildWebsiteVideoPlan({
   brandKit,
@@ -369,11 +466,16 @@ function extractBrandKitFromHtml(url: string, html: string): WebsiteBrandKit {
   const colors = extractColors(html);
   const fonts = extractFonts(html);
   const navLinks = extractNavLinks(url, html);
+  // Prefer explicit logo images over icons; og:image is a social banner, not
+  // a logo, so it is only a last resort here (deep extraction refines this).
   const logo =
-    absolutizeUrl(url, matchFirst(html, /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)) ||
-    absolutizeUrl(url, matchFirst(html, /<img[^>]+(?:class=["'][^"']*logo[^"']*["'][^>]+src|src)=["']([^"']+)["']/i)) ||
+    absolutizeUrl(url, matchFirst(html, /<img[^>]+class=["'][^"']*logo[^"']*["'][^>]+src=["']([^"']+)["']/i)) ||
+    absolutizeUrl(url, matchFirst(html, /<img[^>]+src=["']([^"']+)["'][^>]+class=["'][^"']*logo[^"']*["']/i)) ||
     absolutizeUrl(url, matchFirst(html, /<img[^>]+alt=["'][^"']*logo[^"']*["'][^>]+src=["']([^"']+)["']/i)) ||
-    absolutizeUrl(url, matchFirst(html, /<link[^>]+rel=["'](?:icon|shortcut icon|apple-touch-icon)["'][^>]+href=["']([^"']+)["']/i));
+    absolutizeUrl(url, matchFirst(html, /<img[^>]+src=["']([^"']*logo[^"']*)["']/i)) ||
+    absolutizeUrl(url, matchFirst(html, /<link[^>]+rel=["']apple-touch-icon[^"']*["'][^>]+href=["']([^"']+)["']/i)) ||
+    absolutizeUrl(url, matchFirst(html, /<link[^>]+rel=["'](?:icon|shortcut icon)["'][^>]+href=["']([^"']+)["']/i)) ||
+    faviconServiceUrl(url, 128);
   const features = extractFeatureCandidates(text, description);
   const flags: string[] = [];
   if (colors.length < 3) flags.push("color_extraction_low_confidence");
@@ -448,7 +550,8 @@ async function buildBrandKitFromBrowserExtract(
       neutral_color_hex: colors[3] || "#0a0a0a",
       heading_typeface: fonts[0] || "Inter",
       body_typeface: fonts[1] || fonts[0] || "Inter",
-      logo_asset_path: extract.logo_url || heroUrl || null,
+      // Never use the hero screenshot as a logo — favicon service is a better last resort.
+      logo_asset_path: extract.logo_url || faviconServiceUrl(url, 128),
       voice_tone: inferVoiceTone(text),
     },
     product: {
@@ -467,6 +570,8 @@ async function buildBrandKitFromBrowserExtract(
     font_urls: extract.font_urls,
   };
   if (!isCaptureApiConfigured()) kit.confidence_flags.push("capture_api_unconfigured");
+  await enrichColorsFromLogo(kit);
+  await persistBrandLogo(kit, userId);
   return auditBrandKitQuality(kit);
 }
 
@@ -484,7 +589,8 @@ function buildFallbackBrandKit(url: string, failures: string[]): WebsiteBrandKit
       neutral_color_hex: "#0a0a0a",
       heading_typeface: "Inter",
       body_typeface: "Inter",
-      logo_asset_path: null,
+      // Google's favicon service resolves even when the site blocks us.
+      logo_asset_path: faviconServiceUrl(url, 128),
       voice_tone: "clear, confident, product-focused",
     },
     product: {

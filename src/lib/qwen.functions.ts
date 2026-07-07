@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { clampSceneCount, normalizeSceneDuration } from "./makers-runtime";
+import { clampSceneCount, clampLongformSceneCount, normalizeSceneDuration, normalizeLongformSceneDuration } from "./makers-runtime";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { SceneSpecSchema, type SceneSpec } from "./scene-spec";
 import type { QualityResult } from "./quality-gate";
@@ -253,6 +253,7 @@ export const generateStoryboard = createServerFn({ method: "POST" })
           .max(8)
           .optional()
           .default([]),
+        mode: z.enum(["demo", "longform"]).default("demo"),
       })
       .parse(input),
   )
@@ -260,10 +261,22 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     const key = process.env.DASHSCOPE_API_KEY;
     if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
 
-    const sceneCount = clampSceneCount(data.sceneCount);
-    const sceneSeconds = normalizeSceneDuration(undefined);
+    const isLongform = data.mode === "longform";
+    const sceneCount = isLongform ? clampLongformSceneCount(data.sceneCount) : clampSceneCount(data.sceneCount);
+    const sceneSeconds = isLongform
+      ? normalizeLongformSceneDuration(undefined)
+      : normalizeSceneDuration(undefined);
+    const durationRule = isLongform
+      ? `Each scene is designed as an ~${sceneSeconds}-second dramatic shot with on-camera dialogue. The full film must be at least 30 seconds total across ${sceneCount} scenes.`
+      : `Each scene is designed as a ${sceneSeconds}-second dramatic shot and the full hackathon demo must stay under 15 seconds.`;
+    const spokenLineRule = isLongform
+      ? `- spoken_line: 20-28 words of natural English dialogue written for on-camera delivery (~8-9 seconds of speech). Same lead character speaks in every scene.`
+      : `- spoken_line: 4-12 words, natural dramatic dialogue that fits a ${sceneSeconds}-second scene.`;
+    const videoPromptSuffix = isLongform
+      ? `single continuous ${sceneSeconds}-second cinematic shot, film grain, shallow depth of field, 35mm, dramatic lighting, high detail, natural motion, real character performance, lip-sync ready`
+      : `single continuous four-second cinematic shot, film grain, shallow depth of field, 35mm, dramatic lighting, high detail, natural motion, real character performance`;
     const system = [
-      `You are Makers, an AI showrunner + screenwriter + professional film editor trained in Adobe Premiere Pro, After Effects, DaVinci Resolve, cinematic camera blocking, color grading, VFX, SFX, Foley, trailer pacing, and short-drama continuity. Given a logline, produce a concise cinematic short film script and shot-list of EXACTLY ${sceneCount} scenes. Each scene is designed as a ${sceneSeconds}-second dramatic shot and the full hackathon demo must stay under 15 seconds.`,
+      `You are Makers, an AI showrunner + screenwriter + professional film editor trained in Adobe Premiere Pro, After Effects, DaVinci Resolve, cinematic camera blocking, color grading, VFX, SFX, Foley, trailer pacing, and short-drama continuity. Given a logline, produce a concise cinematic short film script and shot-list of EXACTLY ${sceneCount} scenes. ${durationRule}`,
       `HARD RULES:`,
       `- Real short FILM, not narrated slideshow. NEVER use a narrator or voice-over. Every spoken line is an in-world character speaking on screen (no "Narrator:" ever).`,
       `- Reuse the same 2-3 named characters across scenes so the audience follows them.`,
@@ -274,8 +287,8 @@ export const generateStoryboard = createServerFn({ method: "POST" })
       `- Assign each scene a language, voice_tone, and pitch (low/medium/high) suitable for the character and emotion.`,
       `- Add clean bgm and sfx cues for each scene: realistic ambience, Foley, impacts, transitions, room tone, emotional score.`,
       `- Add professional editing_notes and color_grade for every scene: match cut, J-cut/L-cut, whip pan, speed ramp, rack focus, chromatic VFX, teal-orange grade, bleach bypass, warm film print, etc.`,
-      `- video_prompt is a cinematic ${sceneSeconds}-second shot description (~55 words): camera movement (dolly in / tracking / handheld / crane / static close-up), lens & lighting, exact location, subject action, character continuity, mood, environment ambience, VFX/SFX context, color grade. End every video_prompt with: "single continuous four-second cinematic shot, film grain, shallow depth of field, 35mm, dramatic lighting, high detail, natural motion, real character performance".`,
-      `- spoken_line: 4-12 words, natural dramatic dialogue that fits a ${sceneSeconds}-second scene.`,
+      `- video_prompt is a cinematic ${sceneSeconds}-second shot description (~55 words): camera movement (dolly in / tracking / handheld / crane / static close-up), lens & lighting, exact location, subject action, character continuity, mood, environment ambience, VFX/SFX context, color grade. End every video_prompt with: "${videoPromptSuffix}".`,
+      spokenLineRule,
       `- Long rich logline (3-4 sentences) and detailed tone.`,
       data.referenceImages.length
         ? `REFERENCE IMAGES PROVIDED: The user uploaded ${data.referenceImages.length} character/style reference image(s): ${data.referenceImages.map((r, i) => `#${i + 1} ${r.name}${r.description ? ` (${r.description})` : ""}`).join("; ")}. Keep characters, wardrobe, setting, and visual identity consistent with these references. Put the relevant reference guidance in reference_image_direction.`
@@ -363,12 +376,31 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     }
     parsed.scenes = parsed.scenes.slice(0, sceneCount).map((scene) => ({
       ...scene,
-      duration_seconds: normalizeSceneDuration(scene.duration_seconds),
+      duration_seconds: isLongform
+        ? normalizeLongformSceneDuration(scene.duration_seconds)
+        : normalizeSceneDuration(scene.duration_seconds),
     }));
     return parsed;
   });
 
 /** Submit a text-to-video or image-to-video task to Qwen Cloud (async). Returns task_id. */
+const VIDEO_MODELS = [
+  "happyhorse-1.1-t2v",
+  "wan2.2-t2v-plus",
+  "happyhorse-1.1-i2v",
+  "wan2.2-i2v-plus",
+  "wan2.6-i2v",
+  "wan2.6-i2v-flash",
+] as const;
+
+function isWan26VideoModel(model: string) {
+  return model.startsWith("wan2.6-");
+}
+
+function isImageToVideoModel(model: string) {
+  return model.includes("-i2v");
+}
+
 export const submitVideo = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) =>
@@ -376,20 +408,48 @@ export const submitVideo = createServerFn({ method: "POST" })
       .object({
         prompt: z.string().min(3).max(4000),
         size: z.string().default("1280*720"),
-        model: z
-          .enum(["happyhorse-1.1-t2v", "wan2.2-t2v-plus", "happyhorse-1.1-i2v", "wan2.2-i2v-plus"])
-          .default("happyhorse-1.1-t2v"),
+        model: z.enum(VIDEO_MODELS).default("happyhorse-1.1-t2v"),
         imageUrl: safeMediaUrl.optional(),
+        audioUrl: safeMediaUrl.optional(),
+        durationSeconds: z.number().int().min(2).max(15).optional(),
+        resolution: z.enum(["480P", "720P", "1080P"]).default("720P"),
       })
       .parse(input),
   )
   .handler(async ({ data }): Promise<{ task_id: string }> => {
     const key = process.env.DASHSCOPE_API_KEY;
     if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
-    const isImageToVideo = data.model.includes("-i2v");
+    const isWan26 = isWan26VideoModel(data.model);
+    const isImageToVideo = isImageToVideoModel(data.model);
     if (isImageToVideo && !data.imageUrl) {
       throw new Error(`${data.model} requires a storyboard still image`);
     }
+    if (isWan26 && data.audioUrl && !data.imageUrl) {
+      throw new Error(`${data.model} lip-sync requires both image and audio URLs`);
+    }
+
+    const body = isWan26
+      ? {
+          model: data.model,
+          input: {
+            prompt: data.prompt,
+            img_url: data.imageUrl,
+            ...(data.audioUrl ? { audio_url: data.audioUrl } : {}),
+          },
+          parameters: {
+            resolution: data.resolution || process.env.QWEN_VIDEO_RESOLUTION || "720P",
+            duration: data.durationSeconds ?? 10,
+            prompt_extend: true,
+            watermark: false,
+          },
+        }
+      : {
+          model: data.model,
+          input: isImageToVideo
+            ? { prompt: data.prompt, img_url: data.imageUrl }
+            : { prompt: data.prompt },
+          parameters: { size: data.size },
+        };
 
     const res = await fetchWithTimeout(VIDEO_SUBMIT_URL, {
       method: "POST",
@@ -398,13 +458,7 @@ export const submitVideo = createServerFn({ method: "POST" })
         "Content-Type": "application/json",
         "X-DashScope-Async": "enable",
       },
-      body: JSON.stringify({
-        model: data.model,
-        input: isImageToVideo
-          ? { prompt: data.prompt, img_url: data.imageUrl }
-          : { prompt: data.prompt },
-        parameters: { size: data.size },
-      }),
+      body: JSON.stringify(body),
     }, 60_000, `video submit ${data.model}`);
     if (!res.ok) {
       const t = await res.text();
@@ -443,6 +497,40 @@ export const pollVideo = createServerFn({ method: "POST" })
     };
     const status = json.output?.task_status ?? "UNKNOWN";
     return { status, video_url: json.output?.video_url, error: json.output?.message };
+  });
+
+const VOICE_BUCKET = "website-assets";
+
+/** Upload TTS audio to Supabase storage so wan2.6-i2v can fetch a public audio_url. */
+export const uploadVoiceAudio = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) =>
+    z
+      .object({
+        project_id: z.string().min(1).max(128),
+        scene_id: z.string().min(1).max(128),
+        audio_data_url: z.string().min(32).max(12_000_000),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data, context }): Promise<{ audio_url: string }> => {
+    const match = data.audio_data_url.match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) throw new Error("audio_data_url must be a base64 data URL");
+    const contentType = match[1] || "audio/mpeg";
+    const base64 = match[2];
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const ext = contentType.includes("wav") ? "wav" : "mp3";
+    const path = `${context.userId}/${data.project_id}/voice/${data.scene_id}-${Date.now()}.${ext}`;
+    const { error } = await supabaseAdmin.storage.from(VOICE_BUCKET).upload(path, bytes, {
+      contentType,
+      upsert: true,
+    });
+    if (error) throw new Error(`Voice upload failed: ${error.message}`);
+    const { data: publicData } = supabaseAdmin.storage.from(VOICE_BUCKET).getPublicUrl(path);
+    if (!publicData.publicUrl) throw new Error("Voice upload succeeded but no public URL returned");
+    return { audio_url: publicData.publicUrl };
   });
 
 /** Generate character voiceover for a dialogue line.
