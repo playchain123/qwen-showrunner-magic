@@ -24,6 +24,7 @@ export type LibraryScene = {
   regionalCritique?: Record<string, unknown>;
   pitch?: "low" | "medium" | "high";
   bgm?: string;
+  bgmUrl?: string;
   sfx?: string;
   durationSeconds?: number;
   startTime?: number;
@@ -53,6 +54,9 @@ export type LibraryProject = {
   captions?: Array<Record<string, unknown>>;
   finalTimeline?: Record<string, unknown>;
   sceneAudio?: string[];
+  scoreMusicUrl?: string;
+  scoreMusicMood?: string;
+  scoreMusicLabel?: string;
   visualBible?: Record<string, unknown>;
   characterBible?: Record<string, unknown>;
   qualityScores?: Array<Record<string, unknown>>;
@@ -133,6 +137,8 @@ function slimLibraryScene(scene: LibraryScene): LibraryScene {
     startTime: scene.startTime,
     endTime: scene.endTime,
     captions: scene.captions,
+    bgm: scene.bgm,
+    bgmUrl: scene.bgmUrl,
     visual: scene.visual,
     editingNotes: scene.editingNotes,
     colorGrade: scene.colorGrade,
@@ -170,6 +176,9 @@ export function slimWebsiteProjectForStorage(project: LibraryProject): LibraryPr
     captions: project.captions,
     finalTimeline: project.finalTimeline,
     sceneAudio: project.sceneAudio,
+    scoreMusicUrl: project.scoreMusicUrl,
+    scoreMusicMood: project.scoreMusicMood,
+    scoreMusicLabel: project.scoreMusicLabel,
     visualBible: project.visualBible,
     characterBible: project.characterBible,
     qualityScores: project.qualityScores,
@@ -363,6 +372,9 @@ function normalizeLibraryProject(raw: Record<string, unknown>): LibraryProject |
     captions: Array.isArray(raw.captions) ? raw.captions.filter(isRecord) : undefined,
     finalTimeline: isRecord(raw.finalTimeline) ? raw.finalTimeline : undefined,
     sceneAudio: Array.isArray(raw.sceneAudio) ? raw.sceneAudio.filter((url): url is string => typeof url === "string") : undefined,
+    scoreMusicUrl: stringField(raw.scoreMusicUrl),
+    scoreMusicMood: stringField(raw.scoreMusicMood),
+    scoreMusicLabel: stringField(raw.scoreMusicLabel),
     visualBible: isRecord(raw.visualBible) ? raw.visualBible : undefined,
     characterBible: isRecord(raw.characterBible) ? raw.characterBible : undefined,
     qualityScores: Array.isArray(raw.qualityScores) ? raw.qualityScores.filter(isRecord) : undefined,
@@ -407,6 +419,7 @@ function normalizeScenes(value: unknown): LibraryScene[] {
     regionalCritique: isRecord(scene.regionalCritique) ? scene.regionalCritique : undefined,
     pitch: scene.pitch === "low" || scene.pitch === "medium" || scene.pitch === "high" ? scene.pitch : undefined,
     bgm: stringField(scene.bgm),
+    bgmUrl: stringField(scene.bgmUrl),
     sfx: stringField(scene.sfx),
     durationSeconds: typeof scene.durationSeconds === "number" ? scene.durationSeconds : undefined,
     startTime: typeof scene.startTime === "number" ? scene.startTime : undefined,

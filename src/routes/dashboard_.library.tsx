@@ -6,6 +6,8 @@ import { Sidebar, TopBar } from "./dashboard";
 import { WebsiteBeatPreview } from "@/components/website-beat-preview";
 import { readLibraryProjects, writeSceneReview, type LibraryProject, type LibraryProjectType, type LibraryScene } from "@/lib/library";
 import type { CompiledMotionSpec } from "@/lib/website-render-pipeline";
+import { concatClips } from "@/lib/ffmpeg-post";
+import { buildScoreBrief, pickBgm } from "@/lib/free-sounds";
 
 export const Route = createFileRoute("/dashboard_/library")({
   ssr: false,
@@ -19,6 +21,8 @@ function LibraryPage() {
   const [projects, setProjects] = useState<LibraryProject[]>([]);
   const [filter, setFilter] = useState<LibraryFilter>("all");
   const [playing, setPlaying] = useState<{ project: LibraryProject; idx: number } | null>(null);
+  const [downloadingProjectId, setDownloadingProjectId] = useState<string | null>(null);
+  const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
 
   const counts = useMemo(
     () => ({
@@ -85,6 +89,39 @@ function LibraryPage() {
     );
   }
 
+  async function downloadProjectVideo(project: LibraryProject) {
+    setDownloadingProjectId(project.id);
+    setDownloadNotice(null);
+    try {
+      if (project.finalVideoUrl) {
+        downloadUrl(project.finalVideoUrl, `${slugify(project.title)}.mp4`);
+        setDownloadNotice(`Downloading ${project.title} master MP4.`);
+        return;
+      }
+      const scenes = getProjectScenes(project);
+      const clipUrls = (project.sceneVideos?.length ? project.sceneVideos : scenes.map((scene) => scene.videoUrl || scene.clipUrl))
+        .filter((url): url is string => Boolean(url));
+      if (clipUrls.length === 0) {
+        setDownloadNotice("No rendered MP4 clips are available for this project yet.");
+        return;
+      }
+      if (clipUrls.length === 1) {
+        downloadUrl(clipUrls[0], `${slugify(project.title)}.mp4`);
+        setDownloadNotice(`Downloading ${project.title} source MP4.`);
+        return;
+      }
+      setDownloadNotice(`Building ${project.title} MP4 from ${clipUrls.length} clips. This can take a minute.`);
+      const stitchedUrl = await concatClips(clipUrls);
+      downloadUrl(stitchedUrl, `${slugify(project.title)}.mp4`);
+      window.setTimeout(() => URL.revokeObjectURL(stitchedUrl), 10_000);
+      setDownloadNotice(`Downloading ${project.title} stitched MP4.`);
+    } catch (err) {
+      setDownloadNotice(err instanceof Error ? err.message : "Could not export MP4 for this project.");
+    } finally {
+      setDownloadingProjectId(null);
+    }
+  }
+
   return (
     <div className="min-h-screen flex bg-black text-foreground">
       <Sidebar />
@@ -115,6 +152,11 @@ function LibraryPage() {
               </button>
             ))}
           </div>
+          {downloadNotice && (
+            <div className="mb-5 rounded-lg border border-white/10 bg-white/[0.04] px-4 py-2 text-xs text-white/65">
+              {downloadNotice}
+            </div>
+          )}
 
           {projects.length === 0 ? (
             <div className="text-white/50 text-sm border border-white/10 rounded-xl p-10 text-center">
@@ -177,8 +219,16 @@ function LibraryPage() {
                           <button onClick={() => exportTimeline(project)} className="hover:text-white" title="Export timeline">
                             <Scissors className="h-3.5 w-3.5" />
                           </button>
+                          <button
+                            onClick={() => void downloadProjectVideo(project)}
+                            disabled={downloadingProjectId === project.id}
+                            className="inline-flex items-center gap-1 rounded-full border border-white/10 px-2 py-0.5 text-[10px] hover:border-white/30 hover:text-white disabled:opacity-50"
+                            title={downloadingProjectId === project.id ? "Preparing MP4" : "Download MP4 video"}
+                          >
+                            <Download className="h-3 w-3" /> {downloadingProjectId === project.id ? "Prep" : "MP4"}
+                          </button>
                           <button onClick={() => exportProject(project)} className="hover:text-white" title="Export project">
-                            <Download className="h-3.5 w-3.5" />
+                            <span className="text-[11px] leading-none">JSON</span>
                           </button>
                           <button onClick={() => remove(project.id)} className="hover:text-red-400" title="Delete">
                             <Trash2 className="h-3.5 w-3.5" />
@@ -230,8 +280,17 @@ function LibraryProjectPlayer({
   const [reviewed, setReviewed] = useState<string>("");
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const bgmRef = useRef<HTMLAudioElement>(null);
   const fallbackRef = useRef<number | null>(null);
   const isWebsiteScene = project.type === "website_video";
+  const bgmUrl = project.scoreMusicUrl || scene?.bgmUrl || pickBgm(buildScoreBrief([
+    project.title,
+    project.tone,
+    project.adTone,
+    project.productPitch,
+    scene?.bgm,
+    scene?.visual,
+  ]));
 
   useEffect(() => {
     const clip = scene?.videoUrl || scene?.clipUrl;
@@ -253,12 +312,20 @@ function LibraryProjectPlayer({
       void audio.play().catch(() => undefined);
     }
 
+    if (bgmRef.current && bgmUrl) {
+      bgmRef.current.src = bgmUrl;
+      bgmRef.current.currentTime = 0;
+      bgmRef.current.volume = 0.22;
+      bgmRef.current.muted = muted;
+      void bgmRef.current.play().catch(() => undefined);
+    }
+
     if (fallbackRef.current) window.clearTimeout(fallbackRef.current);
     fallbackRef.current = window.setTimeout(onNext, Math.max(5, scene?.durationSeconds || 7) * 1000 + 1200);
     return () => {
       if (fallbackRef.current) window.clearTimeout(fallbackRef.current);
     };
-  }, [scene?.videoUrl, scene?.clipUrl, scene?.audioUrl, scene?.durationSeconds, onNext, muted, isWebsiteScene]);
+  }, [scene?.videoUrl, scene?.clipUrl, scene?.audioUrl, scene?.durationSeconds, bgmUrl, onNext, muted, isWebsiteScene]);
 
   if (!scene) return null;
 
@@ -317,6 +384,7 @@ function LibraryProjectPlayer({
           </>
         )}
         {!isWebsiteScene && scene.audioUrl && <audio ref={audioRef} src={scene.audioUrl} preload="auto" muted={muted} />}
+        {bgmUrl && <audio ref={bgmRef} src={bgmUrl} preload="auto" loop muted={muted} />}
         {project.type === "website_video" && scene.assetSource === "fallback" && (
           <div className="absolute top-32 left-4 z-10 rounded-full border border-amber-300/30 bg-amber-400/15 px-3 py-1 text-[11px] font-medium text-amber-200">
             Using fallback visual
@@ -432,6 +500,17 @@ function downloadText(filename: string, text: string, type: string) {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+function downloadUrl(url: string, filename: string) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  a.target = "_blank";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 
 function slugify(value: string) {

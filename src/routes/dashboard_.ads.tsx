@@ -4,7 +4,7 @@ import { ArrowUp, Upload, Film, Play, Download, Copy, Pencil } from "lucide-reac
 import { Sidebar, TopBar, MakersMark } from "./dashboard";
 import { supabase } from "@/integrations/supabase/client";
 import { generateStoryboard, submitVideo, pollVideo, generateVoice, generateSceneImage } from "@/lib/qwen.functions";
-import { pickBgm } from "@/lib/free-sounds";
+import { buildScoreBrief, pickBgm, pickScoreProfile } from "@/lib/free-sounds";
 import { saveLibraryProject } from "@/lib/library";
 import { MODEL_STRATEGY, buildHackathonAgentTrace, HACKATHON_ARCHITECTURE_SUMMARY } from "@/lib/model-strategy";
 import {
@@ -47,6 +47,7 @@ type AdShot = {
   durationSeconds: number;
   colorGrade?: string;
   bgm?: string;
+  bgmUrl?: string;
 };
 type VideoModel = "happyhorse-1.1-t2v" | "wan2.2-t2v-plus" | "happyhorse-1.1-i2v" | "wan2.2-i2v-plus";
 type VideoAttempt = { model: VideoModel; imageUrl?: string };
@@ -138,6 +139,14 @@ function CinematicAds() {
         scenes: repairedScenes,
       });
       const productContinuity = formatProductContinuity(visualBible);
+      const scoreProfile = pickScoreProfile(buildScoreBrief([
+        brand,
+        pitch,
+        cta,
+        toneObj.label,
+        toneObj.desc,
+        story.scenes.map((scene) => `${scene.bgm || ""} ${scene.visual || ""}`).join(" "),
+      ]));
       const initShots: AdShot[] = story.scenes.map((s, i) => ({
         title: `#${i + 1} ${s.title}`,
         visual: s.visual,
@@ -146,7 +155,8 @@ function CinematicAds() {
         done: false,
         durationSeconds: normalizeSceneDuration(s.duration_seconds),
         colorGrade: s.color_grade,
-        bgm: s.bgm,
+        bgm: `${scoreProfile.label}${s.bgm ? ` - ${s.bgm}` : ""}`,
+        bgmUrl: scoreProfile.url,
       }));
       setShots(initShots);
       setStatus(`Rendering ${initShots.length} ad shots — product locked as reference…`);
@@ -240,6 +250,9 @@ function CinematicAds() {
           finalVideoUrl: readyShots[0].videoUrl,
           sceneVideos: readyShots.map((shot) => shot.videoUrl).filter((url): url is string => Boolean(url)),
           durationSeconds: finalShots.reduce((sum, shot) => sum + (shot.durationSeconds || 0), 0),
+          scoreMusicUrl: scoreProfile.url,
+          scoreMusicMood: scoreProfile.mood,
+          scoreMusicLabel: scoreProfile.label,
           brandName: brand.trim(),
           productPitch: pitch.trim(),
           cta: cta.trim(),
@@ -260,6 +273,7 @@ function CinematicAds() {
             character: brand.trim(),
             shotType: "cinematic ad shot",
             bgm: shot.bgm,
+            bgmUrl: shot.bgmUrl,
             durationSeconds: shot.durationSeconds,
             colorGrade: shot.colorGrade,
             agentTrace: buildHackathonAgentTrace({
@@ -280,6 +294,8 @@ function CinematicAds() {
             visual: shot.visual,
             spokenLine: shot.spokenLine,
             durationSeconds: shot.durationSeconds,
+            bgm: shot.bgm,
+            bgmUrl: shot.bgmUrl,
             colorGrade: shot.colorGrade,
           })),
           metadata: {
@@ -292,6 +308,9 @@ function CinematicAds() {
             }),
             tone,
             toneDescription: toneObj.desc,
+            scoreMusicUrl: scoreProfile.url,
+            scoreMusicMood: scoreProfile.mood,
+            scoreMusicLabel: scoreProfile.label,
             visualBible,
             compiledReferences,
             assets: assets.map((asset) => ({ kind: asset.kind, name: asset.name })),
@@ -491,7 +510,7 @@ function AdPlayer({ shots, brand, cta, tone, onClose }: { shots: AdShot[]; brand
   const [downloading, setDownloading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const recRef = useRef<MediaRecorder | null>(null);
-  const bgmUrl = pickBgm(tone);
+  const bgmUrl = ready.find((shot) => shot.bgmUrl)?.bgmUrl || pickBgm(buildScoreBrief([brand, tone, ready[0]?.bgm, ready[0]?.visual]));
   const current = ready[idx];
 
   function advance() {
@@ -554,9 +573,6 @@ function AdPlayer({ shots, brand, cta, tone, onClose }: { shots: AdShot[]; brand
   return (
     <div className="fixed inset-0 z-50 bg-black">
       <button onClick={onClose} className="absolute top-4 right-4 z-30 text-white/70 hover:text-white text-sm">Close ✕</button>
-      <button onClick={download} disabled={downloading} className="hidden">
-        <Download className="h-3 w-3" /> {downloading ? "Recording…" : "Download .webm"}
-      </button>
       <div className="absolute left-4 right-24 top-12 z-30 flex flex-wrap items-center justify-end gap-2">
         {notice && <span className="mr-auto rounded-full border border-white/10 bg-black/70 px-3 py-1 text-[11px] text-white/70">{notice}</span>}
         <button onClick={() => setIdx(0)} className="rounded-full border border-white/10 bg-black/45 px-3 py-1 text-[11px] text-white/75 hover:bg-white/10">

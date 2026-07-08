@@ -19,7 +19,7 @@ import { routeSceneToVideoModel } from "@/lib/model-router";
 import { compileNegativePrompt } from "@/lib/negative-prompts";
 import { generateSceneWithQualityGate, type QualityResult } from "@/lib/quality-gate";
 import { gradeClip, concatClips } from "@/lib/ffmpeg-post";
-import { pickBgm } from "@/lib/free-sounds";
+import { buildScoreBrief, pickBgm, pickScoreProfile } from "@/lib/free-sounds";
 import { saveLibraryProject } from "@/lib/library";
 import { buildFinalTimeline, normalizeVoiceLine as normalizeCaptionVoiceLine, type CaptionSegment, type FinalTimeline } from "@/lib/captions";
 import { MODEL_STRATEGY, buildHackathonAgentTrace, HACKATHON_ARCHITECTURE_SUMMARY } from "@/lib/model-strategy";
@@ -84,6 +84,7 @@ type StoryCard = {
   voiceTone?: string;
   pitch?: "low" | "medium" | "high";
   bgm?: string;
+  bgmUrl?: string;
   sfx?: string;
   durationSeconds?: number;
   colorGrade?: string;
@@ -290,6 +291,13 @@ function AgentWorkspace() {
 
       // 2. Add cards + submit videos in parallel
       const scenes = story.scenes;
+      const scoreProfile = pickScoreProfile(buildScoreBrief([
+        prompt,
+        story.title,
+        story.logline,
+        story.tone,
+        scenes.map((scene) => `${scene.bgm || ""} ${scene.visual || ""}`).join(" "),
+      ]));
       setCards(
         scenes.map((s, i) => ({
           title: `#${i + 1} ${s.title}`,
@@ -302,7 +310,8 @@ function AgentWorkspace() {
           language: "English",
           voiceTone: s.voice_tone,
           pitch: s.pitch,
-          bgm: s.bgm,
+          bgm: `${scoreProfile.label}${s.bgm ? ` - ${s.bgm}` : ""}`,
+          bgmUrl: scoreProfile.url,
           sfx: s.sfx,
           durationSeconds: durationPerScene,
           colorGrade: s.color_grade,
@@ -613,6 +622,7 @@ function AgentWorkspace() {
           regionalCritique: typeof c.regionalCritique === "object" && c.regionalCritique ? c.regionalCritique as Record<string, unknown> : undefined,
           pitch: c.pitch,
           bgm: c.bgm,
+          bgmUrl: c.bgmUrl,
           sfx: c.sfx,
           durationSeconds: c.durationSeconds,
           startTime: c.startTime,
@@ -636,6 +646,9 @@ function AgentWorkspace() {
           finalVideoUrl: masterFilmUrl ?? finalCards.find((c) => c.videoUrl)?.videoUrl,
           sceneVideos: finalCards.map((c) => c.videoUrl).filter((url): url is string => Boolean(url)),
           sceneAudio: timeline.audioTracks.map((track) => track.audioUrl),
+          scoreMusicUrl: scoreProfile.url,
+          scoreMusicMood: scoreProfile.mood,
+          scoreMusicLabel: scoreProfile.label,
           captions: timeline.captions,
           finalTimeline: timeline,
           targetDurationSeconds: requestedDuration,
@@ -655,6 +668,9 @@ function AgentWorkspace() {
             language: "en",
             captionsActive: true,
             captionGenerationMethod: "scene_fallback",
+            scoreMusicUrl: scoreProfile.url,
+            scoreMusicMood: scoreProfile.mood,
+            scoreMusicLabel: scoreProfile.label,
             characterBibleId: bible.characters[0]?.id,
             characterBible: bible.characters[0],
             finalTimeline: timeline,
@@ -803,9 +819,15 @@ function AgentWorkspace() {
               <MakersMark className="h-5 w-5" />
               <span className="text-sm font-medium">Makers</span>
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 ml-1">Agent</span>
-              <div className="ml-auto flex items-center gap-2 text-xs text-white/50">
+              <button
+                type="button"
+                onClick={() => canPlay && setPlayingFilm(true)}
+                disabled={!canPlay}
+                className="ml-auto flex items-center gap-2 rounded-full border border-white/10 px-3 py-1 text-xs text-white/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                title={canPlay ? "Replay the rendered film preview" : "Replay unlocks after at least one scene is rendered"}
+              >
                 <Play className="h-3 w-3" /> Replay
-              </div>
+              </button>
             </div>
             <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6 flex flex-col justify-end">
               <div className="space-y-6">
@@ -1582,7 +1604,10 @@ function FilmPlayer({
       caption.sceneId === sceneId && globalTime >= caption.startTime && globalTime <= caption.endTime,
     ) || null;
   }, [currentTimelineScene, localTime, playbackTimeline]);
-  const bgmUrl = useMemo(() => pickBgm(cards[0]?.bgm || cards[0]?.colorGrade || title), [cards, title]);
+  const bgmUrl = useMemo(
+    () => cards.find((card) => card.bgmUrl)?.bgmUrl || pickBgm(buildScoreBrief([title, cards[0]?.bgm, cards[0]?.colorGrade])),
+    [cards, title],
+  );
 
   useEffect(() => {
     if (bgmRef.current) bgmRef.current.volume = 0.28;
@@ -1853,15 +1878,6 @@ function FilmPlayer({
       <button onClick={() => setMuted((m) => !m)} className="absolute top-4 right-24 text-white/70 hover:text-white z-30">
         {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
       </button>
-      <button
-        onClick={startRecording}
-        disabled={recording}
-        className="hidden"
-        title="Records the film in real time and downloads a .webm file"
-      >
-        {recording ? "● Recording…" : recordDone ? "Download again" : "⬇ Record & Download"}
-      </button>
-
       <div className="absolute left-4 right-4 top-12 z-30 flex flex-wrap items-center justify-end gap-2">
         {exportNotice && (
           <span className="mr-auto max-w-[48rem] rounded-full border border-white/10 bg-black/70 px-3 py-1 text-[11px] text-white/75 backdrop-blur">
