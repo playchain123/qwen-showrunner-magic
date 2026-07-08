@@ -30,6 +30,7 @@ import { createWebsiteProjectJob, summarizeJobProgress, updateBeatJob } from "@/
 import { Player } from "@remotion/player";
 import { WebsiteMainComposition, websiteCompositionDurationFrames } from "@/remotion/website-main-composition";
 import { exportWebsiteVideoRemotion } from "@/lib/website-remotion-export";
+import { pickWebsiteBgm } from "@/lib/website-saas-video-craft";
 import {
   buildWebsiteStyleProfile,
   readWebsiteSpeakerMemory,
@@ -89,6 +90,10 @@ function WebsiteVideoPage() {
   const urlRef = useRef<HTMLInputElement>(null);
 
   const selectedType = useMemo(() => VIDEO_TYPES.find((type) => type.id === videoType) || VIDEO_TYPES[1], [videoType]);
+  const bgmUrl = useMemo(
+    () => (brandKit ? pickWebsiteBgm(videoType, brandKit.brand.voice_tone) : null),
+    [brandKit, videoType],
+  );
 
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) {
@@ -380,6 +385,7 @@ function WebsiteVideoPage() {
         brandName: brandKit.brand.name,
         colors: brandColors(brandKit),
         beats: buildExportBeats(beats),
+        bgmUrl,
         title: `${brandKit.brand.name} - ${selectedType.label}`,
         onProgress: (progress) => setStatus(`Rendering website video… ${progress}%`),
       });
@@ -788,6 +794,7 @@ function WebsiteVideoPage() {
         <WebsiteVideoPlayer
           brandKit={brandKit}
           beats={beats}
+          bgmUrl={bgmUrl}
           title={`${brandKit.brand.name} - ${selectedType.label}`}
           onClose={() => setShowVideoPlayer(false)}
           onDownload={() => void downloadVideo()}
@@ -906,6 +913,7 @@ function BeatModal({ beat, brandKit, title, onClose }: { beat: BeatPreview; bran
 function WebsiteVideoPlayer({
   brandKit,
   beats,
+  bgmUrl,
   title,
   onClose,
   onDownload,
@@ -913,6 +921,7 @@ function WebsiteVideoPlayer({
 }: {
   brandKit: WebsiteBrandKit;
   beats: BeatPreview[];
+  bgmUrl?: string | null;
   title: string;
   onClose: () => void;
   onDownload: () => void;
@@ -937,8 +946,10 @@ function WebsiteVideoPlayer({
       beats: remotionBeats,
       brandName: brandKit.brand.name,
       colors: brandColors(brandKit),
+      bgmUrl,
+      bgmVolume: 0.16,
     }),
-    [remotionBeats, brandKit],
+    [remotionBeats, brandKit, bgmUrl],
   );
   const durationInFrames = websiteCompositionDurationFrames(remotionBeats);
 
@@ -947,7 +958,7 @@ function WebsiteVideoPlayer({
       <div className="h-14 border-b border-white/10 flex items-center justify-between px-5">
         <div>
           <div className="text-sm font-medium">{title}</div>
-          <div className="text-[11px] text-white/40">Remotion timeline preview — matches export assembly</div>
+          <div className="text-[11px] text-white/40">Remotion timeline — motion graphics, screen captures, VO + background music</div>
         </div>
         <div className="flex items-center gap-2">
           <button disabled={downloading} onClick={onDownload} className="h-9 rounded-md bg-white px-4 text-xs font-medium text-black disabled:opacity-60 flex items-center gap-2">

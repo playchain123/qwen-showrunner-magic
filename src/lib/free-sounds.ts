@@ -22,10 +22,16 @@ export const FREE_BGM: Record<string, string[]> = {
     "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
     "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-16.mp3",
   ],
+  saas: [
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-12.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-14.mp3",
+    "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-17.mp3",
+  ],
 };
 
 export function pickBgm(mood?: string): string {
   const s = (mood || "").toLowerCase();
+  if (/saas|product|launch|promo|upbeat|corporate|startup/.test(s)) return random(FREE_BGM.saas);
   if (/action|chase|fight|battle|epic/.test(s)) return random(FREE_BGM.action);
   if (/emotion|sad|love|tender|hope/.test(s)) return random(FREE_BGM.emotional);
   if (/thriller|dark|dramatic|noir|horror/.test(s)) return random(FREE_BGM.dramatic);

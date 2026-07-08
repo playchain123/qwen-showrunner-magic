@@ -22,12 +22,14 @@ export async function exportWebsiteVideoRemotion({
   brandName,
   colors,
   beats,
+  bgmUrl,
   title,
   onProgress,
 }: {
   brandName: string;
   colors: MotionGraphicColors;
   beats: WebsiteExportBeat[];
+  bgmUrl?: string | null;
   title: string;
   onProgress?: (progress: number) => void;
 }) {
@@ -59,7 +61,7 @@ export async function exportWebsiteVideoRemotion({
     throw new Error(reason);
   }
 
-  const inputProps = { beats: remotionBeats, brandName, colors };
+  const inputProps = { beats: remotionBeats, brandName, colors, bgmUrl, bgmVolume: 0.16 };
   const { getBlob } = await renderMediaOnWeb({
     composition: {
       component: WebsiteMainComposition,

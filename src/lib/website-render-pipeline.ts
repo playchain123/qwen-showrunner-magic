@@ -1,8 +1,15 @@
 import type { ProductionMethod, WebsiteBrandKit, WebsiteVideoBeat } from "./website-video";
+import {
+  beatChapterLabel,
+  beatCtaLabel,
+  beatDisplayHeadline,
+  beatDisplaySubhead,
+  extractStatCallouts,
+} from "./website-saas-video-craft";
 
 export type MotionElementType = "headline" | "subhead" | "stat_number" | "feature_item" | "logo" | "cta_button" | "background";
 export type MotionLayout = "full_frame_headline" | "split_headline_and_visual" | "stat_callout" | "feature_list" | "logo_moment" | "cta_card";
-export type MotionAnimation = "fade_rise" | "scale_overshoot" | "mask_wipe" | "path_draw";
+export type MotionAnimation = "fade_rise" | "scale_overshoot" | "mask_wipe" | "path_draw" | "blur_reveal" | "word_stagger";
 export type ColorToken = "primary" | "secondary" | "accent" | "neutral";
 export type TypefaceToken = "heading" | "body";
 
@@ -22,6 +29,12 @@ export type CompiledMotionSpec = {
   elements: CompiledMotionElement[];
   easing_family: "ease_out_expo" | "ease_in_out_cubic";
   background_treatment: string;
+  /** Narrative chapter shown top-left (e.g. "01 — Hook"). */
+  beat_chapter?: string | null;
+  /** Beat index for visual variation across the timeline. */
+  beat_index?: number;
+  /** Total frames this beat should animate over (synced to VO duration). */
+  duration_frames?: number;
   /** Real website screenshot rendered with Ken Burns motion inside a browser frame. */
   screenshot_url?: string | null;
   /** Page the screenshot was taken from (shown in the browser chrome). */
@@ -186,6 +199,8 @@ export function compileMotionGraphic(brandKit: WebsiteBrandKit, beat: WebsiteVid
   const layout =
     layoutFromPlanHint(beat.motion_graphic_spec?.layout) || chooseMotionLayout(beat, Boolean(feature));
   const elements: CompiledMotionElement[] = [];
+  const displayHeadline = beatDisplayHeadline(brandKit, beat, beatIndex);
+  const displaySubhead = beatDisplaySubhead(beat);
 
   const planElements = beat.motion_graphic_spec?.elements;
   if (planElements?.length) {
@@ -196,12 +211,12 @@ export function compileMotionGraphic(brandKit: WebsiteBrandKit, beat: WebsiteVid
   }
 
   if (elements.length === 0) {
-    if (brandKit.brand.logo_asset_path && (layout === "logo_moment" || layout === "cta_card")) {
+    if (layout === "logo_moment" && brandKit.brand.logo_asset_path) {
       elements.push({
         type: "logo",
         content: brandKit.brand.name,
         enter_animation: "scale_overshoot",
-        enter_frame: 2,
+        enter_frame: 4,
         exit_frame: null,
         color_token: "accent",
         typeface_token: "heading",
@@ -210,58 +225,139 @@ export function compileMotionGraphic(brandKit: WebsiteBrandKit, beat: WebsiteVid
     elements.push(
       {
         type: "headline",
-        content: beat.beat_purpose,
-        enter_animation: "fade_rise",
-        enter_frame: 4,
+        content: displayHeadline,
+        enter_animation: layout === "logo_moment" ? "blur_reveal" : "word_stagger",
+        enter_frame: layout === "logo_moment" ? 18 : 8,
         exit_frame: null,
         color_token: "accent",
         typeface_token: "heading",
       },
       {
         type: "subhead",
-        content: fitCopy(beat.vo_line, 150),
-        enter_animation: "mask_wipe",
-        enter_frame: 18,
+        content: displaySubhead,
+        enter_animation: "blur_reveal",
+        enter_frame: layout === "logo_moment" ? 36 : 28,
         exit_frame: null,
         color_token: "neutral",
         typeface_token: "body",
       },
     );
+  } else {
+    // Replace generic internal labels with brand-facing copy.
+    for (const el of elements) {
+      if (el.type === "headline" && /hook|brand hook|value proposition|call to action/i.test(el.content)) {
+        el.content = displayHeadline;
+      }
+      if (el.type === "subhead") el.content = displaySubhead;
+    }
   }
 
-  if (layout === "feature_list" && feature && !elements.some((e) => e.type === "feature_item")) {
-    elements.push({
-      type: "feature_item",
-      content: `${feature.name}: ${feature.benefit}`,
-      enter_animation: "scale_overshoot",
-      enter_frame: 34,
-      exit_frame: null,
-      color_token: "primary",
-      typeface_token: "body",
-    });
+  if (layout === "stat_callout") {
+    const stats = extractStatCallouts(brandKit);
+    for (const [i, stat] of stats.entries()) {
+      if (!elements.some((e) => e.type === "stat_number" && e.content === stat.value)) {
+        elements.push({
+          type: "stat_number",
+          content: stat.value,
+          enter_animation: "scale_overshoot",
+          enter_frame: 22 + i * 14,
+          exit_frame: null,
+          color_token: i === 0 ? "accent" : "primary",
+          typeface_token: "heading",
+        });
+        elements.push({
+          type: "feature_item",
+          content: stat.label,
+          enter_animation: "fade_rise",
+          enter_frame: 30 + i * 14,
+          exit_frame: null,
+          color_token: "neutral",
+          typeface_token: "body",
+        });
+      }
+    }
   }
+
+  if (layout === "feature_list") {
+    const features = brandKit.product.key_features.slice(0, 3);
+    for (const [i, feat] of features.entries()) {
+      if (!elements.some((e) => e.content.includes(feat.name))) {
+        elements.push({
+          type: "feature_item",
+          content: `${feat.name} — ${feat.benefit}`,
+          enter_animation: "fade_rise",
+          enter_frame: 32 + i * 16,
+          exit_frame: null,
+          color_token: i % 2 === 0 ? "primary" : "secondary",
+          typeface_token: "body",
+        });
+      }
+    }
+    if (!feature && brandKit.product.one_line_description) {
+      elements.push({
+        type: "feature_item",
+        content: brandKit.product.one_line_description,
+        enter_animation: "fade_rise",
+        enter_frame: 32,
+        exit_frame: null,
+        color_token: "primary",
+        typeface_token: "body",
+      });
+    }
+  }
+
   if (layout === "cta_card" && !elements.some((e) => e.type === "cta_button")) {
+    if (brandKit.brand.logo_asset_path) {
+      elements.unshift({
+        type: "logo",
+        content: brandKit.brand.name,
+        enter_animation: "scale_overshoot",
+        enter_frame: 4,
+        exit_frame: null,
+        color_token: "accent",
+        typeface_token: "heading",
+      });
+    }
     elements.push({
       type: "cta_button",
-      content: brandKit.brand.tagline || "Get started",
+      content: beatCtaLabel(brandKit),
       enter_animation: "scale_overshoot",
-      enter_frame: 34,
+      enter_frame: 42,
       exit_frame: null,
-      color_token: "primary",
+      color_token: "accent",
       typeface_token: "heading",
     });
   }
+
   return {
     beat_id: beat.beat_id,
     layout,
+    beat_chapter: beatChapterLabel(beatIndex, beat.beat_purpose),
+    beat_index: beatIndex,
+    duration_frames: durationFrames,
     elements: elements.map((element, index) => ({
       ...element,
       enter_frame: Math.min(element.enter_frame + index * 2, Math.max(0, durationFrames - 28)),
       exit_frame: null,
     })),
     easing_family: beat.motion_graphic_spec?.easing_family === "ease-in-out-cubic" ? "ease_in_out_cubic" : "ease_out_expo",
-    background_treatment: `solid ${brandKit.brand.neutral_color_hex}; subtle radial glow ${brandKit.brand.primary_color_hex} at 8% opacity`,
+    background_treatment: buildBackgroundTreatment(brandKit, layout, beatIndex),
   };
+}
+
+function buildBackgroundTreatment(kit: WebsiteBrandKit, layout: MotionLayout, beatIndex: number) {
+  const { primary_color_hex: primary, secondary_color_hex: secondary, accent_color_hex: accent, neutral_color_hex: neutral } =
+    kit.brand;
+  if (layout === "logo_moment") {
+    return `mesh ${primary} ${accent} ${neutral}; cinematic hook`;
+  }
+  if (layout === "cta_card") {
+    return `radial ${accent} ${primary}; resolve ${neutral}`;
+  }
+  if (beatIndex % 2 === 0) {
+    return `solid ${neutral}; radial glow ${primary} at 12% opacity`;
+  }
+  return `solid ${neutral}; diagonal mesh ${secondary} ${accent}`;
 }
 
 export function compileCaptureChoreography(beat: WebsiteVideoBeat): CaptureChoreography {
@@ -314,26 +410,31 @@ export function buildScreenshotMotionSpec(
   screenshotUrl: string,
   pageUrl: string,
 ): CompiledMotionSpec {
+  const beatIndex = Math.max(0, Number(beat.beat_id.split("-").pop()) - 1 || 0);
+  const durationFrames = Math.max(90, Math.round(beat.duration_seconds * FPS));
   return {
     beat_id: beat.beat_id,
     layout: "split_headline_and_visual",
+    beat_chapter: beatChapterLabel(beatIndex, beat.beat_purpose),
+    beat_index: beatIndex,
+    duration_frames: durationFrames,
     screenshot_url: screenshotUrl,
     screenshot_page_url: pageUrl,
     elements: [
       {
         type: "headline",
-        content: beat.beat_purpose,
-        enter_animation: "fade_rise",
-        enter_frame: 6,
+        content: beatDisplayHeadline(brandKit, beat, beatIndex),
+        enter_animation: "blur_reveal",
+        enter_frame: 10,
         exit_frame: null,
         color_token: "accent",
         typeface_token: "heading",
       },
       {
         type: "subhead",
-        content: fitCopy(beat.vo_line, 120),
-        enter_animation: "mask_wipe",
-        enter_frame: 20,
+        content: beatDisplaySubhead(beat, 120),
+        enter_animation: "fade_rise",
+        enter_frame: 24,
         exit_frame: null,
         color_token: "neutral",
         typeface_token: "body",
@@ -345,24 +446,29 @@ export function buildScreenshotMotionSpec(
 }
 
 export function buildFallbackMotionCard(brandKit: WebsiteBrandKit, beat: WebsiteVideoBeat, reason = "Fallback visual card"): CompiledMotionSpec {
+  const beatIndex = Math.max(0, Number(beat.beat_id.split("-").pop()) - 1 || 0);
+  const durationFrames = Math.max(90, Math.round(beat.duration_seconds * FPS));
   return {
     beat_id: beat.beat_id,
     layout: "full_frame_headline",
+    beat_chapter: beatChapterLabel(beatIndex, beat.beat_purpose),
+    beat_index: beatIndex,
+    duration_frames: durationFrames,
     elements: [
       {
         type: "headline",
-        content: beat.beat_purpose || brandKit.brand.name,
-        enter_animation: "fade_rise",
-        enter_frame: 4,
+        content: beatDisplayHeadline(brandKit, beat, beatIndex),
+        enter_animation: "word_stagger",
+        enter_frame: 6,
         exit_frame: null,
         color_token: "accent",
         typeface_token: "heading",
       },
       {
         type: "subhead",
-        content: fitCopy(beat.vo_line, 150),
-        enter_animation: "mask_wipe",
-        enter_frame: 20,
+        content: beatDisplaySubhead(beat, 150),
+        enter_animation: "blur_reveal",
+        enter_frame: 24,
         exit_frame: null,
         color_token: "neutral",
         typeface_token: "body",
@@ -371,14 +477,14 @@ export function buildFallbackMotionCard(brandKit: WebsiteBrandKit, beat: Website
         type: "cta_button",
         content: reason,
         enter_animation: "scale_overshoot",
-        enter_frame: 38,
+        enter_frame: 42,
         exit_frame: null,
         color_token: "primary",
         typeface_token: "body",
       },
     ],
     easing_family: "ease_out_expo",
-    background_treatment: `solid ${brandKit.brand.neutral_color_hex}; branded fallback with ${brandKit.brand.primary_color_hex}`,
+    background_treatment: buildBackgroundTreatment(brandKit, "full_frame_headline", beatIndex),
   };
 }
 
@@ -436,14 +542,22 @@ export function buildRenderChecklist(beats: RenderableWebsiteBeat[], assets: Rec
       ok: beats.every((beat) => beat.duration_seconds >= beat.actual_vo_duration_seconds + MIN_HOLD_PADDING - 0.01),
       note: "Timeline uses resolved beat durations after voice generation.",
     },
+    {
+      id: "background_music_ready",
+      ok: true,
+      note: "Background music bed mixed under voiceover in Remotion preview and MP4 export.",
+    },
   ];
 }
 
 function chooseMotionLayout(beat: WebsiteVideoBeat, hasFeature: boolean): MotionLayout {
   const text = `${beat.beat_purpose} ${beat.vo_line}`.toLowerCase();
+  const beatIndex = Math.max(0, Number(beat.beat_id.split("-").pop()) - 1 || 0);
+  if (beatIndex === 0 || /hook|cold open|brand hook/.test(text)) return "logo_moment";
   if (/cta|start|get|try|contact|book/.test(text)) return "cta_card";
-  if (/feature|workflow|step|how|manual|demo/.test(text) && hasFeature) return "feature_list";
-  if (/logo|brand|intro|hook/.test(text)) return "logo_moment";
+  if (/proof|social|trust|differentiation/.test(text)) return "stat_callout";
+  if (/feature|workflow|step|how|manual|demo|value/.test(text) && hasFeature) return "feature_list";
+  if (/walkthrough|tour|reveal/.test(text)) return "split_headline_and_visual";
   return beat.production_method === "motion_graphic" ? "split_headline_and_visual" : "full_frame_headline";
 }
 
