@@ -21,6 +21,7 @@ import { generateSceneWithQualityGate, type QualityResult } from "@/lib/quality-
 import { gradeClip, concatClips } from "@/lib/ffmpeg-post";
 import { pickBgm } from "@/lib/free-sounds";
 import { saveLibraryProject } from "@/lib/library";
+import { buildFinalTimeline, normalizeVoiceLine as normalizeCaptionVoiceLine, type CaptionSegment, type FinalTimeline } from "@/lib/captions";
 import { MODEL_STRATEGY, buildHackathonAgentTrace, HACKATHON_ARCHITECTURE_SUMMARY } from "@/lib/model-strategy";
 import {
   buildShortFilmVisualBible,
@@ -41,6 +42,8 @@ import {
   clampSceneCount,
   getVideoPollDelayMs,
   normalizeSceneDuration,
+  sceneCountForTargetDuration,
+  targetDurationFromPrompt,
   runWithConcurrency,
 } from "@/lib/makers-runtime";
 
@@ -87,6 +90,9 @@ type StoryCard = {
   editingNotes?: string;
   referenceImageDirection?: string;
   continuityPrompt?: string;
+  startTime?: number;
+  endTime?: number;
+  captions?: CaptionSegment[];
   agentTrace?: QualityResult[];
   modelTrace?: ReturnType<typeof buildHackathonAgentTrace>;
   routingReason?: string;
@@ -117,6 +123,8 @@ function AgentWorkspace() {
   const [bibleBusy, setBibleBusy] = useState(false);
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [finalFilmUrl, setFinalFilmUrl] = useState<string | null>(null);
+  const [targetDuration, setTargetDuration] = useState<number>(MAKERS_DEMO_LIMITS.defaultTotalVideoSeconds);
+  const [finalTimeline, setFinalTimeline] = useState<FinalTimeline<StoryCard> | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
   const startedRef = useRef(false);
@@ -135,10 +143,7 @@ function AgentWorkspace() {
 
   // auth + seed
   useEffect(() => {
-    if (!supabase) {
-      navigate({ to: "/auth", search: { mode: "login" } });
-      return;
-    }
+    if (!supabase) return;
 
     supabase.auth.getUser().then(({ data }) => {
       if (!data.user) navigate({ to: "/auth", search: { mode: "login" } });
@@ -221,8 +226,11 @@ function AgentWorkspace() {
     setLogline("");
     setVisualBible(null);
     setFinalFilmUrl(null);
+    setFinalTimeline(null);
     try {
-      const sceneCount = chooseSceneCount(prompt);
+      const requestedDuration = targetDurationFromPrompt(prompt, targetDuration);
+      const sceneCount = sceneCountForTargetDuration(requestedDuration);
+      const durationPerScene = normalizeSceneDuration(Math.ceil(requestedDuration / sceneCount));
       const learningContext = readLearningContext();
       const referenceBrief = refs.map((r) => ({ name: r.name, description: r.description || "user uploaded character/style reference image" }));
       const compiledReferences = compileReferenceImages(referenceBrief);
@@ -243,7 +251,13 @@ function AgentWorkspace() {
         scenes: story.scenes,
         references: referenceBrief,
       });
-      const repairedScenes = validateAndRepairScenes(story.scenes, initialBible, normalizeSceneDuration(undefined));
+      const repairedScenes = validateAndRepairScenes(story.scenes, initialBible, durationPerScene).map((scene) => ({
+        ...scene,
+        language: "English",
+        spoken_line: normalizeCaptionVoiceLine(scene.spoken_line || scene.dialogue || scene.caption),
+        caption: normalizeCaptionVoiceLine(scene.spoken_line || scene.dialogue || scene.caption),
+        duration_seconds: durationPerScene,
+      }));
       story.scenes = repairedScenes;
       const bible = buildShortFilmVisualBible({
         prompt,
@@ -266,10 +280,12 @@ function AgentWorkspace() {
         },
       ]);
       setTasks([
-        { text: `Render ${story.scenes.length} cinematic shots`, done: false },
-        { text: `Cast clean human dialogue voices`, done: false },
+        { text: `Render ${story.scenes.length} cinematic shots (${requestedDuration}s target, ${durationPerScene}s each)`, done: false },
+        { text: `English Voice: Active`, done: true },
+        { text: `Captions: Active`, done: true },
+        { text: `Character Lock: Active`, done: true },
         { text: `Lock visual bible: characters, world, palette, wardrobe`, done: true },
-        { text: `Build context: storyline, shots, locations, dialogue, edit notes`, done: false },
+        { text: `Build context: storyline, shots, locations, dialogue, edit notes`, done: true },
       ]);
 
       // 2. Add cards + submit videos in parallel
@@ -279,16 +295,16 @@ function AgentWorkspace() {
           title: `#${i + 1} ${s.title}`,
           visual: s.visual,
           location: (s as { location?: string }).location,
-          caption: s.caption || s.spoken_line || s.dialogue,
-          spokenLine: s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, ""),
+          caption: normalizeCaptionVoiceLine(s.caption || s.spoken_line || s.dialogue),
+          spokenLine: normalizeCaptionVoiceLine(s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, "")),
           character: s.character || "",
           shotType: (s as { shot_type?: string }).shot_type,
-          language: s.language,
+          language: "English",
           voiceTone: s.voice_tone,
           pitch: s.pitch,
           bgm: s.bgm,
           sfx: s.sfx,
-          durationSeconds: normalizeSceneDuration(s.duration_seconds),
+          durationSeconds: durationPerScene,
           colorGrade: s.color_grade,
           editingNotes: s.editing_notes,
           referenceImageDirection: s.reference_image_direction,
@@ -363,7 +379,7 @@ function AgentWorkspace() {
               references: compiledReferences,
               userStyleProfile: learningContext,
             });
-            const spokenLine = s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, "");
+            const spokenLine = normalizeCaptionVoiceLine(s.spoken_line || s.dialogue.replace(/^[^:]+:\s*/, ""));
 
             // §1.1 Cinematographer v2 — compile a structured SceneSpec. Falls
             // back to null so legacy prompt-building still runs on failure.
@@ -481,8 +497,8 @@ function AgentWorkspace() {
               data: {
                 text: spokenLine,
                 voice: chosenVoice,
-                language: s.language || "English",
-                tone: characterLock?.voiceStyle || s.voice_tone || "natural film dialogue",
+                language: "English",
+                tone: `Generate clear English cinematic voice-over. Natural pacing. Emotional but not dramatic. Speak slowly enough for captions to sync. Avoid robotic delivery. Keep the line short and clear. ${characterLock?.voiceStyle || s.voice_tone || "natural film dialogue"}`,
                 pitch: s.pitch || "medium",
                 beatId: `scene-${idx + 1}`,
                 clientStyleProfile: learningContext,
@@ -510,8 +526,11 @@ function AgentWorkspace() {
               s.sfx ? `On-screen action must support these clean SFX cues: ${s.sfx}` : "",
               spokenLine ? `Lip-sync exactly to this spoken line, matching mouth movement and emotional delivery: "${spokenLine}"` : "",
               `Scene ${idx + 1} of ${scenes.length}. Match wardrobe, lighting mood, geography, eyeline and motion continuity from the previous shot; stage the last movement so it leads naturally into the next cut. No black frames, no fade-to-black, no title cards, no watermarks, seamless edit-ready plate.`,
+              "Use the exact same main character from the Character Bible in every scene. Do not change face, age, hairstyle, body type, skin tone, wardrobe, glasses, accessories, or identity. This is the same person across the entire film.",
+              "Caption-safe performance: one clear English voice line with natural pauses, readable lip movement, and no extra spoken text.",
               `Negative prompt: ${compiledNegatives ?? optimizedPrompt.negative_prompt}`,
-              `Render as one continuous ${normalizeSceneDuration(s.duration_seconds)}-second cinematic shot.`,
+              "Additional negative prompt: different actor, different face, changed hairstyle, changed age, changed wardrobe, changed body type, inconsistent character, duplicate person, random new main character, face drift, costume drift.",
+              `Render as one continuous ${durationPerScene}-second cinematic shot.`,
             ].filter(Boolean).join("\n");
             const attempts = routing
               ? buildRoutedVideoAttempts(routing, storyboardStillUrl)
@@ -572,7 +591,9 @@ function AgentWorkspace() {
         const finalCards = await new Promise<StoryCard[]>((resolve) => {
           setCards((c) => { resolve(c); return c; });
         });
-        const scenesForLibrary = finalCards.map((c) => ({
+        const timeline = buildFinalTimeline(finalCards, durationPerScene);
+        setFinalTimeline(timeline);
+        const scenesForLibrary = timeline.scenes.map((c) => ({
           title: c.title,
           videoUrl: c.videoUrl,
           audioUrl: c.audioUrl,
@@ -594,6 +615,9 @@ function AgentWorkspace() {
           bgm: c.bgm,
           sfx: c.sfx,
           durationSeconds: c.durationSeconds,
+          startTime: c.startTime,
+          endTime: c.endTime,
+          captions: timeline.captions.filter((caption) => caption.sceneId === c.sceneId),
           colorGrade: c.colorGrade,
           editingNotes: c.editingNotes,
           referenceImageDirection: c.referenceImageDirection,
@@ -611,13 +635,36 @@ function AgentWorkspace() {
           posterUrl: finalCards.find((c) => c.posterUrl)?.posterUrl,
           finalVideoUrl: masterFilmUrl ?? finalCards.find((c) => c.videoUrl)?.videoUrl,
           sceneVideos: finalCards.map((c) => c.videoUrl).filter((url): url is string => Boolean(url)),
-          durationSeconds: finalCards.reduce((sum, c) => sum + (c.durationSeconds || 0), 0),
+          sceneAudio: timeline.audioTracks.map((track) => track.audioUrl),
+          captions: timeline.captions,
+          finalTimeline: timeline,
+          targetDurationSeconds: requestedDuration,
+          totalDurationSeconds: timeline.totalDurationSeconds,
+          language: "en",
+          visualBible: bible as unknown as Record<string, unknown>,
+          characterBible: bible.characters[0] as unknown as Record<string, unknown>,
+          durationSeconds: timeline.totalDurationSeconds,
           scenes: scenesForLibrary,
           metadata: {
             source: "agent",
+            targetDurationSeconds: requestedDuration,
+            totalDurationSeconds: timeline.totalDurationSeconds,
+            sceneCount,
+            durationPerScene,
+            continuityMode: "strict",
+            language: "en",
+            captionsActive: true,
+            captionGenerationMethod: "scene_fallback",
+            characterBibleId: bible.characters[0]?.id,
+            characterBible: bible.characters[0],
+            finalTimeline: timeline,
             architecture: HACKATHON_ARCHITECTURE_SUMMARY,
             modelStrategy: MODEL_STRATEGY,
-            agentTrace: buildHackathonAgentTrace(),
+            agentTrace: buildHackathonAgentTrace({
+              "Planner Agent": `${MODEL_STRATEGY.planner} (${requestedDuration}s/${sceneCount} scenes)`,
+              "Voice Agent": MODEL_STRATEGY.tts,
+              "Editor Agent": "FilmPlayer / scene fallback captions",
+            }),
             prompt,
             visualBible: bible,
             compiledReferences,
@@ -628,7 +675,20 @@ function AgentWorkspace() {
     } catch (err: unknown) {
       setThinking(false);
       const msg = err instanceof Error ? err.message : String(err);
-      setMessages((m) => [...m, { role: "agent", text: `Pipeline error: ${msg}` }]);
+      const providerBlocked = /Arrearage|overdue-payment|Throttling|RateQuota|rate limit|quota/i.test(msg);
+      setTasks((current) =>
+        current.map((task) =>
+          task.text.startsWith("Render ")
+            ? { ...task, text: providerBlocked ? `${task.text} - blocked by DashScope billing/quota` : `${task.text} - failed` }
+            : task,
+        ),
+      );
+      setMessages((m) => [...m, {
+        role: "agent",
+        text: providerBlocked
+          ? `Pipeline stopped because DashScope blocked video rendering: ${msg}\n\nThe story, visual bible, character lock, English voice plan and captions are ready, but video generation cannot continue until the DashScope account is in good standing and rate quota is available. After that, replay/regenerate will continue with the same continuity rules.`
+          : `Pipeline error: ${msg}`,
+      }]);
     }
   }
 
@@ -772,6 +832,24 @@ function AgentWorkspace() {
             </div>
             <div className="p-4 border-t border-white/10">
               <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px] text-white/60">
+                  <span className="rounded-full border border-white/10 px-2 py-1">Character Lock: Active</span>
+                  <span className="rounded-full border border-white/10 px-2 py-1">English Voice: Active</span>
+                  <span className="rounded-full border border-white/10 px-2 py-1">Captions: Active</span>
+                  <div className="ml-auto flex rounded-full border border-white/10 p-0.5">
+                    {[30, 45].map((seconds) => (
+                      <button
+                        key={seconds}
+                        type="button"
+                        onClick={() => setTargetDuration(seconds)}
+                        disabled={thinking}
+                        className={`rounded-full px-3 py-1 ${targetDuration === seconds ? "bg-white text-black" : "text-white/60 hover:text-white"}`}
+                      >
+                        {seconds}s
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <input
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
@@ -967,7 +1045,7 @@ function AgentWorkspace() {
         </div>
       </div>
       {playingFilm && (
-        <FilmPlayer cards={cards} title={filmTitle} onClose={() => setPlayingFilm(false)} />
+        <FilmPlayer cards={cards} title={filmTitle} onClose={() => setPlayingFilm(false)} timeline={finalTimeline} finalVideoUrl={finalFilmUrl} />
       )}
       {openScene !== null && cards[openScene] && (
         <SceneDetail card={cards[openScene]} index={openScene} total={cards.length} onClose={() => setOpenScene(null)} />
@@ -1462,16 +1540,24 @@ function FilmPlayer({
   cards,
   title,
   onClose,
+  timeline,
+  finalVideoUrl,
 }: {
   cards: StoryCard[];
   title: string;
   onClose: () => void;
+  timeline?: FinalTimeline<StoryCard> | null;
+  finalVideoUrl?: string | null;
 }) {
   const shots = useMemo(() => getRenderedCards(cards), [cards]);
+  const playbackTimeline = useMemo(() => timeline ?? buildFinalTimeline(shots, MAKERS_DEMO_LIMITS.defaultSecondsPerScene), [shots, timeline]);
   const [idx, setIdx] = useState(0);
+  const [localTime, setLocalTime] = useState(0);
   const [muted, setMuted] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordDone, setRecordDone] = useState(false);
+  const [exportingVideo, setExportingVideo] = useState(false);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const dialogueRef = useRef<HTMLAudioElement>(null);
   const bgmRef = useRef<HTMLAudioElement>(null);
@@ -1486,6 +1572,16 @@ function FilmPlayer({
 
   const current = shots[idx];
   const currentSceneIndex = Math.max(0, cards.findIndex((c) => c.videoUrl === current?.videoUrl));
+  const currentTimelineScene = playbackTimeline.scenes[idx];
+  const activeCaption = useMemo(() => {
+    const sceneId = currentTimelineScene?.sceneId;
+    if (!sceneId) return null;
+    const sceneStart = currentTimelineScene.startTime || 0;
+    const globalTime = sceneStart + localTime;
+    return playbackTimeline.captions.find((caption) =>
+      caption.sceneId === sceneId && globalTime >= caption.startTime && globalTime <= caption.endTime,
+    ) || null;
+  }, [currentTimelineScene, localTime, playbackTimeline]);
   const bgmUrl = useMemo(() => pickBgm(cards[0]?.bgm || cards[0]?.colorGrade || title), [cards, title]);
 
   useEffect(() => {
@@ -1555,6 +1651,7 @@ function FilmPlayer({
           v.load();
         }
         v.currentTime = 0;
+        setLocalTime(0);
         v.muted = muted;
         v.volume = 0.9;
         v.play().catch(() => {});
@@ -1599,6 +1696,13 @@ function FilmPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idx, current?.videoUrl, current?.posterUrl]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setLocalTime(videoRef.current?.currentTime || 0);
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, []);
+
   // Keep the video element's mute state in sync with the toggle
   useEffect(() => {
     if (videoRef.current) videoRef.current.muted = muted;
@@ -1611,10 +1715,76 @@ function FilmPlayer({
       if (recorderRef.current && recorderRef.current.state !== "inactive") {
         try { recorderRef.current.stop(); } catch { /* noop */ }
       }
-      setTimeout(() => onClose(), 800);
+      setExportNotice("Playback finished. Use Replay, Export Script, or Download MP4.");
       return;
     }
     setIdx((i) => i + 1);
+  }
+
+  function replayFilm() {
+    if (fallbackTimerRef.current) window.clearTimeout(fallbackTimerRef.current);
+    setExportNotice(null);
+    setLocalTime(0);
+    setIdx(0);
+    requestAnimationFrame(() => {
+      if (videoRef.current) {
+        videoRef.current.currentTime = 0;
+        void videoRef.current.play().catch(() => {});
+      }
+      if (dialogueRef.current) {
+        dialogueRef.current.currentTime = 0;
+        void dialogueRef.current.play().catch(() => {});
+      }
+    });
+  }
+
+  function exportScript() {
+    const script = shots.map((shot, i) => {
+      const timelineScene = playbackTimeline.scenes[i];
+      return [
+        `SCENE ${i + 1}: ${shot.title.replace(/^#\d+\s*/, "")}`,
+        `TIME: ${formatTime(timelineScene?.startTime || 0)} - ${formatTime(timelineScene?.endTime || ((timelineScene?.startTime || 0) + (shot.durationSeconds || 6)))}`,
+        `LOCATION: ${shot.location || "story location"}`,
+        `SHOT: ${shot.shotType || "cinematic"}`,
+        `VISUAL: ${shot.visual || shot.caption}`,
+        `DIALOGUE: ${shot.character ? `${shot.character}: ` : ""}${shot.spokenLine || ""}`,
+        `VOICE: ${shot.language || "English"}, ${shot.voiceTone || "natural"}, ${shot.pitch || "medium"} pitch`,
+        `BGM: ${shot.bgm || "cinematic score"}`,
+        `SFX: ${shot.sfx || "clean room tone"}`,
+        `GRADE: ${shot.colorGrade || "cinematic film grade"}`,
+        `EDIT: ${shot.editingNotes || "straight cut with smooth continuity"}`,
+        `VIDEO: ${shot.videoUrl || "not rendered"}`,
+      ].join("\n");
+    }).join("\n\n---\n\n");
+    downloadText(`${slugify(title || "makers-film")}-export-script.txt`, `${title}\n\n${script}`, "text/plain");
+  }
+
+  async function downloadHighQualityMp4() {
+    setExportNotice(null);
+    setExportingVideo(true);
+    try {
+      if (finalVideoUrl) {
+        downloadUrl(finalVideoUrl, `${slugify(title || "makers-film")}-master.mp4`);
+        setExportNotice("Downloading generated master/source MP4.");
+        return;
+      }
+      const clipUrls = shots.map((shot) => shot.videoUrl).filter((url): url is string => Boolean(url));
+      if (clipUrls.length === 0) throw new Error("No rendered scene video is available yet.");
+      if (clipUrls.length === 1) {
+        downloadUrl(clipUrls[0], `${slugify(title || "makers-film")}-scene-1.mp4`);
+        setExportNotice("Downloading rendered source MP4 for this scene.");
+        return;
+      }
+      setExportNotice("Building a high-quality MP4 from rendered clips. This can take a minute in the browser.");
+      const stitchedUrl = await concatClips(clipUrls);
+      downloadUrl(stitchedUrl, `${slugify(title || "makers-film")}-master.mp4`);
+      window.setTimeout(() => URL.revokeObjectURL(stitchedUrl), 10_000);
+      setExportNotice("MP4 export started.");
+    } catch (err) {
+      setExportNotice(err instanceof Error ? err.message : "Could not export MP4. Try downloading the source clips from Library.");
+    } finally {
+      setExportingVideo(false);
+    }
   }
 
   async function startRecording() {
@@ -1625,7 +1795,10 @@ function FilmPlayer({
     if (!v || !ctx || !master || !dEl) return;
     try {
       const videoStream = (v as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream?.();
-      if (!videoStream) { alert("Recording not supported in this browser."); return; }
+      if (!videoStream) {
+        setExportNotice("Real-time WebM recording is not supported for this video in your browser. Use Download MP4 instead.");
+        return;
+      }
       // Route dialogue element into a WebAudio source (once) so recorder can hear it
       if (!dialogueSrcRef.current) {
         dialogueSrcRef.current = ctx.createMediaElementSource(dEl);
@@ -1664,10 +1837,11 @@ function FilmPlayer({
       setRecording(true);
       setRecordDone(false);
       // Restart from first shot so full film is captured
-      setIdx(0);
+      replayFilm();
     } catch (err) {
       console.error(err);
-      alert("Could not start recording. Your browser may block captureStream.");
+      setRecording(false);
+      setExportNotice("Could not start real-time recording. Browser/CORS blocked captureStream; use Download MP4.");
     }
   }
 
@@ -1682,11 +1856,41 @@ function FilmPlayer({
       <button
         onClick={startRecording}
         disabled={recording}
-        className="absolute top-4 right-40 z-30 flex items-center gap-1 rounded-full bg-red-500/90 hover:bg-red-500 text-white text-[11px] px-3 py-1 disabled:opacity-60"
+        className="hidden"
         title="Records the film in real time and downloads a .webm file"
       >
         {recording ? "● Recording…" : recordDone ? "Download again" : "⬇ Record & Download"}
       </button>
+
+      <div className="absolute left-4 right-4 top-12 z-30 flex flex-wrap items-center justify-end gap-2">
+        {exportNotice && (
+          <span className="mr-auto max-w-[48rem] rounded-full border border-white/10 bg-black/70 px-3 py-1 text-[11px] text-white/75 backdrop-blur">
+            {exportNotice}
+          </span>
+        )}
+        <button onClick={replayFilm} className="rounded-full border border-white/10 bg-black/45 px-3 py-1 text-[11px] text-white/75 hover:bg-white/10">
+          Replay
+        </button>
+        <button onClick={exportScript} className="rounded-full border border-white/10 bg-black/45 px-3 py-1 text-[11px] text-white/75 hover:bg-white/10">
+          Export Script
+        </button>
+        <button
+          onClick={downloadHighQualityMp4}
+          disabled={exportingVideo}
+          className="flex items-center gap-1 rounded-full bg-white px-3 py-1 text-[11px] font-medium text-black hover:bg-white/90 disabled:opacity-60"
+          title="Downloads the generated master/source MP4. If no master exists, stitches rendered clips in-browser."
+        >
+          <Download className="h-3 w-3" /> {exportingVideo ? "Exporting MP4" : "Download MP4"}
+        </button>
+        <button
+          onClick={startRecording}
+          disabled={recording}
+          className="flex items-center gap-1 rounded-full border border-red-300/30 bg-red-500/20 px-3 py-1 text-[11px] text-red-100 hover:bg-red-500/30 disabled:opacity-60"
+          title="Fallback only: records the current browser playback to WebM when captureStream is available."
+        >
+          {recording ? "Recording WebM" : recordDone ? "Record Again" : "Record WebM"}
+        </button>
+      </div>
 
       <div className="relative w-screen h-screen overflow-hidden bg-black">
         {/* Persistent poster underlay — kills the black flash between clips */}
@@ -1737,12 +1941,13 @@ function FilmPlayer({
         )}
 
         {/* Subtitle */}
-        <div key={`sub-${idx}`} className="absolute bottom-[20%] inset-x-0 text-center px-6 pointer-events-none animate-[fadein_0.5s_ease-out]">
-          <div className="inline-block bg-black/60 text-white text-lg md:text-2xl px-6 py-3 rounded-md backdrop-blur max-w-[80%]">
-            {current.character && <b className="mr-2 text-white/90">{current.character}:</b>}
-            <span>{current.spokenLine}</span>
+        {(activeCaption?.text || current.spokenLine) && (
+          <div key={`sub-${idx}-${activeCaption?.id || "fallback"}`} className="absolute bottom-[20%] inset-x-0 text-center px-6 pointer-events-none animate-[fadein_0.3s_ease-out]">
+            <div className="inline-block bg-black/65 text-white text-base md:text-xl leading-snug px-5 py-2.5 rounded-md backdrop-blur max-w-[80%] shadow-2xl [text-shadow:0_1px_2px_rgba(0,0,0,0.9)]">
+              <span>{activeCaption?.text || current.spokenLine}</span>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Progress bar */}
         <div className="absolute top-0 inset-x-0 h-0.5 bg-white/10 z-20">
@@ -1812,6 +2017,17 @@ function downloadText(filename: string, text: string, type: string) {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+function downloadUrl(url: string, filename: string) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  a.target = "_blank";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 
 function imageFileToReferenceImage(file: File) {

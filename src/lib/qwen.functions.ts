@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { clampSceneCount, normalizeSceneDuration } from "./makers-runtime";
+import { clampSceneCount, normalizeSceneDuration, targetDurationFromPrompt } from "./makers-runtime";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { SceneSpecSchema, type SceneSpec } from "./scene-spec";
 import type { QualityResult } from "./quality-gate";
@@ -231,10 +231,7 @@ type Storyboard = {
 };
 
 function requestedTotalSeconds(prompt: string): number | null {
-  const duration = prompt.match(/duration\s*:?\s*(\d{1,3})\s*(?:seconds?|secs?|s)?/i);
-  if (duration) return Number(duration[1]);
-  const seconds = prompt.match(/(\d{1,3})\s*(?:seconds?|secs?)\b/i);
-  return seconds ? Number(seconds[1]) : null;
+  return targetDurationFromPrompt(prompt);
 }
 
 function targetSceneDuration(prompt: string, sceneCount: number) {
@@ -300,7 +297,7 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     z
       .object({
         prompt: z.string().min(1).max(4000),
-        sceneCount: z.number().int().min(1).max(3).default(3),
+        sceneCount: z.number().int().min(1).max(9).default(6),
         learningContext: z.string().max(2000).optional().default(""),
         referenceImages: z
           .array(
@@ -320,21 +317,29 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
 
     const sceneCount = clampSceneCount(data.sceneCount);
+    const targetDuration = targetDurationFromPrompt(data.prompt);
     const sceneSeconds = targetSceneDuration(data.prompt, sceneCount);
+    const storyStructure = sceneCount >= 9
+      ? "Scene 1 opening visual hook; Scene 2 character dream; Scene 3 first obstacle; Scene 4 rejection or failure; Scene 5 deep preparation; Scene 6 self-doubt; Scene 7 final attempt; Scene 8 breakthrough message or call; Scene 9 emotional ending or CTA."
+      : "Scene 1 setup and character introduction; Scene 2 problem, rejection, or obstacle; Scene 3 effort and preparation; Scene 4 emotional low point; Scene 5 breakthrough moment; Scene 6 hopeful ending and final line.";
     const system = [
-      `You are Makers, an AI showrunner + screenwriter + professional film editor trained in Adobe Premiere Pro, After Effects, DaVinci Resolve, cinematic camera blocking, color grading, VFX, SFX, Foley, trailer pacing, and short-drama continuity. Given a logline, produce a concise cinematic short film script and shot-list of EXACTLY ${sceneCount} scenes. Each scene is designed as a ${sceneSeconds}-second dramatic shot and the full hackathon demo must stay under 15 seconds.`,
+      `You are Makers, an AI showrunner + screenwriter + professional film editor trained in Adobe Premiere Pro, After Effects, DaVinci Resolve, cinematic camera blocking, color grading, VFX, SFX, Foley, trailer pacing, and short-drama continuity. Given a logline, produce a concise cinematic short film script and shot-list of EXACTLY ${sceneCount} scenes. Each scene is designed as a ${sceneSeconds}-second dramatic shot and the full film target is ${targetDuration} seconds.`,
       `HARD RULES:`,
       `- Real short FILM, not narrated slideshow. NEVER use a narrator or voice-over. Every spoken line is an in-world character speaking on screen (no "Narrator:" ever).`,
       `- Reuse the same 2-3 named characters across scenes so the audience follows them.`,
+      `- Follow this story structure exactly: ${storyStructure}`,
+      `- English is the default language. Use clear English cinematic voice-over/dialogue unless the user explicitly asks for another language.`,
       `- Every scene must include a specific location and maintain geographic/story continuity from the previous scene.`,
       `- Vary shot types: wide establishing, medium, close-up, insert, action, reaction. No two consecutive scenes use the same shot_type.`,
       `- If the prompt asks for Tamil, Malayalam, Hindi, Telugu, Kannada, Bengali, Marathi, Punjabi, Urdu, or any Indian language, write clean native colloquial dialogue in that language's script with human slang and natural phrasing. Do not produce broken mixed-language output unless the user asks for Hinglish/Tanglish/etc.`,
       `- If the prompt asks for Tanglish, Hinglish, Manglish, Benglish, or other code-switched Indian speech, keep brand/product names, technical terms, UI terms, and numbers in English, but use the regional language for verbs, connectors, emotion, and everyday phrasing. This must sound like real local speech, not literal translation.`,
       `- Assign each scene a language, voice_tone, and pitch (low/medium/high) suitable for the character and emotion.`,
+      `- spoken_line must be 6-12 words, clear English, natural pacing, emotional but controlled, not robotic. If the requested final line is given, use it in the last scene exactly.`,
       `- Add clean bgm and sfx cues for each scene: realistic ambience, Foley, impacts, transitions, room tone, emotional score.`,
       `- Add professional editing_notes and color_grade for every scene: match cut, J-cut/L-cut, whip pan, speed ramp, rack focus, chromatic VFX, teal-orange grade, bleach bypass, warm film print, etc.`,
-      `- video_prompt is a cinematic ${sceneSeconds}-second shot description (~55 words): camera movement (dolly in / tracking / handheld / crane / static close-up), lens & lighting, exact location, subject action, character continuity, mood, environment ambience, VFX/SFX context, color grade. End every video_prompt with: "single continuous four-second cinematic shot, film grain, shallow depth of field, 35mm, dramatic lighting, high detail, natural motion, real character performance".`,
-      `- spoken_line: 4-12 words, natural dramatic dialogue that fits a ${sceneSeconds}-second scene.`,
+      `- video_prompt is a cinematic ${sceneSeconds}-second shot description (~55 words): camera movement (dolly in / tracking / handheld / crane / static close-up), lens & lighting, exact location, subject action, character continuity, mood, environment ambience, VFX/SFX context, color grade. Include this exact sentence in every video_prompt: "Use the exact same main character from the Character Bible in every scene. Do not change face, age, hairstyle, body type, skin tone, wardrobe, glasses, accessories, or identity. This is the same person across the entire film." End every video_prompt with: "single continuous five-second cinematic shot, film grain, shallow depth of field, 35mm, dramatic lighting, high detail, natural motion, real character performance".`,
+      `- negative_prompt must include: different actor, different face, changed hairstyle, changed age, changed wardrobe, changed body type, inconsistent character, duplicate person, random new main character, face drift, costume drift, black frame, watermark.`,
+      `- spoken_line: 6-12 words, natural dramatic dialogue that fits a ${sceneSeconds}-second scene and captions cleanly.`,
       `- Long rich logline (3-4 sentences) and detailed tone.`,
       data.referenceImages.length
         ? `REFERENCE IMAGES PROVIDED: The user uploaded ${data.referenceImages.length} character/style reference image(s): ${data.referenceImages.map((r, i) => `#${i + 1} ${r.name}${r.description ? ` (${r.description})` : ""}`).join("; ")}. Keep characters, wardrobe, setting, and visual identity consistent with these references. Put the relevant reference guidance in reference_image_direction.`

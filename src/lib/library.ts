@@ -26,6 +26,9 @@ export type LibraryScene = {
   bgm?: string;
   sfx?: string;
   durationSeconds?: number;
+  startTime?: number;
+  endTime?: number;
+  captions?: Array<Record<string, unknown>>;
   colorGrade?: string;
   editingNotes?: string;
   referenceImageDirection?: string;
@@ -44,6 +47,15 @@ export type LibraryProject = {
   finalVideoUrl?: string;
   sceneVideos?: string[];
   durationSeconds?: number;
+  targetDurationSeconds?: number;
+  totalDurationSeconds?: number;
+  language?: string;
+  captions?: Array<Record<string, unknown>>;
+  finalTimeline?: Record<string, unknown>;
+  sceneAudio?: string[];
+  visualBible?: Record<string, unknown>;
+  characterBible?: Record<string, unknown>;
+  qualityScores?: Array<Record<string, unknown>>;
   logline?: string;
   genre?: string;
   tone?: string;
@@ -118,6 +130,9 @@ function slimLibraryScene(scene: LibraryScene): LibraryScene {
     spokenLine: scene.spokenLine,
     shotType: scene.shotType,
     durationSeconds: scene.durationSeconds,
+    startTime: scene.startTime,
+    endTime: scene.endTime,
+    captions: scene.captions,
     visual: scene.visual,
     editingNotes: scene.editingNotes,
     colorGrade: scene.colorGrade,
@@ -149,6 +164,15 @@ export function slimWebsiteProjectForStorage(project: LibraryProject): LibraryPr
     updatedAt: project.updatedAt,
     posterUrl: project.posterUrl && !isDataUrl(project.posterUrl) ? project.posterUrl : undefined,
     durationSeconds: project.durationSeconds,
+    targetDurationSeconds: project.targetDurationSeconds,
+    totalDurationSeconds: project.totalDurationSeconds,
+    language: project.language,
+    captions: project.captions,
+    finalTimeline: project.finalTimeline,
+    sceneAudio: project.sceneAudio,
+    visualBible: project.visualBible,
+    characterBible: project.characterBible,
+    qualityScores: project.qualityScores,
     websiteUrl: project.websiteUrl,
     videoType: project.videoType,
     brandName: project.brandName,
@@ -333,6 +357,15 @@ function normalizeLibraryProject(raw: Record<string, unknown>): LibraryProject |
       typeof raw.durationSeconds === "number"
         ? raw.durationSeconds
         : projectScenes.reduce((sum, scene) => sum + (scene.durationSeconds || 0), 0) || undefined,
+    targetDurationSeconds: typeof raw.targetDurationSeconds === "number" ? raw.targetDurationSeconds : undefined,
+    totalDurationSeconds: typeof raw.totalDurationSeconds === "number" ? raw.totalDurationSeconds : undefined,
+    language: stringField(raw.language),
+    captions: Array.isArray(raw.captions) ? raw.captions.filter(isRecord) : undefined,
+    finalTimeline: isRecord(raw.finalTimeline) ? raw.finalTimeline : undefined,
+    sceneAudio: Array.isArray(raw.sceneAudio) ? raw.sceneAudio.filter((url): url is string => typeof url === "string") : undefined,
+    visualBible: isRecord(raw.visualBible) ? raw.visualBible : undefined,
+    characterBible: isRecord(raw.characterBible) ? raw.characterBible : undefined,
+    qualityScores: Array.isArray(raw.qualityScores) ? raw.qualityScores.filter(isRecord) : undefined,
     logline: stringField(raw.logline),
     genre: stringField(raw.genre),
     tone: stringField(raw.tone),
@@ -376,6 +409,9 @@ function normalizeScenes(value: unknown): LibraryScene[] {
     bgm: stringField(scene.bgm),
     sfx: stringField(scene.sfx),
     durationSeconds: typeof scene.durationSeconds === "number" ? scene.durationSeconds : undefined,
+    startTime: typeof scene.startTime === "number" ? scene.startTime : undefined,
+    endTime: typeof scene.endTime === "number" ? scene.endTime : undefined,
+    captions: Array.isArray(scene.captions) ? scene.captions.filter(isRecord) : undefined,
     colorGrade: stringField(scene.colorGrade),
     editingNotes: stringField(scene.editingNotes),
     referenceImageDirection: stringField(scene.referenceImageDirection),

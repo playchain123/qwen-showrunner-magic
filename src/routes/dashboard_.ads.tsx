@@ -489,6 +489,7 @@ function AdPlayer({ shots, brand, cta, tone, onClose }: { shots: AdShot[]; brand
   const dialogueRef = useRef<HTMLAudioElement>(null);
   const bgmRef = useRef<HTMLAudioElement>(null);
   const [downloading, setDownloading] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const recRef = useRef<MediaRecorder | null>(null);
   const bgmUrl = pickBgm(tone);
   const current = ready[idx];
@@ -503,11 +504,31 @@ function AdPlayer({ shots, brand, cta, tone, onClose }: { shots: AdShot[]; brand
   }
 
   async function download() {
+    const urls = ready.map((shot) => shot.videoUrl).filter((url): url is string => Boolean(url));
+    if (urls.length === 0) return;
+    setDownloading(true);
+    setNotice(null);
+    try {
+      urls.forEach((url, index) => {
+        downloadUrl(url, `${slugify(brand || "makers-ad")}-shot-${index + 1}.mp4`);
+      });
+      setNotice(urls.length === 1 ? "Downloading source MP4." : `Downloading ${urls.length} rendered source MP4 clips.`);
+    } catch {
+      setNotice("Could not start MP4 download.");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  async function recordFallback() {
     const v = videoRef.current;
     if (!v) return;
     try {
       const stream = (v as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream?.();
-      if (!stream) { alert("Recording unsupported"); return; }
+      if (!stream) {
+        setNotice("Real-time WebM recording is not supported for this video/browser. Use Download MP4.");
+        return;
+      }
       const rec = new MediaRecorder(stream, { mimeType: "video/webm" });
       const chunks: Blob[] = [];
       rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
@@ -515,7 +536,7 @@ function AdPlayer({ shots, brand, cta, tone, onClose }: { shots: AdShot[]; brand
         const blob = new Blob(chunks, { type: "video/webm" });
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download = `${brand.replace(/[^a-z0-9]+/gi, "-").toLowerCase() || "ad"}.webm`;
+        a.download = `${slugify(brand || "makers-ad")}.webm`;
         a.click();
         setDownloading(false);
       };
@@ -523,16 +544,31 @@ function AdPlayer({ shots, brand, cta, tone, onClose }: { shots: AdShot[]; brand
       rec.start(500);
       setDownloading(true);
       setIdx(0);
-    } catch { setDownloading(false); }
+    } catch {
+      setDownloading(false);
+      setNotice("Could not start WebM recording. Browser/CORS blocked captureStream.");
+    }
   }
 
   if (!current) return null;
   return (
     <div className="fixed inset-0 z-50 bg-black">
       <button onClick={onClose} className="absolute top-4 right-4 z-30 text-white/70 hover:text-white text-sm">Close ✕</button>
-      <button onClick={download} disabled={downloading} className="absolute top-4 right-24 z-30 flex items-center gap-1 rounded-full bg-red-500/90 hover:bg-red-500 text-white text-[11px] px-3 py-1 disabled:opacity-60">
+      <button onClick={download} disabled={downloading} className="hidden">
         <Download className="h-3 w-3" /> {downloading ? "Recording…" : "Download .webm"}
       </button>
+      <div className="absolute left-4 right-24 top-12 z-30 flex flex-wrap items-center justify-end gap-2">
+        {notice && <span className="mr-auto rounded-full border border-white/10 bg-black/70 px-3 py-1 text-[11px] text-white/70">{notice}</span>}
+        <button onClick={() => setIdx(0)} className="rounded-full border border-white/10 bg-black/45 px-3 py-1 text-[11px] text-white/75 hover:bg-white/10">
+          Replay
+        </button>
+        <button onClick={download} disabled={downloading} className="flex items-center gap-1 rounded-full bg-white px-3 py-1 text-[11px] font-medium text-black hover:bg-white/90 disabled:opacity-60">
+          <Download className="h-3 w-3" /> {downloading ? "Preparing" : "Download MP4"}
+        </button>
+        <button onClick={recordFallback} disabled={downloading} className="rounded-full border border-red-300/30 bg-red-500/20 px-3 py-1 text-[11px] text-red-100 hover:bg-red-500/30 disabled:opacity-60">
+          Record WebM
+        </button>
+      </div>
       <video ref={videoRef} key={idx} src={current.videoUrl} autoPlay playsInline muted onEnded={advance} className="absolute inset-0 h-full w-full object-cover" style={{ animation: `kbAd ${Math.max(4, current.durationSeconds)}s ease-out forwards` }} />
       <audio ref={dialogueRef} src={current.audioUrl} autoPlay />
       <audio ref={bgmRef} src={bgmUrl} autoPlay loop />
@@ -558,4 +594,19 @@ function AdPlayer({ shots, brand, cta, tone, onClose }: { shots: AdShot[]; brand
       <style>{`@keyframes kbAd { 0% { transform: scale(1.03); } 100% { transform: scale(1.12); } }`}</style>
     </div>
   );
+}
+
+function slugify(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "makers-video";
+}
+
+function downloadUrl(url: string, filename: string) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  a.target = "_blank";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }

@@ -1,8 +1,13 @@
 export const MAKERS_DEMO_LIMITS = {
-  maxScenes: readPositiveInt("MAX_SCENES", 3),
-  maxSecondsPerScene: readPositiveInt("MAX_SCENE_DURATION", 5),
-  defaultSecondsPerScene: readPositiveInt("DEFAULT_SCENE_DURATION", 4),
-  maxTotalVideoSeconds: readPositiveInt("MAX_TOTAL_VIDEO_SECONDS", 16),
+  minTotalVideoSeconds: readPositiveInt("MIN_TOTAL_DURATION_SECONDS", 30),
+  defaultTotalVideoSeconds: readPositiveInt("DEFAULT_TOTAL_DURATION_SECONDS", 30),
+  maxTotalVideoSeconds: readPositiveInt("MAX_TOTAL_DURATION_SECONDS", 45),
+  maxScenes: readPositiveInt("MAX_SCENES", 9),
+  safeScenes: readPositiveInt("DEFAULT_SCENE_COUNT", 6),
+  extendedScenes: readPositiveInt("EXTENDED_SCENE_COUNT", 9),
+  minSecondsPerScene: readPositiveInt("MIN_SCENE_DURATION_SECONDS", 4),
+  maxSecondsPerScene: readPositiveInt("MAX_SCENE_DURATION_SECONDS", 6),
+  defaultSecondsPerScene: readPositiveInt("DEFAULT_SCENE_DURATION_SECONDS", 5),
   maxParallelImageJobs: readPositiveInt("MAX_PARALLEL_IMAGE_JOBS", 2),
   maxParallelVideoJobs: readPositiveInt("MAX_PARALLEL_VIDEO_JOBS", 3),
   maxVideoPollAttempts: 60,
@@ -16,7 +21,27 @@ export function clampSceneCount(requested: number) {
 
 export function normalizeSceneDuration(seconds: number | undefined) {
   if (!Number.isFinite(seconds ?? NaN)) return MAKERS_DEMO_LIMITS.defaultSecondsPerScene;
-  return Math.max(1, Math.min(MAKERS_DEMO_LIMITS.maxSecondsPerScene, Math.floor(seconds as number)));
+  return Math.max(MAKERS_DEMO_LIMITS.minSecondsPerScene, Math.min(MAKERS_DEMO_LIMITS.maxSecondsPerScene, Math.floor(seconds as number)));
+}
+
+export function normalizeTargetDuration(seconds: number | undefined) {
+  if (!Number.isFinite(seconds ?? NaN)) return MAKERS_DEMO_LIMITS.defaultTotalVideoSeconds;
+  return Math.max(
+    MAKERS_DEMO_LIMITS.minTotalVideoSeconds,
+    Math.min(MAKERS_DEMO_LIMITS.maxTotalVideoSeconds, Math.floor(seconds as number)),
+  );
+}
+
+export function sceneCountForTargetDuration(seconds: number | undefined) {
+  const target = normalizeTargetDuration(seconds);
+  if (target >= MAKERS_DEMO_LIMITS.maxTotalVideoSeconds) return MAKERS_DEMO_LIMITS.extendedScenes;
+  return MAKERS_DEMO_LIMITS.safeScenes;
+}
+
+export function targetDurationFromPrompt(prompt: string, fallback = MAKERS_DEMO_LIMITS.defaultTotalVideoSeconds) {
+  const match = prompt.match(/(?:duration|length)\s*:?\s*(30|45)\s*(?:seconds?|secs?|s)?/i)
+    || prompt.match(/\b(30|45)\s*(?:seconds?|secs?)\b/i);
+  return normalizeTargetDuration(match ? Number(match[1]) : fallback);
 }
 
 export function getVideoPollDelayMs(attempt: number) {
