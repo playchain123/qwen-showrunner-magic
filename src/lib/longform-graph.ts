@@ -505,7 +505,7 @@ async function produceScenesNode(
     const record = scenes[sceneIndex];
     if (!raw || !record) return;
 
-    try {
+    const runScene = async (attemptNum: number): Promise<void> => {
       const characterLock = findCharacterBible(bible, raw.character);
       const charKey = (raw.character || `char-${sceneIndex}`).toLowerCase();
       let hash = 0;
@@ -515,53 +515,69 @@ async function produceScenesNode(
 
       progress(config, { type: "scene", index: sceneIndex, patch: { progress: 8 } });
 
-      const voice = await generateVoice({
-        data: {
-          text: spokenLine,
-          voice: chosenVoice,
-          // Force English for TTS — other languages (e.g. Mandarin) fail the routing.
-          language: "English",
-          tone: characterLock?.voiceStyle || raw.voice_tone || "natural film dialogue",
-          pitch: raw.pitch || "medium",
-          beatId: `scene-${sceneIndex + 1}`,
-          clientStyleProfile: state.learningContext,
-        },
-      });
-
-      const uploaded = await uploadVoiceAudio({
-        data: {
-          project_id: state.projectId,
-          scene_id: `scene-${sceneIndex + 1}`,
-          audio_data_url: voice.audio_url,
-        },
-      });
-
-      const audioSeconds = await measureAudioDuration(uploaded.audio_url);
-      const durationSeconds = computeSceneDurationFromAudio(audioSeconds);
+      let uploadedAudioUrl: string | undefined;
+      let audioSeconds = 0;
+      let voiceMeta: { provider?: string; tts_speaker?: string; localized_script?: string; target_language?: string; critique?: unknown } = {};
+      try {
+        const voice = await generateVoice({
+          data: {
+            text: spokenLine,
+            voice: chosenVoice,
+            language: "English",
+            tone: characterLock?.voiceStyle || raw.voice_tone || "natural film dialogue",
+            pitch: raw.pitch || "medium",
+            beatId: `scene-${sceneIndex + 1}`,
+            clientStyleProfile: state.learningContext,
+          },
+        });
+        const uploaded = await uploadVoiceAudio({
+          data: {
+            project_id: state.projectId,
+            scene_id: `scene-${sceneIndex + 1}`,
+            audio_data_url: voice.audio_url,
+          },
+        });
+        uploadedAudioUrl = uploaded.audio_url;
+        audioSeconds = await measureAudioDuration(uploaded.audio_url);
+        voiceMeta = {
+          provider: voice.provider,
+          tts_speaker: voice.tts_speaker,
+          localized_script: voice.localized_script,
+          target_language: voice.target_language,
+          critique: voice.critique,
+        };
+      } catch (audioErr) {
+        // Audio failed — continue with silent video so the film still renders.
+        const msg = audioErr instanceof Error ? audioErr.message : String(audioErr);
+        console.warn(`[longform] scene ${sceneIndex + 1} audio failed, rendering silent:`, msg);
+      }
+      const durationSeconds = audioSeconds
+        ? computeSceneDurationFromAudio(audioSeconds)
+        : LONGFORM_LIMITS.defaultSecondsPerScene;
 
       scenes = patchScene(scenes, sceneIndex, {
-        audioUrl: uploaded.audio_url,
+        audioUrl: uploadedAudioUrl,
         audioSeconds,
         durationSeconds,
-        localizedScript: voice.localized_script,
-        targetLanguage: voice.target_language,
-        ttsProvider: voice.provider,
-        ttsSpeaker: voice.tts_speaker,
-        regionalCritique: voice.critique,
+        localizedScript: voiceMeta.localized_script,
+        targetLanguage: voiceMeta.target_language,
+        ttsProvider: voiceMeta.provider,
+        ttsSpeaker: voiceMeta.tts_speaker,
+        regionalCritique: voiceMeta.critique,
         progress: 18,
       });
       progress(config, {
         type: "scene",
         index: sceneIndex,
         patch: {
-          audioUrl: uploaded.audio_url,
+          audioUrl: uploadedAudioUrl,
           audioSeconds,
           durationSeconds,
-          localizedScript: voice.localized_script,
-          targetLanguage: voice.target_language,
-          ttsProvider: voice.provider,
-          ttsSpeaker: voice.tts_speaker,
-          regionalCritique: voice.critique,
+          localizedScript: voiceMeta.localized_script,
+          targetLanguage: voiceMeta.target_language,
+          ttsProvider: voiceMeta.provider,
+          ttsSpeaker: voiceMeta.tts_speaker,
+          regionalCritique: voiceMeta.critique,
           progress: 18,
         },
       });
@@ -744,7 +760,7 @@ async function produceScenesNode(
         `Render as one continuous ${durationSeconds}-second cinematic shot with embedded dialogue audio.`,
       ].filter(Boolean).join("\n");
 
-      const attempts = buildLongformVideoAttempts(storyboardStillUrl!, uploaded.audio_url, durationSeconds);
+      const attempts = buildLongformVideoAttempts(storyboardStillUrl!, uploadedAudioUrl, durationSeconds);
       const { videoUrl, embeddedAudio } = await submitAndPollLongformVideo(
         fullPrompt,
         attempts,
@@ -765,8 +781,27 @@ async function produceScenesNode(
         index: sceneIndex,
         patch: { videoUrl, embeddedAudio, progress: 100, done: true },
       });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+    };
+
+    const maxAttempts = LONGFORM_LIMITS.maxRetriesPerScene + 1;
+    let lastErr: unknown = null;
+    for (let attemptNum = 0; attemptNum < maxAttempts; attemptNum++) {
+      try {
+        await runScene(attemptNum);
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[longform] scene ${sceneIndex + 1} attempt ${attemptNum + 1} failed:`, msg);
+        if (attemptNum < maxAttempts - 1) {
+          await new Promise((r) => setTimeout(r, 4000));
+        }
+      }
+    }
+    if (lastErr) {
+      const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+      // Mark scene as failed but do NOT throw — let the rest of the film render.
       scenes = patchScene(scenes, sceneIndex, {
         caption: `${record.caption}\n⚠ ${msg}`,
         progress: 0,
@@ -777,7 +812,6 @@ async function produceScenesNode(
         index: sceneIndex,
         patch: { caption: `${record.caption}\n⚠ ${msg}`, progress: 0, done: false },
       });
-      throw new Error(`Scene ${sceneIndex + 1} failed: ${msg}`);
     }
   });
 

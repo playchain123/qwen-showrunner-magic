@@ -19,8 +19,8 @@ export const LONGFORM_LIMITS = {
   maxTotalVideoSeconds: 40,
   maxParallelImageJobs: 2,
   maxParallelVideoJobs: 2,
-  maxVideoPollAttempts: 90,
-  maxRetriesPerScene: 1,
+  maxVideoPollAttempts: 140,
+  maxRetriesPerScene: 2,
   videoPollBackoffMs: [5000, 10000, 15000],
 } as const;
 
