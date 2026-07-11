@@ -758,7 +758,7 @@ async function produceScenesNode(
         },
       });
 
-      const fullPrompt = [
+      const fullPromptRaw = [
         formatOptimizedScenePrompt(optimizedPrompt, "video"),
         continuityPrompt,
         `ANCHOR PORTRAIT LOCK: match this exact character identity from the anchor still.`,
@@ -773,6 +773,11 @@ async function produceScenesNode(
         `Negative prompt: ${compiledNegatives}`,
         `Render as one continuous ${durationSeconds}-second cinematic shot with embedded dialogue audio.`,
       ].filter(Boolean).join("\n");
+      // DashScope video models cap the prompt at 4000 chars — hard-limit here or the
+      // whole scene fails validation on every retry.
+      const fullPrompt = fullPromptRaw.length > 3900
+        ? fullPromptRaw.slice(0, 3900) + "\n[truncated for length]"
+        : fullPromptRaw;
 
       const attempts = buildLongformVideoAttempts(storyboardStillUrl!, uploadedAudioUrl, durationSeconds);
       const { videoUrl, embeddedAudio } = await submitAndPollLongformVideo(
@@ -816,15 +821,16 @@ async function produceScenesNode(
     if (lastErr) {
       const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
       // Mark scene as failed but do NOT throw — let the rest of the film render.
+      // Keep progress at 100 (final state) so the overall percent never goes backwards.
       scenes = patchScene(scenes, sceneIndex, {
         caption: `${record.caption}\n⚠ ${msg}`,
-        progress: 0,
-        done: false,
+        progress: 100,
+        done: true,
       });
       progress(config, {
         type: "scene",
         index: sceneIndex,
-        patch: { caption: `${record.caption}\n⚠ ${msg}`, progress: 0, done: false },
+        patch: { caption: `${record.caption}\n⚠ ${msg}`, progress: 100, done: true },
       });
     }
   });
