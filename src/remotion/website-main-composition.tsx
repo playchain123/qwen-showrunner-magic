@@ -71,7 +71,7 @@ export function WebsiteMainComposition({ beats, brandName, colors, bgmUrl, bgmVo
             nodes.push(
               <TransitionSeries.Transition
                 key={`transition-${beat.beat_id}`}
-                presentation={transition.presentation}
+                presentation={transition.presentation as never}
                 timing={
                   beat.transition_out === "match_cut"
                     ? springTiming({ config: { damping: 200 }, durationInFrames: transition.frames })
