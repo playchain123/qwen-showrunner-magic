@@ -424,7 +424,7 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     }
     // Drop any trailing scene whose repair left required fields empty.
     parsed.scenes = parsed.scenes
-      .filter((s) => s && typeof s.image_prompt === "string" && s.image_prompt.length > 0 && typeof s.video_prompt === "string" && s.video_prompt.length > 0)
+      .filter((s) => s && typeof s.video_prompt === "string" && s.video_prompt.length > 0 && typeof s.visual === "string" && s.visual.length > 0)
       .slice(0, sceneCount)
       .map((scene) => ({
       ...scene,
