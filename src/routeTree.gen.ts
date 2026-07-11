@@ -17,6 +17,7 @@ import { Route as DashboardProfileRouteImport } from './routes/dashboard_.profil
 import { Route as DashboardLibraryRouteImport } from './routes/dashboard_.library'
 import { Route as DashboardAdsRouteImport } from './routes/dashboard_.ads'
 import { Route as ApiAgentRouteImport } from './routes/api/agent'
+import { Route as DashboardShowrunnerIndexRouteImport } from './routes/dashboard_.showrunner.index'
 import { Route as DashboardShowrunnerIdRouteImport } from './routes/dashboard_.showrunner.$id'
 import { Route as DashboardBibleNewRouteImport } from './routes/dashboard_.bible.new'
 import { Route as DashboardBibleIdRouteImport } from './routes/dashboard_.bible.$id'
@@ -62,6 +63,12 @@ const ApiAgentRoute = ApiAgentRouteImport.update({
   path: '/api/agent',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DashboardShowrunnerIndexRoute =
+  DashboardShowrunnerIndexRouteImport.update({
+    id: '/dashboard_/showrunner/',
+    path: '/dashboard/showrunner/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const DashboardShowrunnerIdRoute = DashboardShowrunnerIdRouteImport.update({
   id: '/dashboard_/showrunner/$id',
   path: '/dashboard/showrunner/$id',
@@ -96,6 +103,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/bible/$id': typeof DashboardBibleIdRoute
   '/dashboard/bible/new': typeof DashboardBibleNewRoute
   '/dashboard/showrunner/$id': typeof DashboardShowrunnerIdRoute
+  '/dashboard/showrunner/': typeof DashboardShowrunnerIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -110,6 +118,7 @@ export interface FileRoutesByTo {
   '/dashboard/bible/$id': typeof DashboardBibleIdRoute
   '/dashboard/bible/new': typeof DashboardBibleNewRoute
   '/dashboard/showrunner/$id': typeof DashboardShowrunnerIdRoute
+  '/dashboard/showrunner': typeof DashboardShowrunnerIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -125,6 +134,7 @@ export interface FileRoutesById {
   '/dashboard_/bible/$id': typeof DashboardBibleIdRoute
   '/dashboard_/bible/new': typeof DashboardBibleNewRoute
   '/dashboard_/showrunner/$id': typeof DashboardShowrunnerIdRoute
+  '/dashboard_/showrunner/': typeof DashboardShowrunnerIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -141,6 +151,7 @@ export interface FileRouteTypes {
     | '/dashboard/bible/$id'
     | '/dashboard/bible/new'
     | '/dashboard/showrunner/$id'
+    | '/dashboard/showrunner/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -155,6 +166,7 @@ export interface FileRouteTypes {
     | '/dashboard/bible/$id'
     | '/dashboard/bible/new'
     | '/dashboard/showrunner/$id'
+    | '/dashboard/showrunner'
   id:
     | '__root__'
     | '/'
@@ -169,6 +181,7 @@ export interface FileRouteTypes {
     | '/dashboard_/bible/$id'
     | '/dashboard_/bible/new'
     | '/dashboard_/showrunner/$id'
+    | '/dashboard_/showrunner/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -184,6 +197,7 @@ export interface RootRouteChildren {
   DashboardBibleIdRoute: typeof DashboardBibleIdRoute
   DashboardBibleNewRoute: typeof DashboardBibleNewRoute
   DashboardShowrunnerIdRoute: typeof DashboardShowrunnerIdRoute
+  DashboardShowrunnerIndexRoute: typeof DashboardShowrunnerIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -244,6 +258,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAgentRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/dashboard_/showrunner/': {
+      id: '/dashboard_/showrunner/'
+      path: '/dashboard/showrunner'
+      fullPath: '/dashboard/showrunner/'
+      preLoaderRoute: typeof DashboardShowrunnerIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/dashboard_/showrunner/$id': {
       id: '/dashboard_/showrunner/$id'
       path: '/dashboard/showrunner/$id'
@@ -288,6 +309,7 @@ const rootRouteChildren: RootRouteChildren = {
   DashboardBibleIdRoute: DashboardBibleIdRoute,
   DashboardBibleNewRoute: DashboardBibleNewRoute,
   DashboardShowrunnerIdRoute: DashboardShowrunnerIdRoute,
+  DashboardShowrunnerIndexRoute: DashboardShowrunnerIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
