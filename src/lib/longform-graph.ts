@@ -171,7 +171,21 @@ function patchScene(
   index: number,
   patch: Partial<LongformSceneRecord>,
 ): LongformSceneRecord[] {
-  return scenes.map((scene) => (scene.index === index ? { ...scene, ...patch } : scene));
+  return scenes.map((scene) => {
+    if (scene.index !== index) return scene;
+    const next = { ...scene, ...patch };
+    // Monotonic progress: never let a scene's percent go backwards while it's rendering.
+    // Only reset when we explicitly start a fresh retry (retryCount incremented).
+    if (
+      typeof patch.progress === "number" &&
+      patch.retryCount === undefined &&
+      patch.progress < scene.progress &&
+      !scene.done
+    ) {
+      next.progress = scene.progress;
+    }
+    return next;
+  });
 }
 
 async function measureAudioDuration(url: string): Promise<number> {
