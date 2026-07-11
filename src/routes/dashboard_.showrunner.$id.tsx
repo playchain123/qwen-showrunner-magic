@@ -95,6 +95,10 @@ function ShowrunnerPage() {
     const text = el.value.trim();
     el.value = "";
     // Guard: make sure user is signed in.
+    if (!supabase) {
+      setError("Auth not ready.");
+      return;
+    }
     const { data: user } = await supabase.auth.getUser();
     if (!user.user) {
       setError("Please sign in first.");
