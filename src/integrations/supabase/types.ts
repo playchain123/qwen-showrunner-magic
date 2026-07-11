@@ -14,6 +14,145 @@ export type Database = {
   }
   public: {
     Tables: {
+      agent_projects: {
+        Row: {
+          characters: Json
+          created_at: string
+          final_video_url: string | null
+          id: string
+          logline: string | null
+          premise: string
+          shots_plan: Json
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          characters?: Json
+          created_at?: string
+          final_video_url?: string | null
+          id?: string
+          logline?: string | null
+          premise: string
+          shots_plan?: Json
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          characters?: Json
+          created_at?: string
+          final_video_url?: string | null
+          id?: string
+          logline?: string | null
+          premise?: string
+          shots_plan?: Json
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      agent_shots: {
+        Row: {
+          audio_url: string | null
+          created_at: string
+          dialogue: string | null
+          error: string | null
+          final_url: string | null
+          frame_url: string | null
+          id: string
+          idx: number
+          project_id: string
+          prompt: string
+          speaker: string | null
+          status: string
+          updated_at: string
+          user_id: string
+          video_url: string | null
+        }
+        Insert: {
+          audio_url?: string | null
+          created_at?: string
+          dialogue?: string | null
+          error?: string | null
+          final_url?: string | null
+          frame_url?: string | null
+          id?: string
+          idx: number
+          project_id: string
+          prompt: string
+          speaker?: string | null
+          status?: string
+          updated_at?: string
+          user_id: string
+          video_url?: string | null
+        }
+        Update: {
+          audio_url?: string | null
+          created_at?: string
+          dialogue?: string | null
+          error?: string | null
+          final_url?: string | null
+          frame_url?: string | null
+          id?: string
+          idx?: number
+          project_id?: string
+          prompt?: string
+          speaker?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+          video_url?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_shots_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "agent_projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      agent_voices: {
+        Row: {
+          character_name: string
+          created_at: string
+          id: string
+          project_id: string
+          sheet_url: string | null
+          user_id: string
+          voice_id: string
+        }
+        Insert: {
+          character_name: string
+          created_at?: string
+          id?: string
+          project_id: string
+          sheet_url?: string | null
+          user_id: string
+          voice_id: string
+        }
+        Update: {
+          character_name?: string
+          created_at?: string
+          id?: string
+          project_id?: string
+          sheet_url?: string | null
+          user_id?: string
+          voice_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_voices_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "agent_projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       bible_characters: {
         Row: {
           bible_id: string

@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { convertToModelMessages, streamText, stepCountIs, type UIMessage } from "ai";
 import { createQwenProvider, QWEN_PLANNER_MODEL } from "@/lib/agent/qwen-provider.server";
 
-type ChatRequestBody = { messages?: unknown; bibleId?: unknown };
+type ChatRequestBody = { messages?: unknown; projectId?: unknown };
 
 export const Route = createFileRoute("/api/agent")({
   server: {
@@ -15,9 +15,9 @@ export const Route = createFileRoute("/api/agent")({
           return new Response("Invalid JSON", { status: 400 });
         }
         const messages = Array.isArray(body.messages) ? (body.messages as UIMessage[]) : null;
-        const bibleId = typeof body.bibleId === "string" ? body.bibleId : null;
+        const projectId = typeof body.projectId === "string" ? body.projectId : null;
         if (!messages) return new Response("messages required", { status: 400 });
-        if (!bibleId) return new Response("bibleId required", { status: 400 });
+        if (!projectId) return new Response("projectId required", { status: 400 });
 
         // Authenticate the caller with the Supabase publishable client + bearer token.
         const auth = request.headers.get("authorization") || request.headers.get("Authorization");
@@ -36,21 +36,17 @@ export const Route = createFileRoute("/api/agent")({
         if (userErr || !userRes.user) return new Response("Unauthorized", { status: 401 });
         const userId = userRes.user.id;
 
-        // Verify the bible belongs to the user before exposing tools that mutate it.
-        const { data: bibleRow, error: bibleErr } = await sb
-          .from("story_bibles")
+        // Verify the project belongs to the user before exposing tools that mutate it.
+        const { data: projRow, error: projErr } = await sb
+          .from("agent_projects")
           .select("id")
-          .eq("id", bibleId)
+          .eq("id", projectId)
           .eq("user_id", userId)
           .maybeSingle();
-        if (bibleErr || !bibleRow) return new Response("Bible not found", { status: 404 });
+        if (projErr || !projRow) return new Response("Project not found", { status: 404 });
 
-        const { buildMakersTools, MAKERS_SYSTEM_PROMPT } = await import("@/lib/agent/tools.server");
-        // Cast: tools.server.ts imports from bible/pipeline.server.ts, which is typed with our Database.
-        // The Supabase client here is created with generic Database via the types module.
-        const { supabaseAdmin: _unused } = { supabaseAdmin: null } as { supabaseAdmin: null };
-        void _unused;
-        const tools = buildMakersTools(sb as never, userId, bibleId);
+        const { buildShowrunnerTools, SHOWRUNNER_SYSTEM_PROMPT } = await import("@/lib/agent/tools.server");
+        const tools = buildShowrunnerTools(sb as never, userId, projectId);
 
         let provider;
         try {
@@ -61,7 +57,7 @@ export const Route = createFileRoute("/api/agent")({
 
         const result = streamText({
           model: provider(QWEN_PLANNER_MODEL()),
-          system: MAKERS_SYSTEM_PROMPT,
+          system: SHOWRUNNER_SYSTEM_PROMPT,
           messages: await convertToModelMessages(messages),
           tools,
           stopWhen: stepCountIs(50),
