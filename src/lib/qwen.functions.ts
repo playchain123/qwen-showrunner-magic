@@ -19,6 +19,54 @@ const VIDEO_SUBMIT_URL = `${DASHSCOPE_BASE}/api/v1/services/aigc/video-generatio
 const TASK_URL = (id: string) => `${DASHSCOPE_BASE}/api/v1/tasks/${id}`;
 const LOVABLE_GATEWAY = "https://ai.gateway.lovable.dev";
 
+/**
+ * Parse a possibly-malformed JSON storyboard from an LLM. Handles:
+ * - Markdown code fences (```json ... ```)
+ * - Trailing garbage after the outer object
+ * - Truncated output: closes any unterminated string, then closes open
+ *   arrays/objects so JSON.parse succeeds and we keep the completed scenes.
+ */
+function parseStoryboardJson(raw: string): unknown {
+  let s = raw.trim();
+  // Strip ```json fences
+  s = s.replace(/^```(?:json)?\s*/i, "").replace(/```$/g, "").trim();
+  const start = s.indexOf("{");
+  if (start === -1) throw new Error("Storyboard response contained no JSON object");
+  s = s.slice(start);
+  try {
+    return JSON.parse(s);
+  } catch {
+    // Repair: walk the string tracking structural state, then append the
+    // closers needed to terminate a truncated payload.
+    const stack: string[] = [];
+    let inString = false;
+    let escape = false;
+    for (let i = 0; i < s.length; i++) {
+      const ch = s[i];
+      if (escape) { escape = false; continue; }
+      if (ch === "\\") { escape = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (ch === "{" || ch === "[") stack.push(ch);
+      else if (ch === "}") { if (stack[stack.length - 1] === "{") stack.pop(); }
+      else if (ch === "]") { if (stack[stack.length - 1] === "[") stack.pop(); }
+    }
+    let repaired = s;
+    if (inString) repaired += '"';
+    // Drop a dangling trailing comma before we close containers.
+    repaired = repaired.replace(/,\s*$/, "");
+    while (stack.length) {
+      const open = stack.pop()!;
+      repaired += open === "{" ? "}" : "]";
+    }
+    try {
+      return JSON.parse(repaired);
+    } catch (e) {
+      throw new Error(`Storyboard JSON could not be repaired: ${(e as Error).message}`);
+    }
+  }
+}
+
 // Allow only trusted external hosts for URLs we forward to third-party AI
 // providers. Prevents SSRF-by-proxy against cloud-internal endpoints.
 const ALLOWED_MEDIA_HOSTS = new Set([
