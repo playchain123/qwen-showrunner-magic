@@ -309,9 +309,9 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     // Retry across Qwen model tiers. Non-Qwen fallback is opt-in so the
     // hackathon path remains clearly Qwen-first.
     const attempts: Array<{ model: string; max_tokens: number }> = [
-      { model: qwenModel("QWEN_SCRIPT_MODEL", "qwen3.7-max"), max_tokens: 3200 },
-      { model: qwenModel("QWEN_FAST_MODEL", "qwen-plus"), max_tokens: 2600 },
-      { model: qwenModel("QWEN_FAST_MODEL", "qwen-plus"), max_tokens: 2200 },
+      { model: qwenModel("QWEN_SCRIPT_MODEL", "qwen3.7-max"), max_tokens: 12000 },
+      { model: qwenModel("QWEN_FAST_MODEL", "qwen-plus"), max_tokens: 10000 },
+      { model: qwenModel("QWEN_FAST_MODEL", "qwen-plus"), max_tokens: 8000 },
     ];
     let content = "";
     let lastErr = "";
@@ -370,7 +370,7 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     }
     if (!content) throw new Error(`Storyboard failed: ${lastErr || "Qwen returned no content"}`);
 
-    const parsed = JSON.parse(content || "{}") as Storyboard;
+    const parsed = parseStoryboardJson(content || "{}") as Storyboard;
     if (!parsed.scenes || !Array.isArray(parsed.scenes)) {
       throw new Error("Storyboard missing scenes");
     }
