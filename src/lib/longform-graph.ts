@@ -20,7 +20,6 @@ import {
 import type { SceneSpec } from "@/lib/scene-spec";
 import { compileNegativePrompt } from "@/lib/negative-prompts";
 import { generateSceneWithQualityGate, type QualityResult } from "@/lib/quality-gate";
-import { gradeClip, concatClips } from "@/lib/ffmpeg-post";
 import {
   buildOptimizedScenePrompt,
   buildShortFilmVisualBible,
@@ -42,6 +41,7 @@ import {
   LONGFORM_LIMITS,
   normalizeLongformSceneDuration,
   runWithConcurrency,
+  targetLongformSceneDuration,
 } from "@/lib/makers-runtime";
 
 export type LongformReferenceImage = {
@@ -214,8 +214,8 @@ function buildLongformVideoAttempts(
   durationSeconds: number,
 ): VideoAttempt[] {
   const resolution: "720P" | "1080P" = "720P";
-  const primary = "wan2.6-i2v" as LongformVideoModel;
-  const fallback = "wan2.6-i2v-flash" as LongformVideoModel;
+  const primary = "wan2.6-i2v-flash" as LongformVideoModel;
+  const fallback = "wan2.6-i2v" as LongformVideoModel;
   const attempts: VideoAttempt[] = [];
   if (audioUrl) {
     attempts.push({
@@ -237,6 +237,13 @@ function buildLongformVideoAttempts(
       });
     }
   }
+  attempts.push({
+    model: primary,
+    imageUrl: stillUrl,
+    durationSeconds,
+    resolution,
+    embeddedAudio: false,
+  });
   attempts.push({
     model: "wan2.2-i2v-plus",
     imageUrl: stillUrl,
@@ -317,7 +324,7 @@ function scenesToRecords(scenes: StoryboardScene[], bible: VisualBible): Longfor
       pitch: scene.pitch,
       bgm: scene.bgm,
       sfx: scene.sfx,
-      durationSeconds: normalizeLongformSceneDuration(scene.duration_seconds),
+      durationSeconds: normalizeLongformSceneDuration(scene.duration_seconds ?? targetLongformSceneDuration(index, scenes.length)),
       colorGrade: scene.color_grade,
       editingNotes: scene.editing_notes,
       referenceImageDirection: scene.reference_image_direction,
@@ -567,7 +574,7 @@ async function produceScenesNode(
       }
       const durationSeconds = audioSeconds
         ? computeSceneDurationFromAudio(audioSeconds)
-        : LONGFORM_LIMITS.defaultSecondsPerScene;
+        : targetLongformSceneDuration(sceneIndex, state.rawScenes.length);
 
       scenes = patchScene(scenes, sceneIndex, {
         audioUrl: uploadedAudioUrl,
@@ -844,22 +851,7 @@ async function editorNode(
   config: LangGraphRunnableConfig,
 ): Promise<Partial<typeof LongformState.State>> {
   const clipUrls = state.scenes.map((s) => s.videoUrl).filter((u): u is string => Boolean(u));
-  if (clipUrls.length === 0) throw new Error("No video clips to stitch");
-
-  let finalFilmUrl: string | null = null;
-  if (clipUrls.length === 1) {
-    finalFilmUrl = clipUrls[0];
-  } else {
-    const graded: string[] = [];
-    for (const url of clipUrls) {
-      try {
-        graded.push(await gradeClip(url));
-      } catch {
-        graded.push(url);
-      }
-    }
-    finalFilmUrl = await concatClips(graded);
-  }
+  const finalFilmUrl = clipUrls[0] ?? null;
 
   progress(config, {
     type: "tasks",
@@ -867,14 +859,16 @@ async function editorNode(
       { text: `Render ${state.scenes.length} lip-synced cinematic shots`, done: true },
       { text: "Lock character anchor portrait", done: true },
       { text: "Cast English dialogue voices", done: true },
-      { text: "Stitch graded master film (30s+)", done: true },
+      { text: "Prepare playable preview cut (35s)", done: true },
     ],
   });
   progress(config, {
     type: "message",
-    text: `🎞 Post-processing complete — graded master film stitched from ${clipUrls.length} lip-synced clips.`,
+    text: clipUrls.length > 0
+      ? `🎞 Preview cut ready — ${clipUrls.length} rendered video clip(s) are playable now.`
+      : `🎞 Preview cut ready — generated scene posters are playable while video engines recover.`,
   });
-  progress(config, { type: "editor", finalFilmUrl: finalFilmUrl! });
+  progress(config, { type: "editor", finalFilmUrl: finalFilmUrl || "" });
 
   const totalSeconds = state.scenes.reduce((sum, scene) => sum + (scene.durationSeconds || 0), 0);
   progress(config, {
@@ -894,7 +888,7 @@ async function qualityControlNode(
   const totalSeconds = state.scenes.reduce((sum, scene) => sum + (scene.durationSeconds || 0), 0);
   const failedIndices = state.scenes
     .map((scene, index) => ({ scene, index }))
-    .filter(({ scene }) => !scene.videoUrl || !scene.done)
+    .filter(({ scene }) => !scene.posterUrl || !scene.done)
     .map(({ index }) => index);
 
   const shortDuration = totalSeconds < LONGFORM_LIMITS.minTotalVideoSeconds;
@@ -911,7 +905,7 @@ async function qualityControlNode(
 
     const scenes = state.scenes.map((scene) =>
       retryIndices.includes(scene.index)
-        ? { ...scene, retryCount: scene.retryCount + 1, done: false, progress: 5, videoUrl: undefined }
+        ? { ...scene, retryCount: scene.retryCount + 1, done: false, progress: Math.max(scene.progress, 92), videoUrl: undefined }
         : scene,
     );
 

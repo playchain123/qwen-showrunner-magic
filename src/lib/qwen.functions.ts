@@ -315,7 +315,7 @@ export const generateStoryboard = createServerFn({ method: "POST" })
       ? normalizeLongformSceneDuration(undefined)
       : normalizeSceneDuration(undefined);
     const durationRule = isLongform
-      ? `Each scene is designed as an ~${sceneSeconds}-second dramatic shot with on-camera dialogue. The full film must be at least 30 seconds total across ${sceneCount} scenes.`
+      ? `Create EXACTLY ${sceneCount} scenes totaling about 35 seconds: scenes 1-3 are 5 seconds each, scenes 4-${sceneCount} are 4 seconds each. Every scene is a dramatic on-camera dialogue shot.`
       : `Each scene is designed as a ${sceneSeconds}-second dramatic shot and the full hackathon demo must stay under 15 seconds.`;
     const spokenLineRule = isLongform
       ? `- spoken_line: 20-28 words of natural English dialogue written for on-camera delivery (~8-9 seconds of speech). Same lead character speaks in every scene.`
@@ -496,6 +496,7 @@ export const submitVideo = createServerFn({ method: "POST" })
             duration: data.durationSeconds ?? 10,
             prompt_extend: true,
             watermark: false,
+            ...(data.audioUrl ? {} : { audio: false }),
           },
         }
       : {
@@ -569,11 +570,21 @@ export const uploadVoiceAudio = createServerFn({ method: "POST" })
       .parse(input),
   )
   .handler(async ({ data, context }): Promise<{ audio_url: string }> => {
+    let contentType = "audio/mpeg";
+    let bytes: Uint8Array;
     const match = data.audio_data_url.match(/^data:([^;]+);base64,(.+)$/);
-    if (!match) throw new Error("audio_data_url must be a base64 data URL");
-    const contentType = match[1] || "audio/mpeg";
-    const base64 = match[2];
-    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    if (match) {
+      contentType = match[1] || contentType;
+      bytes = Uint8Array.from(atob(match[2]), (c) => c.charCodeAt(0));
+    } else {
+      if (!isSafeExternalUrl(data.audio_data_url) || !/^https:\/\//i.test(data.audio_data_url)) {
+        throw new Error("audio_data_url must be a base64 data URL or trusted HTTPS audio URL");
+      }
+      const audioRes = await fetchWithTimeout(data.audio_data_url, {}, 45_000, "voice audio download");
+      if (!audioRes.ok) throw new Error(`Voice audio download failed (${audioRes.status})`);
+      contentType = audioRes.headers.get("content-type") || contentType;
+      bytes = new Uint8Array(await audioRes.arrayBuffer());
+    }
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const ext = contentType.includes("wav") ? "wav" : "mp3";
@@ -818,7 +829,7 @@ export const generateSceneImage = createServerFn({ method: "POST" })
       "No text, no watermark, no subtitles, no logos unless explicitly requested.",
     ].filter(Boolean).join("\n");
 
-    const unusedLegacyContent: Array<Record<string, unknown>> = [
+    const content: Array<Record<string, unknown>> = [
       {
         type: "text",
         text: [
@@ -830,9 +841,7 @@ export const generateSceneImage = createServerFn({ method: "POST" })
           .join("\n"),
       },
     ];
-    for (const ref of data.referenceImages.slice(0, 4)) {
-      unusedLegacyContent.push({ type: "image_url", image_url: { url: ref } });
-    }
+    for (const ref of data.referenceImages.slice(0, 4)) content.push({ image: ref });
 
     const res = await fetchWithTimeout(qwenMaasGenerationUrl(), {
       method: "POST",
@@ -846,7 +855,7 @@ export const generateSceneImage = createServerFn({ method: "POST" })
           messages: [
             {
               role: "user",
-              content: [{ text: prompt }],
+              content,
             },
           ],
         },

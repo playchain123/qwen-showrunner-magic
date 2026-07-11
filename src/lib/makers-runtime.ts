@@ -15,8 +15,9 @@ export const LONGFORM_LIMITS = {
   minSecondsPerScene: 4,
   maxSecondsPerScene: 5,
   defaultSecondsPerScene: 4,
-  minTotalVideoSeconds: 30,
-  maxTotalVideoSeconds: 40,
+  targetTotalVideoSeconds: 35,
+  minTotalVideoSeconds: 35,
+  maxTotalVideoSeconds: 35,
   maxParallelImageJobs: 2,
   maxParallelVideoJobs: 2,
   maxVideoPollAttempts: 140,
@@ -45,6 +46,11 @@ export function normalizeLongformSceneDuration(seconds: number | undefined) {
     LONGFORM_LIMITS.minSecondsPerScene,
     Math.min(LONGFORM_LIMITS.maxSecondsPerScene, Math.floor(seconds as number)),
   );
+}
+
+export function targetLongformSceneDuration(sceneIndex: number, sceneCount = LONGFORM_LIMITS.maxScenes) {
+  if (sceneCount === LONGFORM_LIMITS.maxScenes && sceneIndex < 3) return LONGFORM_LIMITS.maxSecondsPerScene;
+  return LONGFORM_LIMITS.defaultSecondsPerScene;
 }
 
 export function computeSceneDurationFromAudio(audioSeconds: number) {
