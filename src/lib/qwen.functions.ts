@@ -241,7 +241,7 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     z
       .object({
         prompt: z.string().min(1).max(4000),
-        sceneCount: z.number().int().min(1).max(3).default(3),
+        sceneCount: z.number().int().min(1).max(10).default(8),
         learningContext: z.string().max(2000).optional().default(""),
         referenceImages: z
           .array(
