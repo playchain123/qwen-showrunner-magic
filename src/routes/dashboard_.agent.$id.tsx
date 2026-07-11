@@ -238,7 +238,7 @@ function AgentWorkspace() {
           }
           if (event.type === "scene") {
             setCards((c) =>
-              c.map((card, i) => (i === event.index ? { ...card, ...longformPatchToCard(event.patch) } : card)),
+              c.map((card, i) => (i === event.index ? applyCardPatch(card, longformPatchToCard(event.patch)) : card)),
             );
           }
           if (event.type === "editor") {
@@ -248,7 +248,7 @@ function AgentWorkspace() {
       });
 
       const finalScenes = result.scenes ?? [];
-      const masterFilmUrl = result.finalFilmUrl ?? finalScenes.find((s) => s.videoUrl)?.videoUrl;
+      const masterFilmUrl = result.finalFilmUrl || finalScenes.find((s) => s.videoUrl)?.videoUrl;
       if (masterFilmUrl) setFinalFilmUrl(masterFilmUrl);
 
       const totalSeconds = result.totalSeconds || finalScenes.reduce((sum, s) => sum + (s.durationSeconds || 0), 0);
@@ -256,7 +256,9 @@ function AgentWorkspace() {
         ...m,
         {
           role: "agent",
-          text: `Final cut is locked — ~${totalSeconds}s lip-synced film with consistent character identity across every shot. Press ▶ Play Film.`,
+          text: finalScenes.some((s) => s.videoUrl)
+            ? `Preview cut is ready — ~${totalSeconds}s film with consistent character identity. Press ▶ Play Film.`
+            : `Scene preview is ready — generated posters and dialogue are playable while video rendering recovers. Press ▶ Play Film.`,
         },
       ]);
       setTimeout(() => setPlayingFilm(true), 400);
@@ -589,8 +591,8 @@ function AgentWorkspace() {
                           </svg>
                           <span className="absolute inset-0 flex items-center justify-center text-sm">{totalProgress}%</span>
                         </div>
-                        <div className="relative text-sm text-white/80">Rendering the full film before playback…</div>
-                        <div className="relative text-[11px] text-white/50">{renderedCount}/{cards.length} videos finished · play unlocks only when every scene is ready</div>
+                        <div className="relative text-sm text-white/80">Rendering scenes… preview unlocks as soon as the first shot is ready</div>
+                        <div className="relative text-[11px] text-white/50">{renderedCount}/{cards.length} videos finished · posters appear first, videos replace them automatically</div>
                       </div>
                     )}
                   </div>
@@ -1122,6 +1124,19 @@ function longformPatchToCard(patch: Partial<LongformSceneRecord>): Partial<Story
   };
 }
 
+function applyCardPatch(card: StoryCard, patch: Partial<StoryCard>): StoryCard {
+  const next = { ...card, ...patch };
+  if (
+    typeof patch.progress === "number" &&
+    typeof card.progress === "number" &&
+    patch.progress < card.progress &&
+    !patch.done
+  ) {
+    next.progress = card.progress;
+  }
+  return next;
+}
+
 /**
  * Cinematic FilmPlayer — professional AI edit on the client:
  *  - Single reliable <video> element with preload + guarded timing
@@ -1158,7 +1173,7 @@ function FilmPlayer({
   const recDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
 
   const current = shots[idx];
-  const currentSceneIndex = Math.max(0, cards.findIndex((c) => c.videoUrl === current?.videoUrl));
+  const currentSceneIndex = Math.max(0, cards.findIndex((c) => c === current));
   const bgmUrl = useMemo(() => pickBgm(cards[0]?.bgm || cards[0]?.colorGrade || title), [cards, title]);
 
   useEffect(() => {
@@ -1232,8 +1247,7 @@ function FilmPlayer({
         v.volume = 0.9;
         v.play().catch(() => {});
       } else {
-        // Should not happen because playback is locked until all videos render,
-        // but clear the source defensively if an old session has incomplete data.
+        // Poster-only shots still play through the underlay image and fallback timer.
         v.removeAttribute("src");
         v.load();
       }
