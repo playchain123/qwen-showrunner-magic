@@ -36,7 +36,6 @@ import {
   type VisualBible,
 } from "@/lib/continuity";
 import {
-  computeSceneDurationFromAudio,
   getLongformVideoPollDelayMs,
   LONGFORM_LIMITS,
   normalizeLongformSceneDuration,
@@ -572,9 +571,7 @@ async function produceScenesNode(
         const msg = audioErr instanceof Error ? audioErr.message : String(audioErr);
         console.warn(`[longform] scene ${sceneIndex + 1} audio failed, rendering silent:`, msg);
       }
-      const durationSeconds = audioSeconds
-        ? computeSceneDurationFromAudio(audioSeconds)
-        : targetLongformSceneDuration(sceneIndex, state.rawScenes.length);
+      const durationSeconds = targetLongformSceneDuration(sceneIndex, state.rawScenes.length);
 
       scenes = patchScene(scenes, sceneIndex, {
         audioUrl: uploadedAudioUrl,

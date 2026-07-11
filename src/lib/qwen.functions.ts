@@ -318,10 +318,10 @@ export const generateStoryboard = createServerFn({ method: "POST" })
       ? `Create EXACTLY ${sceneCount} scenes totaling about 35 seconds: scenes 1-3 are 5 seconds each, scenes 4-${sceneCount} are 4 seconds each. Every scene is a dramatic on-camera dialogue shot.`
       : `Each scene is designed as a ${sceneSeconds}-second dramatic shot and the full hackathon demo must stay under 15 seconds.`;
     const spokenLineRule = isLongform
-      ? `- spoken_line: 20-28 words of natural English dialogue written for on-camera delivery (~8-9 seconds of speech). Same lead character speaks in every scene.`
+      ? `- spoken_line: 8-12 words of natural English dialogue written for on-camera delivery. Same lead character speaks in every scene. Keep it short enough for a 4-5 second shot.`
       : `- spoken_line: 4-12 words, natural dramatic dialogue that fits a ${sceneSeconds}-second scene.`;
     const videoPromptSuffix = isLongform
-      ? `single continuous ${sceneSeconds}-second cinematic shot, film grain, shallow depth of field, 35mm, dramatic lighting, high detail, natural motion, real character performance, lip-sync ready`
+      ? `single continuous 4-5 second cinematic shot, film grain, shallow depth of field, 35mm, dramatic lighting, high detail, natural motion, real character performance, lip-sync ready`
       : `single continuous four-second cinematic shot, film grain, shallow depth of field, 35mm, dramatic lighting, high detail, natural motion, real character performance`;
     const system = [
       `You are Makers, an AI showrunner + screenwriter + professional film editor trained in Adobe Premiere Pro, After Effects, DaVinci Resolve, cinematic camera blocking, color grading, VFX, SFX, Foley, trailer pacing, and short-drama continuity. Given a logline, produce a concise cinematic short film script and shot-list of EXACTLY ${sceneCount} scenes. ${durationRule}`,
