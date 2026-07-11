@@ -422,12 +422,19 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     if (!parsed.scenes || !Array.isArray(parsed.scenes)) {
       throw new Error("Storyboard missing scenes");
     }
-    parsed.scenes = parsed.scenes.slice(0, sceneCount).map((scene) => ({
+    // Drop any trailing scene whose repair left required fields empty.
+    parsed.scenes = parsed.scenes
+      .filter((s) => s && typeof s.image_prompt === "string" && s.image_prompt.length > 0 && typeof s.video_prompt === "string" && s.video_prompt.length > 0)
+      .slice(0, sceneCount)
+      .map((scene) => ({
       ...scene,
       duration_seconds: isLongform
         ? normalizeLongformSceneDuration(scene.duration_seconds)
         : normalizeSceneDuration(scene.duration_seconds),
     }));
+    if (parsed.scenes.length === 0) {
+      throw new Error("Storyboard returned no complete scenes (model output truncated)");
+    }
     return parsed;
   });
 
