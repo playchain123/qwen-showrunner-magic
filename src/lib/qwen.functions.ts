@@ -829,18 +829,7 @@ export const generateSceneImage = createServerFn({ method: "POST" })
       "No text, no watermark, no subtitles, no logos unless explicitly requested.",
     ].filter(Boolean).join("\n");
 
-    const content: Array<Record<string, unknown>> = [
-      {
-        type: "text",
-        text: [
-          `Cinematic film still, 35mm anamorphic look, professional lighting, shallow depth of field, natural human subject, real photography look — NOT stylized illustration unless the prompt says animation.`,
-          guidance,
-          `SCENE: ${data.prompt}`,
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      },
-    ];
+    const content: Array<Record<string, unknown>> = [{ text: prompt }];
     for (const ref of data.referenceImages.slice(0, 4)) content.push({ image: ref });
 
     const res = await fetchWithTimeout(qwenMaasGenerationUrl(), {
