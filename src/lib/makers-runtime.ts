@@ -11,12 +11,12 @@ export const MAKERS_DEMO_LIMITS = {
 
 /** Long-form pipeline: 30+ second films with lip-synced wan2.6-i2v clips. */
 export const LONGFORM_LIMITS = {
-  maxScenes: 3,
-  minSecondsPerScene: 6,
-  maxSecondsPerScene: 15,
-  defaultSecondsPerScene: 11,
+  maxScenes: 8,
+  minSecondsPerScene: 4,
+  maxSecondsPerScene: 5,
+  defaultSecondsPerScene: 4,
   minTotalVideoSeconds: 30,
-  maxTotalVideoSeconds: 45,
+  maxTotalVideoSeconds: 40,
   maxParallelImageJobs: 2,
   maxParallelVideoJobs: 2,
   maxVideoPollAttempts: 90,
