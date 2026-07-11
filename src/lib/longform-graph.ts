@@ -519,7 +519,8 @@ async function produceScenesNode(
         data: {
           text: spokenLine,
           voice: chosenVoice,
-          language: raw.language || "English",
+          // Force English for TTS — other languages (e.g. Mandarin) fail the routing.
+          language: "English",
           tone: characterLock?.voiceStyle || raw.voice_tone || "natural film dialogue",
           pitch: raw.pitch || "medium",
           beatId: `scene-${sceneIndex + 1}`,
