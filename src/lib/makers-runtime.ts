@@ -48,7 +48,7 @@ export function normalizeLongformSceneDuration(seconds: number | undefined) {
   );
 }
 
-export function targetLongformSceneDuration(sceneIndex: number, sceneCount = LONGFORM_LIMITS.maxScenes) {
+export function targetLongformSceneDuration(sceneIndex: number, sceneCount: number = LONGFORM_LIMITS.maxScenes) {
   if (sceneCount === LONGFORM_LIMITS.maxScenes && sceneIndex < 3) return LONGFORM_LIMITS.maxSecondsPerScene;
   return LONGFORM_LIMITS.defaultSecondsPerScene;
 }
