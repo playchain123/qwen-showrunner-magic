@@ -171,7 +171,21 @@ function patchScene(
   index: number,
   patch: Partial<LongformSceneRecord>,
 ): LongformSceneRecord[] {
-  return scenes.map((scene) => (scene.index === index ? { ...scene, ...patch } : scene));
+  return scenes.map((scene) => {
+    if (scene.index !== index) return scene;
+    const next = { ...scene, ...patch };
+    // Monotonic progress: never let a scene's percent go backwards while it's rendering.
+    // Only reset when we explicitly start a fresh retry (retryCount incremented).
+    if (
+      typeof patch.progress === "number" &&
+      patch.retryCount === undefined &&
+      patch.progress < scene.progress &&
+      !scene.done
+    ) {
+      next.progress = scene.progress;
+    }
+    return next;
+  });
 }
 
 async function measureAudioDuration(url: string): Promise<number> {
@@ -744,7 +758,7 @@ async function produceScenesNode(
         },
       });
 
-      const fullPrompt = [
+      const fullPromptRaw = [
         formatOptimizedScenePrompt(optimizedPrompt, "video"),
         continuityPrompt,
         `ANCHOR PORTRAIT LOCK: match this exact character identity from the anchor still.`,
@@ -759,6 +773,11 @@ async function produceScenesNode(
         `Negative prompt: ${compiledNegatives}`,
         `Render as one continuous ${durationSeconds}-second cinematic shot with embedded dialogue audio.`,
       ].filter(Boolean).join("\n");
+      // DashScope video models cap the prompt at 4000 chars — hard-limit here or the
+      // whole scene fails validation on every retry.
+      const fullPrompt = fullPromptRaw.length > 3900
+        ? fullPromptRaw.slice(0, 3900) + "\n[truncated for length]"
+        : fullPromptRaw;
 
       const attempts = buildLongformVideoAttempts(storyboardStillUrl!, uploadedAudioUrl, durationSeconds);
       const { videoUrl, embeddedAudio } = await submitAndPollLongformVideo(
@@ -802,15 +821,16 @@ async function produceScenesNode(
     if (lastErr) {
       const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
       // Mark scene as failed but do NOT throw — let the rest of the film render.
+      // Keep progress at 100 (final state) so the overall percent never goes backwards.
       scenes = patchScene(scenes, sceneIndex, {
         caption: `${record.caption}\n⚠ ${msg}`,
-        progress: 0,
-        done: false,
+        progress: 100,
+        done: true,
       });
       progress(config, {
         type: "scene",
         index: sceneIndex,
-        patch: { caption: `${record.caption}\n⚠ ${msg}`, progress: 0, done: false },
+        patch: { caption: `${record.caption}\n⚠ ${msg}`, progress: 100, done: true },
       });
     }
   });
