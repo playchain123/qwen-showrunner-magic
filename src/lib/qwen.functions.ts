@@ -19,6 +19,54 @@ const VIDEO_SUBMIT_URL = `${DASHSCOPE_BASE}/api/v1/services/aigc/video-generatio
 const TASK_URL = (id: string) => `${DASHSCOPE_BASE}/api/v1/tasks/${id}`;
 const LOVABLE_GATEWAY = "https://ai.gateway.lovable.dev";
 
+/**
+ * Parse a possibly-malformed JSON storyboard from an LLM. Handles:
+ * - Markdown code fences (```json ... ```)
+ * - Trailing garbage after the outer object
+ * - Truncated output: closes any unterminated string, then closes open
+ *   arrays/objects so JSON.parse succeeds and we keep the completed scenes.
+ */
+function parseStoryboardJson(raw: string): unknown {
+  let s = raw.trim();
+  // Strip ```json fences
+  s = s.replace(/^```(?:json)?\s*/i, "").replace(/```$/g, "").trim();
+  const start = s.indexOf("{");
+  if (start === -1) throw new Error("Storyboard response contained no JSON object");
+  s = s.slice(start);
+  try {
+    return JSON.parse(s);
+  } catch {
+    // Repair: walk the string tracking structural state, then append the
+    // closers needed to terminate a truncated payload.
+    const stack: string[] = [];
+    let inString = false;
+    let escape = false;
+    for (let i = 0; i < s.length; i++) {
+      const ch = s[i];
+      if (escape) { escape = false; continue; }
+      if (ch === "\\") { escape = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (ch === "{" || ch === "[") stack.push(ch);
+      else if (ch === "}") { if (stack[stack.length - 1] === "{") stack.pop(); }
+      else if (ch === "]") { if (stack[stack.length - 1] === "[") stack.pop(); }
+    }
+    let repaired = s;
+    if (inString) repaired += '"';
+    // Drop a dangling trailing comma before we close containers.
+    repaired = repaired.replace(/,\s*$/, "");
+    while (stack.length) {
+      const open = stack.pop()!;
+      repaired += open === "{" ? "}" : "]";
+    }
+    try {
+      return JSON.parse(repaired);
+    } catch (e) {
+      throw new Error(`Storyboard JSON could not be repaired: ${(e as Error).message}`);
+    }
+  }
+}
+
 // Allow only trusted external hosts for URLs we forward to third-party AI
 // providers. Prevents SSRF-by-proxy against cloud-internal endpoints.
 const ALLOWED_MEDIA_HOSTS = new Set([
@@ -309,9 +357,9 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     // Retry across Qwen model tiers. Non-Qwen fallback is opt-in so the
     // hackathon path remains clearly Qwen-first.
     const attempts: Array<{ model: string; max_tokens: number }> = [
-      { model: qwenModel("QWEN_SCRIPT_MODEL", "qwen3.7-max"), max_tokens: 3200 },
-      { model: qwenModel("QWEN_FAST_MODEL", "qwen-plus"), max_tokens: 2600 },
-      { model: qwenModel("QWEN_FAST_MODEL", "qwen-plus"), max_tokens: 2200 },
+      { model: qwenModel("QWEN_SCRIPT_MODEL", "qwen3.7-max"), max_tokens: 12000 },
+      { model: qwenModel("QWEN_FAST_MODEL", "qwen-plus"), max_tokens: 10000 },
+      { model: qwenModel("QWEN_FAST_MODEL", "qwen-plus"), max_tokens: 8000 },
     ];
     let content = "";
     let lastErr = "";
@@ -370,16 +418,23 @@ export const generateStoryboard = createServerFn({ method: "POST" })
     }
     if (!content) throw new Error(`Storyboard failed: ${lastErr || "Qwen returned no content"}`);
 
-    const parsed = JSON.parse(content || "{}") as Storyboard;
+    const parsed = parseStoryboardJson(content || "{}") as Storyboard;
     if (!parsed.scenes || !Array.isArray(parsed.scenes)) {
       throw new Error("Storyboard missing scenes");
     }
-    parsed.scenes = parsed.scenes.slice(0, sceneCount).map((scene) => ({
+    // Drop any trailing scene whose repair left required fields empty.
+    parsed.scenes = parsed.scenes
+      .filter((s) => s && typeof s.video_prompt === "string" && s.video_prompt.length > 0 && typeof s.visual === "string" && s.visual.length > 0)
+      .slice(0, sceneCount)
+      .map((scene) => ({
       ...scene,
       duration_seconds: isLongform
         ? normalizeLongformSceneDuration(scene.duration_seconds)
         : normalizeSceneDuration(scene.duration_seconds),
     }));
+    if (parsed.scenes.length === 0) {
+      throw new Error("Storyboard returned no complete scenes (model output truncated)");
+    }
     return parsed;
   });
 
