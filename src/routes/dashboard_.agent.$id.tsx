@@ -15,6 +15,7 @@ import {
   runLongformPipeline,
   type LongformSceneRecord,
 } from "@/lib/longform-graph";
+import { normalizeSceneDuration } from "@/lib/makers-runtime";
 
 export const Route = createFileRoute("/dashboard_/agent/$id")({
   ssr: false,
