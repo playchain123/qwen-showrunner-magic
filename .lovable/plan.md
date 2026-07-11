@@ -1,79 +1,57 @@
-## Goal
+# 10-Shot Consistent Video Agent (Happyhorse + Wan + CosyVoice)
 
-Replace the hand-rolled linear pipeline in `dashboard_.agent.$id.tsx` + `longform-graph.ts` with a single **Qwen-driven agent orchestrator** that plans and executes the full film using tool calls. Only Qwen (planner/writer) and Happyhorse (image/video fallback) are used — no OpenAI / Gemini / Lovable AI Gateway in the pipeline. You'll add the new Happyhorse API key when ready.
+Build an InVideo-style agent that plans a 10-shot storyboard and renders it end-to-end using **only** Qwen Cloud models: Happyhorse (I2V/T2V/R2V/Video-Edit), Wan (T2V/I2V/R2V/Image/VideoEdit), CosyVoice + Voice-Enrollment. The agent (AI SDK `streamText` + tools) drives every stage and is exposed as a chat UI at `/dashboard/agent/:id`.
 
-## New architecture
+## Model routing (locked — agent cannot substitute)
+- **Character sheet image** (hero portrait, one per character): `wan2.7-image-pro`
+- **Storyboard frame images** (one per shot, seeded from character sheet for identity): `wan2.7-image-pro` with reference image
+- **Shot 1 video** (establishing, from character-anchored frame): `happyhorse-1.1-i2v` → fallback `wan2.7-i2v`
+- **Shots 2–10 video** (continuity): `happyhorse-1.1-r2v` (reference-to-video, seeds character token + prior last frame) → fallback `wan2.7-r2v-2026-06-12`
+- **Optional edit pass** (color match / small fixes): `wan2.7-videoedit` or `happyhorse-1.0-video-edit`
+- **Voice clone enrollment** (once per character, from a short sample or synthesized seed): `voice-enrollment`
+- **Dialogue TTS with cloned voice**: `cosyvoice-v3-plus`
+- **Lip-sync**: Wan video-edit pass driven by the TTS wav per shot
 
-```text
-User prompt
-   ↓
-[Character Bible modal]   ← already wired
-   ↓
-runMakersAgent (server fn, streaming)
-   ├─ Qwen planner loop (stopWhen: stepCountIs(50))
-   │    tools:
-   │      build_bible(prompt, refs)         → VisualBible
-   │      write_script(bible, beats)        → Script (Output.object)
-   │      generate_storyboard(script)       → Scene[] (Output.object)
-   │      render_scene_image(scene, bible)  → Qwen image, HH fallback
-   │      render_scene_video(scene, image)  → Wan i2v, HH fallback
-   │      qa_scene(scene, video)            → {pass, issues[]}
-   │      ask_user(question, choices)       → pauses stream, waits for reply
-   │      stitch_film(scenes, audio)        → final mp4
-   ↓
-Client renders streamed message.parts (planner thoughts, tool calls, tool results)
-   ↓
-Result page: full-video player + per-scene inspector + context panel
-```
+No other providers. `ALLOW_NON_QWEN_FALLBACKS=false` stays enforced.
 
-## Files to add
+## Agent architecture (AI SDK, server-side)
+`src/routes/api/agent.ts` (already scaffolded) streams `streamText` with `stopWhen: stepCountIs(50)`. Tool catalog in `src/lib/agent/tools.server.ts`:
 
-- `src/lib/agent/qwen-provider.server.ts` — OpenAI-compatible provider pointed at DashScope (`https://dashscope-intl.aliyuncs.com/compatible-mode/v1`) using `QWEN_API_KEY`. Wraps `@ai-sdk/openai-compatible`.
-- `src/lib/agent/happyhorse.server.ts` — thin client for image + video endpoints, used as fallback inside tools.
-- `src/lib/agent/tools.server.ts` — all `tool({ inputSchema, execute })` definitions above. Each tool returns compact JSON; large blobs (images/videos) are uploaded to Supabase Storage and only URLs pass back to the model.
-- `src/lib/agent/orchestrator.functions.ts` — `runMakersAgent = createServerFn` that streams `toUIMessageStreamResponse`. Middleware: `requireSupabaseAuth`. System prompt encodes the Makers house style + demo limits (`MAX_SCENES=3`, `MAX_VIDEO_SECONDS_PER_PROJECT=15`).
-- `src/routes/api/agent.ts` — streaming chat route for the workspace UI (uses `useChat` transport). Delegates to the same tool set.
+1. `plan_story({ premise, characters?, tone? })` — Qwen `qwen3.7-max` returns `{logline, characters[], 10 shots[]}` via `Output.object` (flat schema, no bounds).
+2. `build_character_sheets()` — for each character, generate a canonical portrait via `wan2.7-image-pro`, upload to Supabase storage, save URL as the identity anchor.
+3. `enroll_voices()` — for each character, call `voice-enrollment` with a seed clip (generated via CosyVoice defaults if user provided none) → get `voice_id`.
+4. `generate_storyboard_frames()` — for each of 10 shots, `wan2.7-image-pro` with the character sheet as reference (weight ≥ 0.9) + shot prompt.
+5. `render_shot({ index })` — shot 1 uses `happyhorse-1.1-i2v(frame, prompt)`; shots 2–10 use `happyhorse-1.1-r2v(character_sheet + prev_last_frame, prompt)`. Wan i2v/r2v fallback on failure.
+6. `synth_dialogue({ index })` — CosyVoice with the character's enrolled `voice_id`.
+7. `lipsync_shot({ index })` — Wan video-edit pass, driven by the dialogue wav.
+8. `stitch_final()` — ffmpeg concat + audio mux server-side (via existing `ffmpeg-post`).
+9. `ask_user({ question, choices? })` — clarifications only.
 
-## Files to modify
+Consistency invariants enforced in tool bodies (not the model):
+- Character sheet URL is stored on the bible row and injected as `reference_image` on every subsequent image/video call.
+- `render_shot(n>1)` refuses to run unless shot n-1 completed and its last-frame URL is present.
+- `negative_prompt` from `src/lib/negative-prompts.ts` always appended.
 
-- `src/routes/dashboard_.agent.$id.tsx`
-  - Rip out the current `runPipeline` + step cards.
-  - Replace with `useChat({ transport: DefaultChatTransport({ api: "/api/agent" }) })`.
-  - Render `message.parts`:
-    - text → planner narration (markdown)
-    - tool-call → collapsed card ("Rendering scene 2 image…")
-    - tool-result → inline preview (image thumb, video player, script excerpt)
-    - `ask_user` tool → renders inline question with buttons that call `sendMessage` with the answer (this is the "asks question again" step the user wanted)
-  - Bible modal remains **step 1**; on submit, it calls `sendMessage` with the bible + prompt as the first user turn.
-- `src/lib/longform-graph.ts` → delete (behavior moves into tools).
-- `src/lib/makers-runtime.ts` → keep constants; drop `runWithConcurrency` (agent handles parallelism via multiple tool calls per step).
+## DB (new migration)
+`agent_projects(id, user_id, bible_id, premise, status, character_sheet_url, created_at)`, `agent_shots(id, project_id, index, prompt, frame_url, video_url, audio_url, final_url, status)`, `agent_voices(id, project_id, character_name, voice_id)`. RLS: user_id = auth.uid(). GRANTs on all three.
 
-## Secrets
+## UI
+Extend `src/routes/dashboard_.agent.$id.tsx` (already routed) with:
+- Chat panel (AI Elements): threaded messages, `useChat({ id: projectId, transport: DefaultChatTransport({ api: "/api/agent" }) })`, render `message.parts`, tool activity chips.
+- Right rail: 10 shot cards showing frame → video → final states live as tool results stream.
+- Textarea auto-focus per contract.
 
-- Reuse existing `QWEN_API_KEY`, `QWEN_SCRIPT_MODEL=qwen3.7-max`, `QWEN_FAST_MODEL=qwen-plus`, `QWEN_IMAGE_MODEL`, `QWEN_VIDEO_MODEL`.
-- Add `HAPPYHORSE_API_KEY` via `add_secret` (I'll trigger this at implementation time; user pastes value).
-- No `LOVABLE_API_KEY` needed for the agent path.
-
-## Reliability wins
-
-- `stopWhen: stepCountIs(50)` lets the planner retry a failed scene (call `render_scene_video` again, or fall back to Happyhorse) without app code.
-- Structured output via `Output.object` for script + storyboard — no more manual `JSON.parse` guessing.
-- Tool schemas are narrow (no `.min/.max` per Qwen's OpenAI-compatible limits); prompt enforces caps and code clamps.
-- Per-tool `try/catch` returns `{ok:false, error, fallback_available:true}` so the planner can decide to retry or reroute instead of crashing the stream.
+## Files to add/edit
+- edit `src/lib/agent/tools.server.ts` (replace bible-pipeline tools with the 9 above)
+- add `src/lib/agent/dashscope.server.ts` (thin wrappers for image, i2v, r2v, video-edit, cosyvoice, voice-enrollment against `dashscope-intl` REST)
+- add `src/lib/agent/consistency.server.ts` (character-sheet + last-frame anchoring)
+- add `src/lib/agent/stitch.server.ts` (ffmpeg concat + mux)
+- add `supabase/migrations/<ts>_agent_projects.sql`
+- edit `src/routes/api/agent.ts` (wire new tools, bind project row instead of bible)
+- rewrite `src/routes/dashboard_.agent.$id.tsx` (chat + shot grid)
+- edit `.env.example` (document that `DASHSCOPE_API_KEY` alone powers everything; drop Happyhorse-only key)
 
 ## Out of scope
+- Longform (>10 shots), music beds, subtitles, multi-language dubbing — can be added later on top of the same agent.
 
-- No UI redesign of dashboard shell/sidebar/auth.
-- Bible page and library remain untouched.
-- Website-video and ads pages unaffected.
-
-## Rollout
-
-1. Land provider + tools + orchestrator server-side (no UI change yet).
-2. Add `/api/agent` route + smoke-test via `stack_modern--invoke-server-function`.
-3. Swap `dashboard_.agent.$id.tsx` to `useChat` UI with `message.parts` rendering + `ask_user` inline component.
-4. Delete `longform-graph.ts` and dead helpers.
-5. Typecheck + hit `/dashboard/agent/<id>` end-to-end with a demo prompt.
-
-Approve and I'll implement it in that order, requesting the Happyhorse key at step 1.    
-just use only happyhorse and wen that all 
+Scope check: this is ~8 new server files, 1 migration, 1 rewritten route, and 1 route edit. No changes to the existing bible pipeline or website flows. Confirm this plan and I'll build it.
