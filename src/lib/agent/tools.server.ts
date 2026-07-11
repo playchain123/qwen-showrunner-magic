@@ -29,7 +29,7 @@ export function buildMakersTools(sb: SB, userId: string, bibleId: string) {
       execute: async () => {
         try {
           const bible = await runDirector(sb, userId, bibleId);
-          return { ok: true, logline: bible?.logline || "", tone: bible?.tone || "" };
+          return { ok: true, result: bible };
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
@@ -42,7 +42,7 @@ export function buildMakersTools(sb: SB, userId: string, bibleId: string) {
       execute: async () => {
         try {
           const script = await runScreenwriter(sb, userId, bibleId);
-          return { ok: true, beat_count: Array.isArray(script?.beats) ? script.beats.length : 0 };
+          return { ok: true, result: script };
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
@@ -55,7 +55,7 @@ export function buildMakersTools(sb: SB, userId: string, bibleId: string) {
       execute: async () => {
         try {
           const art = await runArtDirector(sb, userId, bibleId);
-          return { ok: true, palette: art?.palette || null };
+          return { ok: true, result: art };
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
@@ -68,7 +68,7 @@ export function buildMakersTools(sb: SB, userId: string, bibleId: string) {
       execute: async () => {
         try {
           const voices = await runVoiceCaster(sb, userId, bibleId);
-          return { ok: true, casted: voices?.length ?? 0 };
+          return { ok: true, result: voices };
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
@@ -81,7 +81,7 @@ export function buildMakersTools(sb: SB, userId: string, bibleId: string) {
       execute: async () => {
         try {
           const shots = await runShotPlanner(sb, userId, bibleId);
-          return { ok: true, shot_count: Array.isArray(shots) ? shots.length : 0 };
+          return { ok: true, result: shots };
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
@@ -95,7 +95,7 @@ export function buildMakersTools(sb: SB, userId: string, bibleId: string) {
       execute: async () => {
         try {
           const rendered = await runShotRenderer(sb, userId, bibleId);
-          return { ok: true, rendered_count: Array.isArray(rendered) ? rendered.length : 0 };
+          return { ok: true, result: rendered };
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
