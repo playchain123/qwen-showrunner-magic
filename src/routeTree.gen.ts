@@ -16,6 +16,7 @@ import { Route as DashboardWebsiteRouteImport } from './routes/dashboard_.websit
 import { Route as DashboardProfileRouteImport } from './routes/dashboard_.profile'
 import { Route as DashboardLibraryRouteImport } from './routes/dashboard_.library'
 import { Route as DashboardAdsRouteImport } from './routes/dashboard_.ads'
+import { Route as ApiAgentRouteImport } from './routes/api/agent'
 import { Route as DashboardBibleNewRouteImport } from './routes/dashboard_.bible.new'
 import { Route as DashboardBibleIdRouteImport } from './routes/dashboard_.bible.$id'
 import { Route as DashboardAgentIdRouteImport } from './routes/dashboard_.agent.$id'
@@ -55,6 +56,11 @@ const DashboardAdsRoute = DashboardAdsRouteImport.update({
   path: '/dashboard/ads',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAgentRoute = ApiAgentRouteImport.update({
+  id: '/api/agent',
+  path: '/api/agent',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DashboardBibleNewRoute = DashboardBibleNewRouteImport.update({
   id: '/dashboard_/bible/new',
   path: '/dashboard/bible/new',
@@ -75,6 +81,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
   '/dashboard': typeof DashboardRoute
+  '/api/agent': typeof ApiAgentRoute
   '/dashboard/ads': typeof DashboardAdsRoute
   '/dashboard/library': typeof DashboardLibraryRoute
   '/dashboard/profile': typeof DashboardProfileRoute
@@ -87,6 +94,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
   '/dashboard': typeof DashboardRoute
+  '/api/agent': typeof ApiAgentRoute
   '/dashboard/ads': typeof DashboardAdsRoute
   '/dashboard/library': typeof DashboardLibraryRoute
   '/dashboard/profile': typeof DashboardProfileRoute
@@ -100,6 +108,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
   '/dashboard': typeof DashboardRoute
+  '/api/agent': typeof ApiAgentRoute
   '/dashboard_/ads': typeof DashboardAdsRoute
   '/dashboard_/library': typeof DashboardLibraryRoute
   '/dashboard_/profile': typeof DashboardProfileRoute
@@ -114,6 +123,7 @@ export interface FileRouteTypes {
     | '/'
     | '/auth'
     | '/dashboard'
+    | '/api/agent'
     | '/dashboard/ads'
     | '/dashboard/library'
     | '/dashboard/profile'
@@ -126,6 +136,7 @@ export interface FileRouteTypes {
     | '/'
     | '/auth'
     | '/dashboard'
+    | '/api/agent'
     | '/dashboard/ads'
     | '/dashboard/library'
     | '/dashboard/profile'
@@ -138,6 +149,7 @@ export interface FileRouteTypes {
     | '/'
     | '/auth'
     | '/dashboard'
+    | '/api/agent'
     | '/dashboard_/ads'
     | '/dashboard_/library'
     | '/dashboard_/profile'
@@ -151,6 +163,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthRoute: typeof AuthRoute
   DashboardRoute: typeof DashboardRoute
+  ApiAgentRoute: typeof ApiAgentRoute
   DashboardAdsRoute: typeof DashboardAdsRoute
   DashboardLibraryRoute: typeof DashboardLibraryRoute
   DashboardProfileRoute: typeof DashboardProfileRoute
@@ -211,6 +224,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardAdsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/agent': {
+      id: '/api/agent'
+      path: '/api/agent'
+      fullPath: '/api/agent'
+      preLoaderRoute: typeof ApiAgentRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/dashboard_/bible/new': {
       id: '/dashboard_/bible/new'
       path: '/dashboard/bible/new'
@@ -239,6 +259,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthRoute: AuthRoute,
   DashboardRoute: DashboardRoute,
+  ApiAgentRoute: ApiAgentRoute,
   DashboardAdsRoute: DashboardAdsRoute,
   DashboardLibraryRoute: DashboardLibraryRoute,
   DashboardProfileRoute: DashboardProfileRoute,
