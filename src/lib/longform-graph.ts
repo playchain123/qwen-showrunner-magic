@@ -200,8 +200,8 @@ function buildLongformVideoAttempts(
   durationSeconds: number,
 ): VideoAttempt[] {
   const resolution: "720P" | "1080P" = "720P";
-  const primary: LongformVideoModel = "wan2.6-i2v";
-  const fallback: LongformVideoModel = "wan2.6-i2v-flash";
+  const primary = "wan2.6-i2v" as LongformVideoModel;
+  const fallback = "wan2.6-i2v-flash" as LongformVideoModel;
   const attempts: VideoAttempt[] = [];
   if (audioUrl) {
     attempts.push({
