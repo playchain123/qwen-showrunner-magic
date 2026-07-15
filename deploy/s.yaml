@@ -25,14 +25,18 @@ resources:
       environmentVariables:
         NODE_ENV: production
         DEMO_MODE: "true"
-        MAX_SCENES: "3"
+        MAX_SCENES: "8"
         MAX_PARALLEL_VIDEO_JOBS: "3"
-        MAX_VIDEO_SECONDS_PER_PROJECT: "15"
+        MAX_VIDEO_SECONDS_PER_PROJECT: "35"
         QWEN_REGION: ap-southeast-1
         QWEN_SCRIPT_MODEL: qwen3.7-max
         QWEN_FAST_MODEL: qwen-plus
         QWEN_IMAGE_MODEL: qwen-image-2.0
-        QWEN_VIDEO_MODEL: wan2.2-t2v-plus
+        QWEN_VIDEO_MODEL: wan2.6-i2v-flash
+        QWEN_IMAGE_TO_VIDEO_MODEL: wan2.6-i2v-flash
+        QWEN_LONGFORM_VIDEO_MODEL: wan2.6-i2v-flash
+        QWEN_LONGFORM_VIDEO_FALLBACK_MODEL: wan2.6-i2v
+        QWEN_VIDEO_RESOLUTION: 720P
         QWEN_TTS_MODEL: qwen3-tts-flash
         SARVAM_API_KEY: ""
         SARVAM_TTS_MODEL: bulbul:v3

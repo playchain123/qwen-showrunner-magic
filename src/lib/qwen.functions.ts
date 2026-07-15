@@ -444,12 +444,21 @@ const VIDEO_MODELS = [
   "wan2.2-t2v-plus",
   "happyhorse-1.1-i2v",
   "wan2.2-i2v-plus",
+  "wan2.5-i2v-preview",
   "wan2.6-i2v",
   "wan2.6-i2v-flash",
+  "wan2.7-i2v",
+  "wan2.7-i2v-2026-04-25",
 ] as const;
 
-function isWan26VideoModel(model: string) {
-  return model.startsWith("wan2.6-");
+type VideoModel = (typeof VIDEO_MODELS)[number];
+
+function isAllowedVideoModel(model: string): model is VideoModel {
+  return (VIDEO_MODELS as readonly string[]).includes(model);
+}
+
+function isModernWanVideoModel(model: string) {
+  return /^wan2\.[567]-/.test(model);
 }
 
 function isImageToVideoModel(model: string) {
@@ -463,7 +472,7 @@ export const submitVideo = createServerFn({ method: "POST" })
       .object({
         prompt: z.string().min(3).max(4000),
         size: z.string().default("1280*720"),
-        model: z.enum(VIDEO_MODELS).default("happyhorse-1.1-t2v"),
+        model: z.string().refine(isAllowedVideoModel, "Unsupported video model").default("happyhorse-1.1-t2v"),
         imageUrl: safeMediaUrl.optional(),
         audioUrl: safeMediaUrl.optional(),
         durationSeconds: z.number().int().min(2).max(15).optional(),
@@ -474,16 +483,16 @@ export const submitVideo = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<{ task_id: string }> => {
     const key = process.env.DASHSCOPE_API_KEY;
     if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
-    const isWan26 = isWan26VideoModel(data.model);
+    const isModernWan = isModernWanVideoModel(data.model);
     const isImageToVideo = isImageToVideoModel(data.model);
     if (isImageToVideo && !data.imageUrl) {
       throw new Error(`${data.model} requires a storyboard still image`);
     }
-    if (isWan26 && data.audioUrl && !data.imageUrl) {
+    if (isModernWan && data.audioUrl && !data.imageUrl) {
       throw new Error(`${data.model} lip-sync requires both image and audio URLs`);
     }
 
-    const body = isWan26
+    const body = isModernWan
       ? {
           model: data.model,
           input: {
@@ -496,6 +505,7 @@ export const submitVideo = createServerFn({ method: "POST" })
             duration: data.durationSeconds ?? 10,
             prompt_extend: true,
             watermark: false,
+            ...(data.model.startsWith("wan2.6-") ? { shot_type: "multi" } : {}),
             ...(data.audioUrl ? {} : { audio: false }),
           },
         }
@@ -524,6 +534,25 @@ export const submitVideo = createServerFn({ method: "POST" })
     const task_id = json.output?.task_id;
     if (!task_id) throw new Error("No task_id returned");
     return { task_id };
+  });
+
+/** Direct HappyHorse fallback for users who configure HAPPYHORSE_API_KEY instead of DashScope-only video. */
+export const renderHappyhorseVideo = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) =>
+    z
+      .object({
+        prompt: z.string().min(3).max(4000),
+        imageUrl: safeMediaUrl,
+        durationSeconds: z.number().int().min(2).max(15).default(5),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }): Promise<{ video_url: string }> => {
+    const { happyhorseVideo } = await import("@/lib/agent/happyhorse.server");
+    const result = await happyhorseVideo(data.imageUrl, data.prompt, data.durationSeconds);
+    if (!result.ok) throw new Error(result.error);
+    return { video_url: result.url };
   });
 
 /** Poll a video-gen task. Returns status + video url when SUCCEEDED. */
