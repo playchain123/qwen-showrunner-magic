@@ -20,12 +20,12 @@ type Handler = (request: Request, context: HandlerContext) => Promise<Response>;
 
 const scriptSchema = z.object({
   prompt: z.string().min(1).max(4000),
-  scene_count: z.number().int().min(1).max(6).optional().default(3),
+  scene_count: z.number().int().min(1).max(8).optional().default(8),
 });
 
 const storyboardSchema = z.object({
   script: z.string().min(1).max(12000),
-  scene_count: z.number().int().min(1).max(6).optional().default(3),
+  scene_count: z.number().int().min(1).max(8).optional().default(8),
 });
 
 const imageSchema = z.object({
@@ -37,11 +37,24 @@ const imageSchema = z.object({
 const videoSubmitSchema = z.object({
   prompt: z.string().min(3).max(4000),
   model: z
-    .enum(["happyhorse-1.1-t2v", "wan2.2-t2v-plus", "happyhorse-1.1-i2v", "wan2.2-i2v-plus"])
+    .enum([
+      "happyhorse-1.1-t2v",
+      "wan2.2-t2v-plus",
+      "happyhorse-1.1-i2v",
+      "wan2.2-i2v-plus",
+      "wan2.5-i2v-preview",
+      "wan2.6-i2v-flash",
+      "wan2.6-i2v",
+      "wan2.7-i2v",
+      "wan2.7-i2v-2026-04-25",
+    ])
     .optional()
-    .default("happyhorse-1.1-t2v"),
+    .default("wan2.6-i2v-flash"),
   size: z.string().optional().default("1280*720"),
   image_url: z.string().url().optional(),
+  audio_url: z.string().url().optional(),
+  duration_seconds: z.number().int().min(2).max(15).optional().default(5),
+  resolution: z.enum(["480P", "720P", "1080P"]).optional().default("720P"),
 });
 
 const voiceSchema = z.object({
@@ -208,8 +221,12 @@ export const handleVideoSubmit: Handler = async (request, context) => {
   const key = requireDashscopeKey();
   const model = data.model ?? "happyhorse-1.1-t2v";
   const isI2v = model.includes("-i2v");
+  const isModernWan = /^wan2\.[567]-/.test(model);
   if (isI2v && !data.image_url) {
     return fail(context, 400, "video_generation", "wan", `${model} requires image_url`, false);
+  }
+  if (data.audio_url && !isModernWan) {
+    return fail(context, 400, "video_generation", "wan", `${model} does not support audio_url in this route`, false);
   }
   const res = await dashscopeFetch(
     VIDEO_SUBMIT_URL,
@@ -222,8 +239,19 @@ export const handleVideoSubmit: Handler = async (request, context) => {
       },
       body: JSON.stringify({
         model,
-        input: isI2v ? { prompt: data.prompt, img_url: data.image_url } : { prompt: data.prompt },
-        parameters: { size: data.size },
+        input: isI2v
+          ? { prompt: data.prompt, img_url: data.image_url, ...(data.audio_url ? { audio_url: data.audio_url } : {}) }
+          : { prompt: data.prompt },
+        parameters: isModernWan
+          ? {
+              resolution: data.resolution,
+              duration: data.duration_seconds,
+              prompt_extend: true,
+              watermark: false,
+              ...(model.startsWith("wan2.6-") ? { shot_type: "multi" } : {}),
+              ...(data.audio_url ? {} : { audio: false }),
+            }
+          : { size: data.size },
       }),
     },
     60_000,
