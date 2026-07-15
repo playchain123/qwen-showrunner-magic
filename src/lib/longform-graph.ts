@@ -12,6 +12,7 @@ import {
   generateStoryboard,
   generateVoice,
   pollVideo,
+  renderHappyhorseVideo,
   scoreSceneAgainstCharacter,
   submitVideo,
   uploadVoiceAudio,
@@ -120,8 +121,11 @@ type StoryboardScene = {
 };
 
 type LongformVideoModel =
+  | "wan2.7-i2v"
+  | "wan2.7-i2v-2026-04-25"
   | "wan2.6-i2v"
   | "wan2.6-i2v-flash"
+  | "wan2.5-i2v-preview"
   | "wan2.2-i2v-plus"
   | "happyhorse-1.1-i2v";
 
@@ -132,6 +136,7 @@ type VideoAttempt = {
   durationSeconds: number;
   resolution: "720P" | "1080P";
   embeddedAudio: boolean;
+  directHappyhorse?: boolean;
 };
 
 type GraphConfigurable = {
@@ -235,9 +240,31 @@ function buildLongformVideoAttempts(
         embeddedAudio: true,
       });
     }
+    attempts.push({
+      model: "wan2.5-i2v-preview",
+      imageUrl: stillUrl,
+      audioUrl,
+      durationSeconds,
+      resolution,
+      embeddedAudio: true,
+    });
   }
   attempts.push({
     model: primary,
+    imageUrl: stillUrl,
+    durationSeconds,
+    resolution,
+    embeddedAudio: false,
+  });
+  attempts.push({
+    model: fallback,
+    imageUrl: stillUrl,
+    durationSeconds,
+    resolution,
+    embeddedAudio: false,
+  });
+  attempts.push({
+    model: "wan2.7-i2v",
     imageUrl: stillUrl,
     durationSeconds,
     resolution,
@@ -250,6 +277,14 @@ function buildLongformVideoAttempts(
     resolution: "720P",
     embeddedAudio: false,
   });
+  attempts.push({
+    model: "happyhorse-1.1-i2v",
+    imageUrl: stillUrl,
+    durationSeconds: Math.min(5, durationSeconds),
+    resolution: "720P",
+    embeddedAudio: false,
+    directHappyhorse: true,
+  });
   return attempts;
 }
 
@@ -261,6 +296,17 @@ async function submitAndPollLongformVideo(
   const failures: string[] = [];
   for (const attempt of attempts) {
     try {
+      if (attempt.directHappyhorse) {
+        const direct = await renderHappyhorseVideo({
+          data: {
+            prompt,
+            imageUrl: attempt.imageUrl,
+            durationSeconds: attempt.durationSeconds,
+          },
+        });
+        onProgress(96);
+        return { videoUrl: direct.video_url, embeddedAudio: attempt.embeddedAudio };
+      }
       const cacheKey = JSON.stringify({
         model: attempt.model,
         imageUrl: attempt.imageUrl,
