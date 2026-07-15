@@ -347,6 +347,9 @@ async function submitAndPollLongformVideo(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       failures.push(`${attempt.model}: ${message}`);
+      if (/429|rate limit|throttl/i.test(message)) {
+        await new Promise((r) => setTimeout(r, 20_000));
+      }
     }
   }
   throw new Error(`All video engines failed. ${failures.join(" | ")}`);
@@ -870,17 +873,17 @@ async function produceScenesNode(
     }
     if (lastErr) {
       const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
-      // Mark scene as failed but do NOT throw — let the rest of the film render.
-      // Keep progress at 100 (final state) so the overall percent never goes backwards.
+      // Do not mark failed/no-video scenes as done. 100% must mean a real video
+      // URL exists; otherwise the UI truthfully keeps the scene in retry-needed state.
       scenes = patchScene(scenes, sceneIndex, {
         caption: `${record.caption}\n⚠ ${msg}`,
-        progress: 100,
-        done: true,
+        progress: 95,
+        done: false,
       });
       progress(config, {
         type: "scene",
         index: sceneIndex,
-        patch: { caption: `${record.caption}\n⚠ ${msg}`, progress: 100, done: true },
+        patch: { caption: `${record.caption}\n⚠ ${msg}`, progress: 95, done: false },
       });
     }
   });
@@ -899,17 +902,17 @@ async function editorNode(
   progress(config, {
     type: "tasks",
     tasks: [
-      { text: `Render ${state.scenes.length} lip-synced cinematic shots`, done: true },
+      { text: `Render ${state.scenes.length} lip-synced cinematic shots`, done: clipUrls.length === state.scenes.length },
       { text: "Lock character anchor portrait", done: true },
       { text: "Cast English dialogue voices", done: true },
-      { text: "Prepare playable preview cut (35s)", done: true },
+      { text: "Prepare playable preview cut (35s)", done: clipUrls.length > 0 },
     ],
   });
   progress(config, {
     type: "message",
     text: clipUrls.length > 0
       ? `🎞 Preview cut ready — ${clipUrls.length} rendered video clip(s) are playable now.`
-      : `🎞 Preview cut ready — generated scene posters are playable while video engines recover.`,
+      : `Video generation did not return a playable clip yet. Please regenerate after the provider rate limit clears.`,
   });
   progress(config, { type: "editor", finalFilmUrl: finalFilmUrl || "" });
 

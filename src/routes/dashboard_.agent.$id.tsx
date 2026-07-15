@@ -95,14 +95,13 @@ function AgentWorkspace() {
     ? Math.round(cards.reduce((s, c) => s + c.progress, 0) / cards.length)
     : 0;
   const renderedCount = cards.filter((c) => c.done && c.videoUrl).length;
-  const readyCount = cards.filter((c) => c.videoUrl || c.posterUrl || c.done).length;
-  const allDone = cards.length > 0 && cards.every((c) => c.done || c.progress >= 100);
+  const readyCount = cards.filter((c) => c.videoUrl || c.posterUrl).length;
+  const allDone = cards.length > 0 && renderedCount === cards.length;
   const playableCards = getRenderedCards(cards);
-  // Play unlocks as soon as ANY scene has a video, poster, or final fallback.
-  // If a provider reports 100% but returns no media, the player still opens a
-  // text/poster scene instead of leaving the preview stuck on "100%".
-  const canPlay = playableCards.length > 0;
-  const firstReady = playableCards.find((c) => c.videoUrl || c.posterUrl) ?? playableCards[0];
+  // Play only unlocks when at least one real video clip exists. Posters/text are
+  // not videos, so they must never be presented as a completed movie.
+  const canPlay = renderedCount > 0;
+  const firstReady = playableCards[0];
 
   // auth + seed
   useEffect(() => {
@@ -524,7 +523,7 @@ function AgentWorkspace() {
                   onClick={() => setPlayingFilm(true)}
                   className="flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium hover:bg-white/90"
                 >
-                    <Film className="h-3 w-3" /> Play Full Movie {!allDone && `(${readyCount}/${cards.length})`}
+                    <Film className="h-3 w-3" /> Play Full Movie {!allDone && `(${renderedCount}/${cards.length})`}
                 </button>
               )}
             </div>
@@ -554,16 +553,7 @@ function AgentWorkspace() {
                             poster={firstReady.posterUrl}
                             className="absolute inset-0 h-full w-full object-cover opacity-70 group-hover:opacity-90 transition"
                           />
-                        ) : firstReady.posterUrl ? (
-                          <img
-                            src={firstReady.posterUrl}
-                            alt=""
-                            className="absolute inset-0 h-full w-full object-cover opacity-70 group-hover:opacity-90 transition"
-                          />
                         ) : null}
-                        {!firstReady.videoUrl && !firstReady.posterUrl && (
-                          <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_25%,rgba(255,255,255,0.16),transparent_34%),linear-gradient(135deg,#151515,#050505_60%,#1f1f1f)]" />
-                        )}
                         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40" />
                         <div className="absolute inset-0 flex flex-col items-center justify-center">
                           <div className="h-16 w-16 rounded-full bg-white text-black flex items-center justify-center shadow-2xl group-hover:scale-105 transition">
@@ -572,8 +562,8 @@ function AgentWorkspace() {
                           <div className="mt-4 text-white text-lg font-medium drop-shadow">{filmTitle}</div>
                           <div className="mt-1 text-white/70 text-xs">
                             {allDone
-                              ? `Playable cut · ${renderedCount}/${cards.length} video clips · dialogue + score`
-                              : `Preview cut · ${readyCount}/${cards.length} scenes ready · plays end-to-end`}
+                              ? `Final cut · all ${cards.length} video clips rendered · dialogue + score`
+                              : `Preview cut · ${renderedCount}/${cards.length} real video clips rendered`}
                           </div>
                         </div>
                       </button>
@@ -598,9 +588,21 @@ function AgentWorkspace() {
                           <span className="absolute inset-0 flex items-center justify-center text-sm">{totalProgress}%</span>
                         </div>
                         <div className="relative text-sm text-white/80">
-                          {totalProgress >= 100 ? "Finalizing playable preview…" : "Rendering scenes… preview unlocks as soon as the first shot is ready"}
+                          {totalProgress >= 95 && renderedCount === 0
+                            ? "Video generation did not return a playable clip — please regenerate."
+                            : "Rendering scenes… preview unlocks as soon as the first video is ready"}
                         </div>
                         <div className="relative text-[11px] text-white/50">{renderedCount}/{cards.length} videos finished · {readyCount}/{cards.length} scenes playable</div>
+                        {totalProgress >= 95 && renderedCount === 0 && currentPrompt && (
+                          <button
+                            type="button"
+                            disabled={thinking}
+                            onClick={() => void runPipeline(currentPrompt, referenceImages)}
+                            className="relative rounded-full bg-white px-4 py-2 text-xs font-medium text-black hover:bg-white/90 disabled:opacity-50"
+                          >
+                            Regenerate real video
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1057,9 +1059,7 @@ function ContextPanel({ cards, title, logline, onScene, references = [] }: { car
 }
 
 function getRenderedCards(cards: StoryCard[]) {
-  // Any scene with a video, poster, or completed fallback can play — fallback
-  // shots render storyboard text/subtitles so 100% never becomes a dead end.
-  return cards.filter((card) => Boolean(card.videoUrl) || Boolean(card.posterUrl) || card.done || card.progress >= 100);
+  return cards.filter((card) => Boolean(card.videoUrl));
 }
 
 function longformSceneToCard(scene: LongformSceneRecord): StoryCard {
@@ -1396,9 +1396,6 @@ function FilmPlayer({
             style={{ filter: filterForGrade(current.colorGrade) }}
           />
         )}
-        {!current.posterUrl && !current.videoUrl && (
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_22%,rgba(255,255,255,0.16),transparent_32%),linear-gradient(140deg,#171717,#050505_58%,#202020)]" />
-        )}
         <video
           ref={videoRef}
           autoPlay
@@ -1425,16 +1422,6 @@ function FilmPlayer({
         <div className="absolute inset-x-0 top-0 h-[5%] bg-black pointer-events-none" />
         <div className="absolute inset-x-0 bottom-0 h-[5%] bg-black pointer-events-none" />
         <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: "inset 0 0 200px rgba(0,0,0,0.8)" }} />
-
-        {!current.posterUrl && !current.videoUrl && (
-          <div className="absolute inset-x-0 top-[24%] z-10 mx-auto max-w-3xl px-8 text-center pointer-events-none">
-            <div className="text-white/45 text-xs uppercase tracking-[0.28em]">Playable scene fallback</div>
-            <div className="mt-4 text-3xl md:text-5xl font-semibold text-white drop-shadow-2xl">
-              {current.title.replace(/^#\d+\s*/, "")}
-            </div>
-            {current.visual && <div className="mt-4 text-white/70 text-base md:text-xl leading-relaxed">{current.visual}</div>}
-          </div>
-        )}
 
         {/* Title card on first shot */}
         {idx === 0 && (
