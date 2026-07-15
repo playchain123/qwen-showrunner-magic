@@ -15,6 +15,7 @@ const TASK_URL = (id: string) => `${DASHSCOPE_BASE}/api/v1/tasks/${id}`;
 const LOVABLE_GATEWAY = "https://ai.gateway.lovable.dev";
 
 const QWEN_VOICES = ["Cherry", "Ethan", "Serena", "Chelsie", "Dylan", "Jada", "Sunny"];
+const VIDEO_POLL_TIMEOUT_MS = 360_000;
 
 function dashKey() {
   const key = process.env.DASHSCOPE_API_KEY;
@@ -376,6 +377,8 @@ export async function runShotPlanner(sb: SB, userId: string, bibleId: string) {
 // ─────────────────────────────────────────────────────────────
 
 async function submitVideoTask(model: string, prompt: string, imageUrl?: string) {
+  const isModernWan = /^wan2\.[567]-/.test(model);
+  const isI2v = model.includes("-i2v");
   const res = await fetch(VIDEO_SUBMIT_URL, {
     method: "POST",
     headers: {
@@ -386,7 +389,16 @@ async function submitVideoTask(model: string, prompt: string, imageUrl?: string)
     body: JSON.stringify({
       model,
       input: imageUrl ? { prompt, img_url: imageUrl } : { prompt },
-      parameters: { size: "1280*720" },
+      parameters: isModernWan
+        ? {
+            resolution: "720P",
+            duration: 5,
+            prompt_extend: true,
+            watermark: false,
+            audio: false,
+            ...(model.startsWith("wan2.6-") ? { shot_type: "multi" } : {}),
+          }
+        : { size: "1280*720" },
     }),
   });
   if (!res.ok) throw new Error(`video submit ${model} failed ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -434,17 +446,32 @@ export async function renderOneShot(sb: SB, _userId: string, bibleId: string, sh
   await sb.from("bible_shots").update({ status: "rendering", attempt_count: shot.attempt_count + 1, updated_at: new Date().toISOString() }).eq("id", shotId);
 
   const motionPrompt = `${shot.visual_prompt} ${suffix}. Single continuous ${Math.round(Number(shot.duration_seconds))}-second cinematic shot.`;
-  const primaryModel = refImg ? "happyhorse-1.1-i2v" : "happyhorse-1.1-t2v";
-  const fallbackModel = refImg ? "wan2.2-i2v-plus" : "wan2.2-t2v-plus";
+  const models = refImg
+    ? ["wan2.6-i2v-flash", "wan2.6-i2v", "wan2.7-i2v", "wan2.2-i2v-plus", "happyhorse-1.1-i2v"]
+    : ["wan2.2-t2v-plus", "happyhorse-1.1-t2v"];
 
-  let clipUrl: string;
-  try {
-    const taskId = await submitVideoTask(primaryModel, motionPrompt, refImg ?? undefined);
-    clipUrl = await pollVideoTask(taskId);
-  } catch (err) {
-    console.warn(`[bible] ${primaryModel} failed, trying ${fallbackModel}`, err);
-    const taskId = await submitVideoTask(fallbackModel, motionPrompt, refImg ?? undefined);
-    clipUrl = await pollVideoTask(taskId);
+  let clipUrl = "";
+  const failures: string[] = [];
+  for (const model of models) {
+    try {
+      if (model === "happyhorse-1.1-i2v" && refImg) {
+        const { happyhorseVideo } = await import("@/lib/agent/happyhorse.server");
+        const direct = await happyhorseVideo(refImg, motionPrompt, 5);
+        if (!direct.ok) throw new Error(direct.error);
+        clipUrl = direct.url;
+      } else {
+        const taskId = await submitVideoTask(model, motionPrompt, refImg ?? undefined);
+        clipUrl = await pollVideoTask(taskId, VIDEO_POLL_TIMEOUT_MS);
+      }
+      break;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      failures.push(`${model}: ${message}`);
+      console.warn(`[bible] ${model} failed`, message);
+    }
+  }
+  if (!clipUrl) {
+    throw new Error(`All video engines failed: ${failures.join(" | ")}`.slice(0, 900));
   }
 
   await sb.from("bible_shots").update({
