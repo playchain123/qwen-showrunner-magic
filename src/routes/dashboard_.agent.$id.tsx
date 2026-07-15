@@ -95,13 +95,14 @@ function AgentWorkspace() {
     ? Math.round(cards.reduce((s, c) => s + c.progress, 0) / cards.length)
     : 0;
   const renderedCount = cards.filter((c) => c.done && c.videoUrl).length;
-  const allDone = cards.length > 0 && renderedCount === cards.length;
+  const readyCount = cards.filter((c) => c.videoUrl || c.posterUrl || c.done).length;
+  const allDone = cards.length > 0 && cards.every((c) => c.done || c.progress >= 100);
   const playableCards = getRenderedCards(cards);
-  // Play unlocks as soon as ANY scene has a poster or video. Missing shots
-  // fall back to the poster still + dialogue so the full film plays end-to-end
-  // even before every video finishes rendering.
+  // Play unlocks as soon as ANY scene has a video, poster, or final fallback.
+  // If a provider reports 100% but returns no media, the player still opens a
+  // text/poster scene instead of leaving the preview stuck on "100%".
   const canPlay = playableCards.length > 0;
-  const firstReady = playableCards.find((c) => c.videoUrl) ?? playableCards[0];
+  const firstReady = playableCards.find((c) => c.videoUrl || c.posterUrl) ?? playableCards[0];
 
   // auth + seed
   useEffect(() => {
@@ -261,7 +262,9 @@ function AgentWorkspace() {
             : `Scene preview is ready — generated posters and dialogue are playable while video rendering recovers. Press ▶ Play Film.`,
         },
       ]);
-      setTimeout(() => setPlayingFilm(true), 400);
+      setTimeout(() => {
+        if (getRenderedCards(finalScenes.map(longformSceneToCard)).length > 0) setPlayingFilm(true);
+      }, 400);
 
       try {
         const finalCards = finalScenes.map(longformSceneToCard);
@@ -521,7 +524,7 @@ function AgentWorkspace() {
                   onClick={() => setPlayingFilm(true)}
                   className="flex items-center gap-1.5 rounded-full bg-white text-black px-3 py-1 text-[11px] font-medium hover:bg-white/90"
                 >
-                  <Film className="h-3 w-3" /> Play Full Movie {!allDone && `(${renderedCount}/${cards.length})`}
+                    <Film className="h-3 w-3" /> Play Full Movie {!allDone && `(${readyCount}/${cards.length})`}
                 </button>
               )}
             </div>
@@ -558,6 +561,9 @@ function AgentWorkspace() {
                             className="absolute inset-0 h-full w-full object-cover opacity-70 group-hover:opacity-90 transition"
                           />
                         ) : null}
+                        {!firstReady.videoUrl && !firstReady.posterUrl && (
+                          <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_25%,rgba(255,255,255,0.16),transparent_34%),linear-gradient(135deg,#151515,#050505_60%,#1f1f1f)]" />
+                        )}
                         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40" />
                         <div className="absolute inset-0 flex flex-col items-center justify-center">
                           <div className="h-16 w-16 rounded-full bg-white text-black flex items-center justify-center shadow-2xl group-hover:scale-105 transition">
@@ -566,8 +572,8 @@ function AgentWorkspace() {
                           <div className="mt-4 text-white text-lg font-medium drop-shadow">{filmTitle}</div>
                           <div className="mt-1 text-white/70 text-xs">
                             {allDone
-                              ? `Final cut · all ${cards.length} scenes rendered · dialogue + score`
-                              : `Preview cut · ${renderedCount}/${cards.length} scenes rendered · plays end-to-end`}
+                              ? `Playable cut · ${renderedCount}/${cards.length} video clips · dialogue + score`
+                              : `Preview cut · ${readyCount}/${cards.length} scenes ready · plays end-to-end`}
                           </div>
                         </div>
                       </button>
@@ -591,8 +597,10 @@ function AgentWorkspace() {
                           </svg>
                           <span className="absolute inset-0 flex items-center justify-center text-sm">{totalProgress}%</span>
                         </div>
-                        <div className="relative text-sm text-white/80">Rendering scenes… preview unlocks as soon as the first shot is ready</div>
-                        <div className="relative text-[11px] text-white/50">{renderedCount}/{cards.length} videos finished · posters appear first, videos replace them automatically</div>
+                        <div className="relative text-sm text-white/80">
+                          {totalProgress >= 100 ? "Finalizing playable preview…" : "Rendering scenes… preview unlocks as soon as the first shot is ready"}
+                        </div>
+                        <div className="relative text-[11px] text-white/50">{renderedCount}/{cards.length} videos finished · {readyCount}/{cards.length} scenes playable</div>
                       </div>
                     )}
                   </div>
@@ -1029,7 +1037,7 @@ function ContextPanel({ cards, title, logline, onScene, references = [] }: { car
                 </div>
                 <div className="text-right text-[11px] text-white/45">
                   <div>{card.durationSeconds || normalizeSceneDuration(undefined)}s</div>
-                  <div>{card.done && card.videoUrl ? "rendered" : `${card.progress}%`}</div>
+                  <div>{card.done && card.videoUrl ? "rendered" : card.done ? "playable" : `${card.progress}%`}</div>
                 </div>
               </div>
               <div className="mt-3 rounded-md bg-white/[0.04] px-3 py-2 text-xs text-white/75">
@@ -1049,10 +1057,9 @@ function ContextPanel({ cards, title, logline, onScene, references = [] }: { car
 }
 
 function getRenderedCards(cards: StoryCard[]) {
-  // Any scene with a video OR poster can play — poster-only shots render as
-  // still frames with dialogue+BGM so the full movie always plays end-to-end
-  // even while later scenes are still rendering.
-  return cards.filter((card) => Boolean(card.videoUrl) || Boolean(card.posterUrl));
+  // Any scene with a video, poster, or completed fallback can play — fallback
+  // shots render storyboard text/subtitles so 100% never becomes a dead end.
+  return cards.filter((card) => Boolean(card.videoUrl) || Boolean(card.posterUrl) || card.done || card.progress >= 100);
 }
 
 function longformSceneToCard(scene: LongformSceneRecord): StoryCard {
@@ -1389,6 +1396,9 @@ function FilmPlayer({
             style={{ filter: filterForGrade(current.colorGrade) }}
           />
         )}
+        {!current.posterUrl && !current.videoUrl && (
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_22%,rgba(255,255,255,0.16),transparent_32%),linear-gradient(140deg,#171717,#050505_58%,#202020)]" />
+        )}
         <video
           ref={videoRef}
           autoPlay
@@ -1415,6 +1425,16 @@ function FilmPlayer({
         <div className="absolute inset-x-0 top-0 h-[5%] bg-black pointer-events-none" />
         <div className="absolute inset-x-0 bottom-0 h-[5%] bg-black pointer-events-none" />
         <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: "inset 0 0 200px rgba(0,0,0,0.8)" }} />
+
+        {!current.posterUrl && !current.videoUrl && (
+          <div className="absolute inset-x-0 top-[24%] z-10 mx-auto max-w-3xl px-8 text-center pointer-events-none">
+            <div className="text-white/45 text-xs uppercase tracking-[0.28em]">Playable scene fallback</div>
+            <div className="mt-4 text-3xl md:text-5xl font-semibold text-white drop-shadow-2xl">
+              {current.title.replace(/^#\d+\s*/, "")}
+            </div>
+            {current.visual && <div className="mt-4 text-white/70 text-base md:text-xl leading-relaxed">{current.visual}</div>}
+          </div>
+        )}
 
         {/* Title card on first shot */}
         {idx === 0 && (

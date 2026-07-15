@@ -121,6 +121,41 @@ function qwenMaasGenerationUrl() {
   return `https://${workspaceId}.${region}.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation`;
 }
 
+function clampPrompt(value: string, max = 3900) {
+  const trimmed = value.trim();
+  if (trimmed.length <= max) return trimmed;
+  return `${trimmed.slice(0, max - 28)}\n[truncated for provider cap]`;
+}
+
+function fallbackSceneSpec(data: {
+  scene_id: string;
+  director_beat: string;
+  prior_scene_ref?: string | null;
+  prior_scene_visual?: string;
+  character_token: string;
+  wardrobe_token?: string;
+}): SceneSpec {
+  const beat = clampPrompt(data.director_beat, 1400);
+  const prior = data.prior_scene_visual ? ` Visual continuity from previous scene: ${clampPrompt(data.prior_scene_visual, 350)}` : "";
+  return {
+    scene_id: data.scene_id,
+    subject: data.character_token,
+    action: beat,
+    camera: { shot_type: "medium cinematic shot", angle: "eye level", lens_mm: 35, movement: "slow motivated camera move" },
+    lighting: { key_source: "motivated practical light in the scene", quality: "soft", color_temp_k: 4300, mood: "grounded cinematic drama" },
+    color_grade: { reference_stock_or_look: "natural 35mm film print", contrast: "medium" },
+    environment: { location: "story location from the director beat", atmosphere: "realistic lived-in atmosphere" },
+    continuity_anchor: {
+      character_token: data.character_token,
+      wardrobe_token: data.wardrobe_token || "wardrobe-default",
+      prior_scene_ref: data.prior_scene_ref ?? null,
+    },
+    positive_prompt: clampPrompt(`${beat}${prior}. Real human performance, consistent face and wardrobe, cinematic 35mm frame, natural motion, no text.`, 1800),
+    negative_prompt: "low resolution, blurry face, distorted hands, extra limbs, identity drift, wardrobe change, watermark, subtitles, text overlay, black frame",
+    reference_image_weight: data.prior_scene_ref ? 0.85 : 0.75,
+  };
+}
+
 async function fetchWithTimeout(
   url: string,
   init: RequestInit,
@@ -470,7 +505,7 @@ export const submitVideo = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
     z
       .object({
-        prompt: z.string().min(3).max(4000),
+        prompt: z.string().min(3).max(12000),
         size: z.string().default("1280*720"),
         model: z.string().refine(isAllowedVideoModel, "Unsupported video model").default("happyhorse-1.1-t2v"),
         imageUrl: safeMediaUrl.optional(),
@@ -854,7 +889,7 @@ export const generateSceneImage = createServerFn({ method: "POST" })
     const prompt = [
       "Cinematic film still, 35mm anamorphic look, professional lighting, shallow depth of field, natural human subject, real photography look.",
       guidance,
-      `SCENE: ${data.prompt}`,
+      `SCENE: ${clampPrompt(data.prompt, 3600)}`,
       "No text, no watermark, no subtitles, no logos unless explicitly requested.",
     ].filter(Boolean).join("\n");
 
@@ -878,9 +913,11 @@ export const generateSceneImage = createServerFn({ method: "POST" })
           ],
         },
         parameters: {
-          negative_prompt:
+          negative_prompt: clampPrompt(
             data.negativePrompt ||
-            "Low resolution, low quality, distorted limbs, malformed fingers, blurry faces, waxy skin, watermark, subtitles, text overlay.",
+              "Low resolution, low quality, distorted limbs, malformed fingers, blurry faces, waxy skin, watermark, subtitles, text overlay.",
+            900,
+          ),
           prompt_extend: true,
           watermark: false,
           size: process.env.QWEN_IMAGE_SIZE || "1664*928",
@@ -958,7 +995,7 @@ export const compileSceneSpec = createServerFn({ method: "POST" })
     z
       .object({
         scene_id: z.string().min(1),
-        director_beat: z.string().min(1).max(4000),
+        director_beat: z.string().min(1).max(12000),
         prior_scene_ref: z.string().nullable().optional().default(null),
         prior_scene_visual: z.string().max(2000).optional().default(""),
         character_token: z.string().min(1),
@@ -968,7 +1005,7 @@ export const compileSceneSpec = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }): Promise<SceneSpec> => {
     const key = process.env.DASHSCOPE_API_KEY;
-    if (!key) throw new Error("DASHSCOPE_API_KEY not configured");
+    if (!key) return fallbackSceneSpec(data);
 
     const system = `You are the Cinematographer Agent in an autonomous film pipeline. You receive a scene beat from the Director Agent and must output a single JSON object — nothing else, no preamble, no markdown fences.
 
@@ -1002,43 +1039,43 @@ Rules:
 
     const user = JSON.stringify({
       scene_id: data.scene_id,
-      director_beat: data.director_beat,
+      director_beat: clampPrompt(data.director_beat, 3200),
       prior_scene_ref: data.prior_scene_ref,
       prior_scene_visual: data.prior_scene_visual,
       character_token: data.character_token,
       wardrobe_token: data.wardrobe_token,
     });
 
-    const res = await fetchWithTimeout(CHAT_URL, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: qwenModel("QWEN_SCRIPT_MODEL", "qwen3.7-max"),
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0.6,
-        max_tokens: 1200,
-      }),
-    }, 60_000, "cinematographer v2");
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`Cinematographer failed (${res.status}): ${body.slice(0, 240)}`);
+    try {
+      const res = await fetchWithTimeout(CHAT_URL, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: qwenModel("QWEN_FAST_MODEL", qwenModel("QWEN_SCRIPT_MODEL", "qwen-plus")),
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.45,
+          max_tokens: 900,
+        }),
+      }, 90_000, "cinematographer v2");
+      if (!res.ok) return fallbackSceneSpec(data);
+      const j = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+      const raw = j.choices?.[0]?.message?.content ?? "{}";
+      const parsed = SceneSpecSchema.safeParse(JSON.parse(raw));
+      if (!parsed.success) return fallbackSceneSpec(data);
+      // Enforce the "prior scene → weight >= 0.8" rule server-side.
+      const spec = parsed.data;
+      if (spec.continuity_anchor.prior_scene_ref && spec.reference_image_weight < 0.8) {
+        spec.reference_image_weight = 0.8;
+      }
+      return spec;
+    } catch (err) {
+      console.warn("[qwen] cinematographer v2 using local fallback:", err instanceof Error ? err.message : String(err));
+      return fallbackSceneSpec(data);
     }
-    const j = (await res.json()) as { choices: Array<{ message: { content: string } }> };
-    const raw = j.choices?.[0]?.message?.content ?? "{}";
-    const parsed = SceneSpecSchema.safeParse(JSON.parse(raw));
-    if (!parsed.success) {
-      throw new Error(`Cinematographer returned invalid SceneSpec: ${parsed.error.issues[0]?.message ?? "schema mismatch"}`);
-    }
-    // Enforce the "prior scene → weight >= 0.8" rule server-side.
-    const spec = parsed.data;
-    if (spec.continuity_anchor.prior_scene_ref && spec.reference_image_weight < 0.8) {
-      spec.reference_image_weight = 0.8;
-    }
-    return spec;
   });
 
 // ---------------------------------------------------------------------------
