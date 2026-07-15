@@ -593,6 +593,16 @@ function AgentWorkspace() {
                             : "Rendering scenes… preview unlocks as soon as the first video is ready"}
                         </div>
                         <div className="relative text-[11px] text-white/50">{renderedCount}/{cards.length} videos finished · {readyCount}/{cards.length} scenes playable</div>
+                        {totalProgress >= 95 && renderedCount === 0 && currentPrompt && (
+                          <button
+                            type="button"
+                            disabled={thinking}
+                            onClick={() => void runPipeline(currentPrompt, referenceImages)}
+                            className="relative rounded-full bg-white px-4 py-2 text-xs font-medium text-black hover:bg-white/90 disabled:opacity-50"
+                          >
+                            Regenerate real video
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
