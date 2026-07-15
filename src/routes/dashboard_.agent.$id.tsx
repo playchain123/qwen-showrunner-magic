@@ -1386,9 +1386,6 @@ function FilmPlayer({
             style={{ filter: filterForGrade(current.colorGrade) }}
           />
         )}
-        {!current.posterUrl && !current.videoUrl && (
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_22%,rgba(255,255,255,0.16),transparent_32%),linear-gradient(140deg,#171717,#050505_58%,#202020)]" />
-        )}
         <video
           ref={videoRef}
           autoPlay
@@ -1415,16 +1412,6 @@ function FilmPlayer({
         <div className="absolute inset-x-0 top-0 h-[5%] bg-black pointer-events-none" />
         <div className="absolute inset-x-0 bottom-0 h-[5%] bg-black pointer-events-none" />
         <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: "inset 0 0 200px rgba(0,0,0,0.8)" }} />
-
-        {!current.posterUrl && !current.videoUrl && (
-          <div className="absolute inset-x-0 top-[24%] z-10 mx-auto max-w-3xl px-8 text-center pointer-events-none">
-            <div className="text-white/45 text-xs uppercase tracking-[0.28em]">Playable scene fallback</div>
-            <div className="mt-4 text-3xl md:text-5xl font-semibold text-white drop-shadow-2xl">
-              {current.title.replace(/^#\d+\s*/, "")}
-            </div>
-            {current.visual && <div className="mt-4 text-white/70 text-base md:text-xl leading-relaxed">{current.visual}</div>}
-          </div>
-        )}
 
         {/* Title card on first shot */}
         {idx === 0 && (
